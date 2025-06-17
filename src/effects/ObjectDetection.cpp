@@ -29,29 +29,16 @@ using namespace std;
 using namespace openshot;
 
 
-/// Blank constructor, useful when using Json to load the effect properties
-ObjectDetection::ObjectDetection(std::string clipObDetectDataPath) :
-display_box_text(1.0), display_boxes(1.0)
-{
-	// Init effect properties
-	init_effect_details();
-
-	// Tries to load the tracker data from protobuf
-	LoadObjDetectdData(clipObDetectDataPath);
-
-	// Initialize the selected object index as the first object index
-	selectedObjectIndex = trackedObjects.begin()->first;
-}
-
 // Default constructor
-ObjectDetection::ObjectDetection() :
-        display_box_text(1.0), display_boxes(1.0)
+ObjectDetection::ObjectDetection()
+  : display_box_text(1.0)
+  , display_boxes(1.0)
 {
-	// Init effect properties
+	// Init effect metadata
 	init_effect_details();
 
-	// Initialize the selected object index as the first object index
-	selectedObjectIndex = trackedObjects.begin()->first;
+	// We haven’t loaded any protobuf yet, so there's nothing to pick.
+	selectedObjectIndex = -1;
 }
 
 // Init effect settings
@@ -167,108 +154,96 @@ std::shared_ptr<Frame> ObjectDetection::GetFrame(std::shared_ptr<Frame> frame, i
 }
 
 // Load protobuf data file
-bool ObjectDetection::LoadObjDetectdData(std::string inputFilePath){
-	// Create tracker message
-	pb_objdetect::ObjDetect objMessage;
+bool ObjectDetection::LoadObjDetectdData(std::string inputFilePath)
+{
+    // Parse the file
+    pb_objdetect::ObjDetect objMessage;
+    std::fstream input(inputFilePath, std::ios::in | std::ios::binary);
+    if (!objMessage.ParseFromIstream(&input)) {
+        std::cerr << "Failed to parse protobuf message." << std::endl;
+        return false;
+    }
 
-	// Read the existing tracker message.
-	std::fstream input(inputFilePath, std::ios::in | std::ios::binary);
-	if (!objMessage.ParseFromIstream(&input)) {
-		std::cerr << "Failed to parse protobuf message." << std::endl;
-		return false;
-	}
+    // Clear out any old state
+    classNames.clear();
+    detectionsData.clear();
+    trackedObjects.clear();
 
-	// Make sure classNames, detectionsData and trackedObjects are empty
-	classNames.clear();
-	detectionsData.clear();
-	trackedObjects.clear();
+    // Seed colors for each class
+    std::srand(1);
+    for (int i = 0; i < objMessage.classnames_size(); ++i) {
+        classNames.push_back(objMessage.classnames(i));
+        classesColor.push_back(cv::Scalar(
+            std::rand() % 205 + 50,
+            std::rand() % 205 + 50,
+            std::rand() % 205 + 50
+        ));
+    }
 
-	// Seed to generate same random numbers
-	std::srand(1);
-	// Get all classes names and assign a color to them
-	for(int i = 0; i < objMessage.classnames_size(); i++)
-	{
-		classNames.push_back(objMessage.classnames(i));
-		classesColor.push_back(cv::Scalar(std::rand()%205 + 50, std::rand()%205 + 50, std::rand()%205 + 50));
-	}
+    // Walk every frame in the protobuf
+    for (size_t fi = 0; fi < objMessage.frame_size(); ++fi) {
+        const auto &pbFrame = objMessage.frame(fi);
+        size_t frameId = pbFrame.id();
 
-	// Iterate over all frames of the saved message
-	for (size_t i = 0; i < objMessage.frame_size(); i++)
-	{
-		// Create protobuf message reader
-		const pb_objdetect::Frame& pbFrameData = objMessage.frame(i);
+        // Buffers for DetectionData
+        std::vector<int>   classIds;
+        std::vector<float> confidences;
+        std::vector<cv::Rect_<float>> boxes;
+        std::vector<int>   objectIds;
 
-		// Get frame Id
-		size_t id = pbFrameData.id();
+        // For each bounding box in this frame
+        for (int di = 0; di < pbFrame.bounding_box_size(); ++di) {
+            const auto &b = pbFrame.bounding_box(di);
+            float x = b.x(), y = b.y(), w = b.w(), h = b.h();
+            int   classId   = b.classid();
+            float confidence= b.confidence();
+            int   objectId  = b.objectid();
 
-		// Load bounding box data
-		const google::protobuf::RepeatedPtrField<pb_objdetect::Frame_Box > &pBox = pbFrameData.bounding_box();
+            // Record for DetectionData
+            classIds.push_back(classId);
+            confidences.push_back(confidence);
+            boxes.emplace_back(x, y, w, h);
+            objectIds.push_back(objectId);
 
-		// Construct data vectors related to detections in the current frame
-		std::vector<int> classIds;
-		std::vector<float> confidences;
-		std::vector<cv::Rect_<float>> boxes;
-		std::vector<int> objectIds;
+            // Either append to an existing TrackedObjectBBox…
+            auto it = trackedObjects.find(objectId);
+            if (it != trackedObjects.end()) {
+                it->second->AddBox(frameId, x + w/2, y + h/2, w, h, 0.0);
+            }
+            else {
+                // …or create a brand-new one
+                TrackedObjectBBox tmpObj(
+                    (int)classesColor[classId][0],
+                    (int)classesColor[classId][1],
+                    (int)classesColor[classId][2],
+                    /*alpha=*/0
+                );
+                tmpObj.stroke_alpha = Keyframe(1.0);
+                tmpObj.AddBox(frameId, x + w/2, y + h/2, w, h, 0.0);
 
-		// Iterate through the detected objects
-		for(int i = 0; i < pbFrameData.bounding_box_size(); i++)
-		{
-			// Get bounding box coordinates
-			float x = pBox.Get(i).x();
-			float y = pBox.Get(i).y();
-			float w = pBox.Get(i).w();
-			float h = pBox.Get(i).h();
-			// Get class Id (which will be assign to a class name)
-			int classId = pBox.Get(i).classid();
-			// Get prediction confidence
-			float confidence = pBox.Get(i).confidence();
+                auto ptr = std::make_shared<TrackedObjectBBox>(tmpObj);
+                ptr->ParentClip(this->ParentClip());
 
-			// Get the object Id
-			int objectId = pBox.Get(i).objectid();
+                // Prefix with effect UUID for a unique string ID
+                ptr->Id(this->Id() + "-" + std::to_string(objectId));
+                trackedObjects.emplace(objectId, ptr);
+            }
+        }
 
-			// Search for the object id on trackedObjects map
-			auto trackedObject = trackedObjects.find(objectId);
-			// Check if object already exists on the map
-			if (trackedObject != trackedObjects.end())
-			{
-				// Add a new BBox to it
-				trackedObject->second->AddBox(id, x+(w/2), y+(h/2), w, h, 0.0);
-			}
-			else
-			{
-				// There is no tracked object with that id, so insert a new one
-				TrackedObjectBBox trackedObj((int)classesColor[classId](0), (int)classesColor[classId](1), (int)classesColor[classId](2), (int)0);
-                trackedObj.stroke_alpha = Keyframe(1.0);
-				trackedObj.AddBox(id, x+(w/2), y+(h/2), w, h, 0.0);
+        // Save the DetectionData for this frame
+        detectionsData[frameId] = DetectionData(
+            classIds, confidences, boxes, frameId, objectIds
+        );
+    }
 
-				std::shared_ptr<TrackedObjectBBox> trackedObjPtr = std::make_shared<TrackedObjectBBox>(trackedObj);
-				ClipBase* parentClip = this->ParentClip();
-				trackedObjPtr->ParentClip(parentClip);
+    google::protobuf::ShutdownProtobufLibrary();
 
-				// Create a temp ID. This ID is necessary to initialize the object_id Json list
-				// this Id will be replaced by the one created in the UI
-				trackedObjPtr->Id(std::to_string(objectId));
-				trackedObjects.insert({objectId, trackedObjPtr});
-			}
+    // Finally, pick a default selectedObjectIndex if we have any
+    if (!trackedObjects.empty()) {
+        selectedObjectIndex = trackedObjects.begin()->first;
+    }
 
-			// Create OpenCV rectangle with the bouding box info
-			cv::Rect_<float> box(x, y, w, h);
-
-			// Push back data into vectors
-			boxes.push_back(box);
-			classIds.push_back(classId);
-			confidences.push_back(confidence);
-			objectIds.push_back(objectId);
-		}
-
-		// Assign data to object detector map
-		detectionsData[id] = DetectionData(classIds, confidences, boxes, id, objectIds);
-	}
-
-	// Delete all global objects allocated by libprotobuf.
-	google::protobuf::ShutdownProtobufLibrary();
-
-	return true;
+    return true;
 }
 
 // Get the indexes and IDs of all visible objects in the given frame
@@ -377,70 +352,60 @@ void ObjectDetection::SetJson(const std::string value) {
 }
 
 // Load Json::Value into this object
-void ObjectDetection::SetJsonValue(const Json::Value root) {
-	// Set parent data
-	EffectBase::SetJsonValue(root);
+void ObjectDetection::SetJsonValue(const Json::Value root)
+{
+    // Parent properties
+    EffectBase::SetJsonValue(root);
 
-	// Set data from Json (if key is found)
-	if (!root["protobuf_data_path"].isNull() && protobuf_data_path.size() <= 1){
-		protobuf_data_path = root["protobuf_data_path"].asString();
+    // If a protobuf path is provided, load & prefix IDs
+    if (!root["protobuf_data_path"].isNull() && protobuf_data_path.empty()) {
+        protobuf_data_path = root["protobuf_data_path"].asString();
+        if (!LoadObjDetectdData(protobuf_data_path)) {
+            throw InvalidFile("Invalid protobuf data path", "");
+        }
+    }
 
-		if(!LoadObjDetectdData(protobuf_data_path)){
-			throw InvalidFile("Invalid protobuf data path", "");
-			protobuf_data_path = "";
-		}
-	}
-
-	// Set the selected object index
-	if (!root["selected_object_index"].isNull())
-		selectedObjectIndex = root["selected_object_index"].asInt();
-
-	if (!root["confidence_threshold"].isNull())
-		confidence_threshold = root["confidence_threshold"].asFloat();
-
-	if (!root["display_box_text"].isNull())
-		display_box_text.SetJsonValue(root["display_box_text"]);
-
+    // Selected index, thresholds, UI flags, filters, etc.
+    if (!root["selected_object_index"].isNull())
+        selectedObjectIndex = root["selected_object_index"].asInt();
+    if (!root["confidence_threshold"].isNull())
+        confidence_threshold = root["confidence_threshold"].asFloat();
+    if (!root["display_box_text"].isNull())
+        display_box_text.SetJsonValue(root["display_box_text"]);
     if (!root["display_boxes"].isNull())
         display_boxes.SetJsonValue(root["display_boxes"]);
 
     if (!root["class_filter"].isNull()) {
         class_filter = root["class_filter"].asString();
-
-        // Convert the class_filter to a QString
-        QString qClassFilter = QString::fromStdString(root["class_filter"].asString());
-
-        // Split the QString by commas and automatically trim each resulting string
-        QStringList classList = qClassFilter.split(',');
-    	classList.removeAll(""); // Skip empty parts
+        QStringList parts =
+            QString::fromStdString(class_filter)
+                .split(',', Qt::SkipEmptyParts);
         display_classes.clear();
-
-        // Iterate over the QStringList and add each trimmed, non-empty string
-        for (const QString &classItem : classList) {
-            QString trimmedItem = classItem.trimmed().toLower();
-            if (!trimmedItem.isEmpty()) {
-                display_classes.push_back(trimmedItem.toStdString());
-            }
+        for (auto &p : parts) {
+            auto s = p.trimmed().toLower();
+            if (!s.isEmpty()) display_classes.push_back(s.toStdString());
         }
     }
 
-	if (!root["objects"].isNull()){
-		for (auto const& trackedObject : trackedObjects){
-			std::string obj_id = std::to_string(trackedObject.first);
-			if(!root["objects"][obj_id].isNull()){
-				trackedObject.second->SetJsonValue(root["objects"][obj_id]);
-			}
-		}
-	}
-
-	// Set the tracked object's ids
-	if (!root["objects_id"].isNull()){
-		for (auto const& trackedObject : trackedObjects){
-			Json::Value trackedObjectJSON;
-			trackedObjectJSON["box_id"] = root["objects_id"][trackedObject.first].asString();
-			trackedObject.second->SetJsonValue(trackedObjectJSON);
-		}
-	}
+    // Apply any per-object overrides
+    if (!root["objects"].isNull()) {
+        for (auto &kv : trackedObjects) {
+            auto &idx = kv.first;
+            auto &obj = kv.second;
+            std::string key = std::to_string(idx);
+            if (!root["objects"][key].isNull())
+                obj->SetJsonValue(root["objects"][key]);
+        }
+    }
+    if (!root["objects_id"].isNull()) {
+        for (auto &kv : trackedObjects) {
+            auto &idx = kv.first;
+            auto &obj = kv.second;
+            Json::Value tmp;
+            tmp["box_id"] = root["objects_id"][idx].asString();
+            obj->SetJsonValue(tmp);
+        }
+    }
 }
 
 // Get all properties for a specific frame
