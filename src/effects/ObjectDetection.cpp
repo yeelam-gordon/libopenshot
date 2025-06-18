@@ -375,17 +375,17 @@ void ObjectDetection::SetJsonValue(const Json::Value root)
     if (!root["display_boxes"].isNull())
         display_boxes.SetJsonValue(root["display_boxes"]);
 
-    if (!root["class_filter"].isNull()) {
-        class_filter = root["class_filter"].asString();
-        QStringList parts =
-            QString::fromStdString(class_filter)
-                .split(',', Qt::SkipEmptyParts);
-        display_classes.clear();
-        for (auto &p : parts) {
-            auto s = p.trimmed().toLower();
-            if (!s.isEmpty()) display_classes.push_back(s.toStdString());
-        }
-    }
+	if (!root["class_filter"].isNull()) {
+		class_filter = root["class_filter"].asString();
+		QStringList parts = QString::fromStdString(class_filter).split(',');
+		display_classes.clear();
+		for (auto &p : parts) {
+			auto s = p.trimmed().toLower();
+			if (!s.isEmpty()) {
+				display_classes.push_back(s.toStdString());
+			}
+		}
+	}
 
     // Apply any per-object overrides
     if (!root["objects"].isNull()) {
