@@ -15,6 +15,7 @@
 #include <iomanip>
 #include <iostream>
 #include <cmath>
+#include <algorithm>
 
 #include <google/protobuf/util/time_util.h>
 
@@ -25,6 +26,15 @@
 
 using namespace openshot;
 using google::protobuf::util::TimeUtil;
+
+// Clamp a rectangle to image bounds and ensure a minimal size
+static inline void clampRect(cv::Rect2d &r, int width, int height)
+{
+    r.x = std::clamp(r.x, 0.0, double(width  - 1));
+    r.y = std::clamp(r.y, 0.0, double(height - 1));
+    r.width  = std::clamp(r.width,  1.0, double(width  - r.x));
+    r.height = std::clamp(r.height, 1.0, double(height - r.y));
+}
 
 // Constructor
 CVTracker::CVTracker(std::string processInfoJson, ProcessingController &processingController)
@@ -130,9 +140,7 @@ bool CVTracker::initTracker(cv::Mat &frame, size_t frameId)
     }
 
     // Clamp to frame bounds
-    bbox &= cv::Rect2d(0, 0, frame.cols, frame.rows);
-    if (bbox.width  <= 0) bbox.width  = 1;
-    if (bbox.height <= 0) bbox.height = 1;
+    clampRect(bbox, frame.cols, frame.rows);
 
     // Initialize tracker
     tracker->init(frame, bbox);
@@ -262,21 +270,30 @@ bool CVTracker::trackFrame(cv::Mat &frame, size_t frameId)
         cand.y = smoothC_y - cand.height * 0.5;
     }
 
+
+    // Candidate box may now lie outside frame; ROI for KLT is clamped below
     // Re-seed KLT features
     {
-        cv::Rect roi(
-            int(std::max(0., cand.x)),
-            int(std::max(0., cand.y)),
-            int(std::min(cand.width,  double(W - cand.x))),
-            int(std::min(cand.height, double(H - cand.y)))
-        );
-        cv::goodFeaturesToTrack(
-            gray(roi), prevPts,
-            kltMaxCorners, kltQualityLevel,
-            kltMinDist, cv::Mat(), kltBlockSize
-        );
-        for (auto &pt : prevPts)
-            pt += cv::Point2f(float(roi.x), float(roi.y));
+        // Clamp ROI to frame bounds and avoid negative width/height
+        int roiX = int(std::clamp(cand.x, 0.0, double(W - 1)));
+        int roiY = int(std::clamp(cand.y, 0.0, double(H - 1)));
+        int roiW = int(std::min(cand.width,  double(W - roiX)));
+        int roiH = int(std::min(cand.height, double(H - roiY)));
+        roiW = std::max(0, roiW);
+        roiH = std::max(0, roiH);
+
+        if (roiW > 0 && roiH > 0) {
+            cv::Rect roi(roiX, roiY, roiW, roiH);
+            cv::goodFeaturesToTrack(
+                gray(roi), prevPts,
+                kltMaxCorners, kltQualityLevel,
+                kltMinDist, cv::Mat(), kltBlockSize
+            );
+            for (auto &pt : prevPts)
+                pt += cv::Point2f(float(roi.x), float(roi.y));
+        } else {
+            prevPts.clear();
+        }
     }
 
     // Commit state
