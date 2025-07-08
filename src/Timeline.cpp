@@ -1431,17 +1431,26 @@ void Timeline::apply_json_to_clips(Json::Value change) {
 
 		// Update existing clip
 		if (existing_clip) {
+			// Calculate start and end frames prior to the update
+			int64_t old_starting_frame = (existing_clip->Position() * info.fps.ToDouble()) + 1;
+			int64_t old_ending_frame = ((existing_clip->Position() + existing_clip->Duration()) * info.fps.ToDouble()) + 1;
+
 			// Update clip properties from JSON
 			existing_clip->SetJsonValue(change["value"]);
 
-			// Calculate start and end frames that this impacts, and remove those frames from the cache
-			int64_t old_starting_frame = (existing_clip->Position() * info.fps.ToDouble()) + 1;
-			int64_t old_ending_frame = ((existing_clip->Position() + existing_clip->Duration()) * info.fps.ToDouble()) + 1;
+			// Calculate new start and end frames after the update
+			int64_t new_starting_frame = (existing_clip->Position() * info.fps.ToDouble()) + 1;
+			int64_t new_ending_frame = ((existing_clip->Position() + existing_clip->Duration()) * info.fps.ToDouble()) + 1;
+
+			// Remove both the old and new ranges from the timeline cache
 			final_cache->Remove(old_starting_frame - 8, old_ending_frame + 8);
+			final_cache->Remove(new_starting_frame - 8, new_ending_frame + 8);
 
 			// Remove cache on clip's Reader (if found)
-			if (existing_clip->Reader() && existing_clip->Reader()->GetCache())
+			if (existing_clip->Reader() && existing_clip->Reader()->GetCache()) {
 				existing_clip->Reader()->GetCache()->Remove(old_starting_frame - 8, old_ending_frame + 8);
+				existing_clip->Reader()->GetCache()->Remove(new_starting_frame - 8, new_ending_frame + 8);
+			}
 
 			// Apply framemapper (or update existing framemapper)
 			if (auto_map_clips) {
@@ -1462,13 +1471,6 @@ void Timeline::apply_json_to_clips(Json::Value change) {
 			final_cache->Remove(old_starting_frame - 8, old_ending_frame + 8);
 		}
 
-	}
-
-	// Calculate start and end frames that this impacts, and remove those frames from the cache
-	if (!change["value"].isArray() && !change["value"]["position"].isNull()) {
-		int64_t new_starting_frame = (change["value"]["position"].asDouble() * info.fps.ToDouble()) + 1;
-		int64_t new_ending_frame = ((change["value"]["position"].asDouble() + change["value"]["end"].asDouble() - change["value"]["start"].asDouble()) * info.fps.ToDouble()) + 1;
-		final_cache->Remove(new_starting_frame - 8, new_ending_frame + 8);
 	}
 
 	// Re-Sort Clips (since they likely changed)
