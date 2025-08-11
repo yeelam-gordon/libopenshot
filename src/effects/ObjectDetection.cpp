@@ -221,16 +221,19 @@ bool ObjectDetection::LoadObjDetectdData(std::string inputFilePath)
                 tmpObj.stroke_alpha = Keyframe(1.0);
                 tmpObj.AddBox(frameId, x + w/2, y + h/2, w, h, 0.0);
 
-                auto ptr = std::make_shared<TrackedObjectBBox>(tmpObj);
-                ptr->ParentClip(this->ParentClip());
+				auto ptr = std::make_shared<TrackedObjectBBox>(tmpObj);
+				ptr->ParentClip(this->ParentClip());
 
-                // Prefix with effect UUID for a unique string ID
-                ptr->Id(this->Id() + "-" + std::to_string(objectId));
-                trackedObjects.emplace(objectId, ptr);
-            }
-        }
+				// Prefix with effect UUID for a unique string ID
+				std::string prefix = this->Id();
+				if (!prefix.empty())
+					prefix += "-";
+				ptr->Id(prefix + std::to_string(objectId));
+				trackedObjects.emplace(objectId, ptr);
+			}
+		}
 
-        // Save the DetectionData for this frame
+		// Save the DetectionData for this frame
         detectionsData[frameId] = DetectionData(
             classIds, confidences, boxes, frameId, objectIds
         );
@@ -354,26 +357,26 @@ void ObjectDetection::SetJson(const std::string value) {
 // Load Json::Value into this object
 void ObjectDetection::SetJsonValue(const Json::Value root)
 {
-    // Parent properties
-    EffectBase::SetJsonValue(root);
+	// Parent properties
+	EffectBase::SetJsonValue(root);
 
-    // If a protobuf path is provided, load & prefix IDs
-    if (!root["protobuf_data_path"].isNull() && protobuf_data_path.empty()) {
-        protobuf_data_path = root["protobuf_data_path"].asString();
-        if (!LoadObjDetectdData(protobuf_data_path)) {
-            throw InvalidFile("Invalid protobuf data path", "");
-        }
-    }
+	// If a protobuf path is provided, load & prefix IDs
+	if (!root["protobuf_data_path"].isNull() && protobuf_data_path.empty()) {
+	    protobuf_data_path = root["protobuf_data_path"].asString();
+	    if (!LoadObjDetectdData(protobuf_data_path)) {
+	        throw InvalidFile("Invalid protobuf data path", "");
+	    }
+	}
 
-    // Selected index, thresholds, UI flags, filters, etc.
-    if (!root["selected_object_index"].isNull())
-        selectedObjectIndex = root["selected_object_index"].asInt();
-    if (!root["confidence_threshold"].isNull())
-        confidence_threshold = root["confidence_threshold"].asFloat();
-    if (!root["display_box_text"].isNull())
-        display_box_text.SetJsonValue(root["display_box_text"]);
-    if (!root["display_boxes"].isNull())
-        display_boxes.SetJsonValue(root["display_boxes"]);
+	// Selected index, thresholds, UI flags, filters, etc.
+	if (!root["selected_object_index"].isNull())
+	    selectedObjectIndex = root["selected_object_index"].asInt();
+	if (!root["confidence_threshold"].isNull())
+	    confidence_threshold = root["confidence_threshold"].asFloat();
+	if (!root["display_box_text"].isNull())
+	    display_box_text.SetJsonValue(root["display_box_text"]);
+	if (!root["display_boxes"].isNull())
+	    display_boxes.SetJsonValue(root["display_boxes"]);
 
 	if (!root["class_filter"].isNull()) {
 		class_filter = root["class_filter"].asString();
@@ -388,24 +391,24 @@ void ObjectDetection::SetJsonValue(const Json::Value root)
 	}
 
     // Apply any per-object overrides
-    if (!root["objects"].isNull()) {
-        for (auto &kv : trackedObjects) {
-            auto &idx = kv.first;
-            auto &obj = kv.second;
-            std::string key = std::to_string(idx);
-            if (!root["objects"][key].isNull())
-                obj->SetJsonValue(root["objects"][key]);
-        }
-    }
-    if (!root["objects_id"].isNull()) {
-        for (auto &kv : trackedObjects) {
-            auto &idx = kv.first;
-            auto &obj = kv.second;
-            Json::Value tmp;
-            tmp["box_id"] = root["objects_id"][idx].asString();
-            obj->SetJsonValue(tmp);
-        }
-    }
+	if (!root["objects"].isNull()) {
+	    for (auto &kv : trackedObjects) {
+	        auto &idx = kv.first;
+	        auto &obj = kv.second;
+	        std::string key = std::to_string(idx);
+	        if (!root["objects"][key].isNull())
+	            obj->SetJsonValue(root["objects"][key]);
+	    }
+	}
+	if (!root["objects_id"].isNull()) {
+	    for (auto &kv : trackedObjects) {
+	        auto &idx = kv.first;
+	        auto &obj = kv.second;
+	        Json::Value tmp;
+	        tmp["box_id"] = root["objects_id"][idx].asString();
+	        obj->SetJsonValue(tmp);
+	    }
+	}
 }
 
 // Get all properties for a specific frame
@@ -433,9 +436,9 @@ std::string ObjectDetection::PropertiesJSON(int64_t requested_frame) const {
 	root["display_box_text"]["choices"].append(add_property_choice_json("Yes", true, display_box_text.GetValue(requested_frame)));
 	root["display_box_text"]["choices"].append(add_property_choice_json("No", false, display_box_text.GetValue(requested_frame)));
 
-    root["display_boxes"] = add_property_json("Draw All Boxes", display_boxes.GetValue(requested_frame), "int", "", &display_boxes, 0, 1, false, requested_frame);
-    root["display_boxes"]["choices"].append(add_property_choice_json("Yes", true, display_boxes.GetValue(requested_frame)));
-    root["display_boxes"]["choices"].append(add_property_choice_json("No", false, display_boxes.GetValue(requested_frame)));
+	root["display_boxes"] = add_property_json("Draw All Boxes", display_boxes.GetValue(requested_frame), "int", "", &display_boxes, 0, 1, false, requested_frame);
+	root["display_boxes"]["choices"].append(add_property_choice_json("Yes", true, display_boxes.GetValue(requested_frame)));
+	root["display_boxes"]["choices"].append(add_property_choice_json("No", false, display_boxes.GetValue(requested_frame)));
 
 	// Return formatted string
 	return root.toStyledString();

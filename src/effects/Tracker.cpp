@@ -46,6 +46,10 @@ Tracker::Tracker()
 	// Seed our map with a single entry at index 0
 	trackedObjects.clear();
 	trackedObjects.emplace(0, trackedData);
+
+	// Assign ID to the placeholder object
+	if (trackedData)
+	trackedData->Id(Id() + "-0");
 }
 
 // Init effect settings
@@ -222,18 +226,21 @@ void Tracker::SetJsonValue(const Json::Value root) {
 			protobuf_data_path.clear();
 		}
 		else {
-			// prefix “<effectUUID>-<index>” for each entry
+			// prefix "<effectUUID>-<index>" for each entry
 			for (auto& kv : trackedObjects) {
 				auto idx = kv.first;
 				auto ptr = kv.second;
 				if (ptr) {
-					ptr->Id(this->Id() + "-" + std::to_string(idx));
+					std::string prefix = this->Id();
+					if (!prefix.empty())
+						prefix += "-";
+					ptr->Id(prefix + std::to_string(idx));
 				}
 			}
 		}
 	}
 
-	// then any per-object JSON overrides…
+	// then any per-object JSON overrides...
 	if (!root["objects"].isNull()) {
 		for (auto& kv : trackedObjects) {
 			std::string key = std::to_string(kv.first);
