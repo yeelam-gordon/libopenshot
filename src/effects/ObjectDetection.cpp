@@ -13,6 +13,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <algorithm>
 
 #include "effects/ObjectDetection.h"
 #include "effects/Tracker.h"
@@ -390,24 +391,45 @@ void ObjectDetection::SetJsonValue(const Json::Value root)
 		}
 	}
 
-    // Apply any per-object overrides
+	// Apply any per-object overrides
 	if (!root["objects"].isNull()) {
-	    for (auto &kv : trackedObjects) {
-	        auto &idx = kv.first;
-	        auto &obj = kv.second;
-	        std::string key = std::to_string(idx);
-	        if (!root["objects"][key].isNull())
-	            obj->SetJsonValue(root["objects"][key]);
-	    }
+		// Iterate over the supplied objects (indexed by id or position)
+		const auto memberNames = root["objects"].getMemberNames();
+		for (const auto& name : memberNames)
+		{
+			// Determine the numeric index of this object
+			int index = -1;
+			bool numeric_key = std::all_of(name.begin(), name.end(), ::isdigit);
+			if (numeric_key) {
+				index = std::stoi(name);
+			}
+			else
+			{
+				size_t pos = name.find_last_of('-');
+				if (pos != std::string::npos) {
+					try {
+							index = std::stoi(name.substr(pos + 1));
+					} catch (...) {
+							index = -1;
+					}
+				}
+			}
+
+			auto obj_it = trackedObjects.find(index);
+			if (obj_it != trackedObjects.end() && obj_it->second) {
+				// Update object id if provided as a non-numeric key
+				if (!numeric_key)
+						obj_it->second->Id(name);
+				obj_it->second->SetJsonValue(root["objects"][name]);
+			}
+		}
 	}
+	// Set the tracked object's ids (legacy format)
 	if (!root["objects_id"].isNull()) {
-	    for (auto &kv : trackedObjects) {
-	        auto &idx = kv.first;
-	        auto &obj = kv.second;
-	        Json::Value tmp;
-	        tmp["box_id"] = root["objects_id"][idx].asString();
-	        obj->SetJsonValue(tmp);
-	    }
+		for (auto& kv : trackedObjects) {
+			if (!root["objects_id"][kv.first].isNull())
+				kv.second->Id(root["objects_id"][kv.first].asString());
+		}
 	}
 }
 
