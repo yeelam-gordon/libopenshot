@@ -362,11 +362,14 @@ void ObjectDetection::SetJsonValue(const Json::Value root)
 	EffectBase::SetJsonValue(root);
 
 	// If a protobuf path is provided, load & prefix IDs
-	if (!root["protobuf_data_path"].isNull() && protobuf_data_path.empty()) {
-	    protobuf_data_path = root["protobuf_data_path"].asString();
-	    if (!LoadObjDetectdData(protobuf_data_path)) {
-	        throw InvalidFile("Invalid protobuf data path", "");
-	    }
+	if (!root["protobuf_data_path"].isNull()) {
+		std::string new_path = root["protobuf_data_path"].asString();
+		if (protobuf_data_path != new_path || trackedObjects.empty()) {
+			protobuf_data_path = new_path;
+			if (!LoadObjDetectdData(protobuf_data_path)) {
+				throw InvalidFile("Invalid protobuf data path", "");
+			}
+		}
 	}
 
 	// Selected index, thresholds, UI flags, filters, etc.

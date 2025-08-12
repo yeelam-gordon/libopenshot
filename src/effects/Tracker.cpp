@@ -220,22 +220,25 @@ void Tracker::SetJsonValue(const Json::Value root) {
 		TimeScale = root["TimeScale"].asDouble();
 	}
 
-	if (!root["protobuf_data_path"].isNull() && protobuf_data_path.empty()) {
-		protobuf_data_path = root["protobuf_data_path"].asString();
-		if (!trackedData->LoadBoxData(protobuf_data_path)) {
-			std::clog << "Invalid protobuf data path " << protobuf_data_path << '\n';
-			protobuf_data_path.clear();
-		}
-		else {
-			// prefix "<effectUUID>-<index>" for each entry
-			for (auto& kv : trackedObjects) {
-				auto idx = kv.first;
-				auto ptr = kv.second;
-				if (ptr) {
-					std::string prefix = this->Id();
-					if (!prefix.empty())
-						prefix += "-";
-					ptr->Id(prefix + std::to_string(idx));
+	if (!root["protobuf_data_path"].isNull()) {
+		std::string new_path = root["protobuf_data_path"].asString();
+		if (protobuf_data_path != new_path || trackedData->GetLength() == 0) {
+			protobuf_data_path = new_path;
+			if (!trackedData->LoadBoxData(protobuf_data_path)) {
+				std::clog << "Invalid protobuf data path " << protobuf_data_path << '\n';
+				protobuf_data_path.clear();
+			}
+			else {
+				// prefix "<effectUUID>-<index>" for each entry
+				for (auto& kv : trackedObjects) {
+					auto idx = kv.first;
+					auto ptr = kv.second;
+					if (ptr) {
+						std::string prefix = this->Id();
+						if (!prefix.empty())
+							prefix += "-";
+						ptr->Id(prefix + std::to_string(idx));
+					}
 				}
 			}
 		}
