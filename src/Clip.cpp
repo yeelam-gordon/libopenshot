@@ -694,10 +694,11 @@ std::shared_ptr<Frame> Clip::GetOrCreateFrame(int64_t number, bool enable_time)
 
 		// Attempt to get a frame (but this could fail if a reader has just been closed)
 		auto reader_frame = reader->GetFrame(clip_frame_number);
-		reader_frame->number = number; // Override frame # (due to time-mapping might change it)
-
-		// Return real frame
 		if (reader_frame) {
+			// Override frame # (due to time-mapping might change it)
+			reader_frame->number = number;
+
+			// Return real frame
 			// Create a new copy of reader frame
 			// This allows a clip to modify the pixels and audio of this frame without
 			// changing the underlying reader's frame data
