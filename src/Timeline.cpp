@@ -467,22 +467,24 @@ double Timeline::GetMaxTime() {
 
 // Compute the highest frame# based on the latest time and FPS
 int64_t Timeline::GetMaxFrame() {
-	double fps = info.fps.ToDouble();
-	auto max_time = GetMaxTime();
-	return std::round(max_time * fps);
+	const double fps = info.fps.ToDouble();
+	const double t = GetMaxTime();
+	// Inclusive start, exclusive end -> ceil at the end boundary
+	return static_cast<int64_t>(std::ceil(t * fps));
+}
+
+// Compute the first frame# based on the first clip position
+int64_t Timeline::GetMinFrame() {
+	const double fps = info.fps.ToDouble();
+	const double t = GetMinTime();
+	// Inclusive start -> floor at the start boundary, then 1-index
+	return static_cast<int64_t>(std::floor(t * fps)) + 1;
 }
 
 // Compute the start time of the first timeline clip
 double Timeline::GetMinTime() {
 	// Return cached min_time variable (threadsafe)
 	return min_time;
-}
-
-// Compute the first frame# based on the first clip position
-int64_t Timeline::GetMinFrame() {
-	double fps = info.fps.ToDouble();
-	auto min_time = GetMinTime();
-	return std::round(min_time * fps) + 1;
 }
 
 // Apply a FrameMapper to a clip which matches the settings of this timeline
