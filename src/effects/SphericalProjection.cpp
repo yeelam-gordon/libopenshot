@@ -202,7 +202,12 @@ SphericalProjection::GetFrame(std::shared_ptr<openshot::Frame> frame,
       uchar *d = dst_row + xx * 4;
 
       if (input_model == 0 && projection_mode == 0) {
+        // Wrap horizontally for full equirectangular images
         uf = std::fmod(std::fmod(uf, W) + W, W);
+        vf = std::clamp(vf, 0.0, (double)H - 1);
+      } else if (projection_mode == 1) {
+        // In hemisphere mode, clamp UV coordinates to the edge of the source image
+        uf = std::clamp(uf, 0.0, (double)W - 1);
         vf = std::clamp(vf, 0.0, (double)H - 1);
       } else if (uf < 0 || uf >= W || vf < 0 || vf >= H) {
         d[0] = d[1] = d[2] = 0;
