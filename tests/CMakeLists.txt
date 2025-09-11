@@ -48,6 +48,7 @@ set(OPENSHOT_TESTS
   ChromaKey
   Crop
   LensFlare
+  AnalogTape
   Sharpen
   SphericalEffect
 )
