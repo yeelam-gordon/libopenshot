@@ -51,6 +51,7 @@ set(OPENSHOT_TESTS
   AnalogTape
   Sharpen
   SphericalEffect
+  WaveEffect
 )
 
 # ImageMagick related test files
