@@ -42,6 +42,7 @@ TEST_CASE( "default constructor", "[libopenshot][clip]" )
 	CHECK(c1.anchor == ANCHOR_CANVAS);
 	CHECK(c1.gravity == GRAVITY_CENTER);
 	CHECK(c1.scale == SCALE_FIT);
+	CHECK(c1.composite == COMPOSITE_SOURCE_OVER);
 	CHECK(c1.Layer() == 0);
 	CHECK(c1.Position() == Approx(0.0f).margin(0.00001));
 	CHECK(c1.Start() == Approx(0.0f).margin(0.00001));
@@ -60,6 +61,7 @@ TEST_CASE( "path string constructor", "[libopenshot][clip]" )
 	CHECK(c1.anchor == ANCHOR_CANVAS);
 	CHECK(c1.gravity == GRAVITY_CENTER);
 	CHECK(c1.scale == SCALE_FIT);
+	CHECK(c1.composite == COMPOSITE_SOURCE_OVER);
 	CHECK(c1.Layer() == 0);
 	CHECK(c1.Position() == Approx(0.0f).margin(0.00001));
 	CHECK(c1.Start() == Approx(0.0f).margin(0.00001));
@@ -76,6 +78,7 @@ TEST_CASE( "basic getters and setters", "[libopenshot][clip]" )
 	CHECK(c1.anchor == ANCHOR_CANVAS);
 	CHECK(c1.gravity == GRAVITY_CENTER);
 	CHECK(c1.scale == SCALE_FIT);
+	CHECK(c1.composite == COMPOSITE_SOURCE_OVER);
 	CHECK(c1.Layer() == 0);
 	CHECK(c1.Position() == Approx(0.0f).margin(0.00001));
 	CHECK(c1.Start() == Approx(0.0f).margin(0.00001));
@@ -541,9 +544,9 @@ TEST_CASE( "painter_opacity_applied_no_per_pixel_mutation", "[libopenshot][clip]
 	// In Qt, pixelColor() returns unpremultiplied values, so expect alpha ≈ 127 and red ≈ 255.
 	QColor p = img->pixelColor(70, 50);
 	CHECK(p.alpha() == Approx(127).margin(10));
-	CHECK(p.red()   == Approx(255).margin(2));
+	CHECK(p.red()	== Approx(255).margin(2));
 	CHECK(p.green() == Approx(0).margin(2));
-	CHECK(p.blue()  == Approx(0).margin(2));
+	CHECK(p.blue()	== Approx(0).margin(2));
 }
 
 TEST_CASE( "composite_over_opaque_background_blend", "[libopenshot][clip][pr]" )
@@ -652,9 +655,9 @@ TEST_CASE( "transform_path_identity_vs_scaled", "[libopenshot][clip][pr]" )
 		REQUIRE(img);
 		// Pick a mid pixel that is white in the grid (multiple of 4)
 		QColor c = img->pixelColor(20, 20);
-		CHECK(c.red()   >= 240);
+		CHECK(c.red()	>= 240);
 		CHECK(c.green() >= 240);
-		CHECK(c.blue()  >= 240);
+		CHECK(c.blue()	>= 240);
 	}
 
 	// Case B: Downscale (trigger transform path). Clear the clip cache so we don't
@@ -684,7 +687,7 @@ TEST_CASE( "transform_path_identity_vs_scaled", "[libopenshot][clip][pr]" )
 
 		// Optional diagnostic: scaled typically yields <= number of pure whites vs identity.
 		int white_id = count_white(*out_identity->GetImage(), x0, y0, x1, y1);
-		int white_sc = count_white(*img_scaled,            x0, y0, x1, y1);
+		int white_sc = count_white(*img_scaled,		   x0, y0, x1, y1);
 		CHECK(white_sc <= white_id);
 	}
 }

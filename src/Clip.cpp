@@ -32,6 +32,34 @@
 
 using namespace openshot;
 
+namespace {
+	struct CompositeChoice { const char* name; CompositeType value; };
+	const CompositeChoice composite_choices[] = {
+		{"Normal",      COMPOSITE_SOURCE_OVER},
+
+		// Darken group
+		{"Darken",      COMPOSITE_DARKEN},
+		{"Multiply",    COMPOSITE_MULTIPLY},
+		{"Color Burn",  COMPOSITE_COLOR_BURN},
+
+		// Lighten group
+		{"Lighten",     COMPOSITE_LIGHTEN},
+		{"Screen",      COMPOSITE_SCREEN},
+		{"Color Dodge", COMPOSITE_COLOR_DODGE},
+		{"Add",         COMPOSITE_PLUS},
+
+		// Contrast group
+		{"Overlay",     COMPOSITE_OVERLAY},
+		{"Soft Light",  COMPOSITE_SOFT_LIGHT},
+		{"Hard Light",  COMPOSITE_HARD_LIGHT},
+
+		// Compare
+		{"Difference",  COMPOSITE_DIFFERENCE},
+		{"Exclusion",   COMPOSITE_EXCLUSION},
+	};
+	const int composite_choices_count = sizeof(composite_choices)/sizeof(CompositeChoice);
+}
+
 // Init default settings for a clip
 void Clip::init_settings()
 {
@@ -45,6 +73,7 @@ void Clip::init_settings()
 	anchor = ANCHOR_CANVAS;
 	display = FRAME_DISPLAY_NONE;
 	mixing = VOLUME_MIX_NONE;
+	composite = COMPOSITE_SOURCE_OVER;
 	waveform = false;
 	previous_properties = "";
 	parentObjectId = "";
@@ -766,6 +795,7 @@ std::string Clip::PropertiesJSON(int64_t requested_frame) const {
 	root["scale"] = add_property_json("Scale", scale, "int", "", NULL, 0, 3, false, requested_frame);
 	root["display"] = add_property_json("Frame Number", display, "int", "", NULL, 0, 3, false, requested_frame);
 	root["mixing"] = add_property_json("Volume Mixing", mixing, "int", "", NULL, 0, 2, false, requested_frame);
+	root["composite"] = add_property_json("Composite", composite, "int", "", NULL, 0, composite_choices_count - 1, false, requested_frame);
 	root["waveform"] = add_property_json("Waveform", waveform, "int", "", NULL, 0, 1, false, requested_frame);
 	root["parentObjectId"] = add_property_json("Parent", 0.0, "string", parentObjectId, NULL, -1, -1, false, requested_frame);
 
@@ -796,6 +826,10 @@ std::string Clip::PropertiesJSON(int64_t requested_frame) const {
 	root["mixing"]["choices"].append(add_property_choice_json("None", VOLUME_MIX_NONE, mixing));
 	root["mixing"]["choices"].append(add_property_choice_json("Average", VOLUME_MIX_AVERAGE, mixing));
 	root["mixing"]["choices"].append(add_property_choice_json("Reduce", VOLUME_MIX_REDUCE, mixing));
+
+	// Add composite choices (dropdown style)
+	for (int i = 0; i < composite_choices_count; ++i)
+		root["composite"]["choices"].append(add_property_choice_json(composite_choices[i].name, composite_choices[i].value, composite));
 
 	// Add waveform choices (dropdown style)
 	root["waveform"]["choices"].append(add_property_choice_json("Yes", true, waveform));
@@ -879,6 +913,7 @@ Json::Value Clip::JsonValue() const {
 	root["anchor"] = anchor;
 	root["display"] = display;
 	root["mixing"] = mixing;
+	root["composite"] = composite;
 	root["waveform"] = waveform;
 	root["scale_x"] = scale_x.JsonValue();
 	root["scale_y"] = scale_y.JsonValue();
@@ -967,6 +1002,8 @@ void Clip::SetJsonValue(const Json::Value root) {
 		display = (FrameDisplayType) root["display"].asInt();
 	if (!root["mixing"].isNull())
 		mixing = (VolumeMixType) root["mixing"].asInt();
+	if (!root["composite"].isNull())
+		composite = (CompositeType) root["composite"].asInt();
 	if (!root["waveform"].isNull())
 		waveform = root["waveform"].asBool();
 	if (!root["scale_x"].isNull())
@@ -1197,7 +1234,7 @@ void Clip::apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_
 	QPainter painter(background_canvas.get());
 
 	// Composite a new layer onto the image
-	painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+	painter.setCompositionMode(static_cast<QPainter::CompositionMode>(composite));
 	painter.drawImage(0, 0, *frame->GetImage());
 	painter.end();
 
@@ -1260,7 +1297,7 @@ void Clip::apply_keyframes(std::shared_ptr<Frame> frame, QSize timeline_size) {
 	painter.setTransform(transform);
 
 	// Composite a new layer onto the image
-	painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+	painter.setCompositionMode(static_cast<QPainter::CompositionMode>(composite));
 
 	// Apply opacity via painter instead of per-pixel alpha manipulation
 	const float alpha_value = alpha.GetValue(frame->number);
