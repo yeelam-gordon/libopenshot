@@ -46,12 +46,18 @@ namespace openshot {
 	/// Comparison method for sorting clip pointers (by Layer and then Position). Clips are sorted
 	/// from lowest layer to top layer (since that is the sequence they need to be combined), and then
 	/// by position (left to right).
-	struct CompareClips{
-		bool operator()( openshot::Clip* lhs, openshot::Clip* rhs){
-			if( lhs->Layer() < rhs->Layer() ) return true;
-			if( lhs->Layer() == rhs->Layer() && lhs->Position() <= rhs->Position() ) return true;
-			return false;
-	}};
+	struct CompareClips {
+		bool operator()(openshot::Clip* lhs, openshot::Clip* rhs) const {
+			// Strict-weak ordering (no <=) to keep sort well-defined
+			if (lhs == rhs) return false; // irreflexive
+			if (lhs->Layer() != rhs->Layer())
+				return lhs->Layer() < rhs->Layer();
+			if (lhs->Position() != rhs->Position())
+				return lhs->Position() < rhs->Position();
+			// Stable tie-breaker on address to avoid equivalence when layer/position match
+			return std::less<openshot::Clip*>()(lhs, rhs);
+		}
+	};
 
 	/// Comparison method for sorting effect pointers (by Position, Layer, and Order). Effects are sorted
 	/// from lowest layer to top layer (since that is sequence clips are combined), and then by
