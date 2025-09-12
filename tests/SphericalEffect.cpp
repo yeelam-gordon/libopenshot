@@ -1,32 +1,33 @@
 /**
  * @file
- * @brief Unit tests for openshot::SphericalProjection effect using PNG fixtures
- * @author Jonathan Thomas <jonathan@openshot.org>
+ * @brief Unit tests for openshot::SphericalProjection using PNG fixtures
+ * @author Jonathan Thomas
  *
  * @ref License
+ *
+ * Copyright (c) 2008-2025 OpenShot Studios, LLC
+ * SPDX-License-Identifier: LGPL-3.0-or-later
  */
-
-// Copyright (c) 2008-2025 OpenShot Studios, LLC
-//
-// SPDX-License-Identifier: LGPL-3.0-or-later
 
 #include "Frame.h"
 #include "effects/SphericalProjection.h"
 #include "openshot_catch.h"
+
 #include <QColor>
 #include <QImage>
 #include <memory>
+#include <cmath>
+#include <algorithm>
 
 using namespace openshot;
 
-// allow Catch2 to print QColor on failure
+// Pretty-print QColor on failure
 static std::ostream &operator<<(std::ostream &os, QColor const &c) {
-  os << "QColor(" << c.red() << "," << c.green() << "," << c.blue() << ","
-     << c.alpha() << ")";
+  os << "QColor(" << c.red() << "," << c.green() << "," << c.blue() << "," << c.alpha() << ")";
   return os;
 }
 
-// load a PNG into a Frame
+// Load a PNG fixture into a fresh Frame
 static std::shared_ptr<Frame> loadFrame(const char *filename) {
   QImage img(QString(TEST_MEDIA_PATH) + filename);
   img = img.convertToFormat(QImage::Format_ARGB32);
@@ -35,7 +36,7 @@ static std::shared_ptr<Frame> loadFrame(const char *filename) {
   return f;
 }
 
-// apply effect and sample center pixel
+// Helpers to sample pixels
 static QColor centerPixel(SphericalProjection &e, std::shared_ptr<Frame> f) {
   auto img = e.GetFrame(f, 1)->GetImage();
   int cx = img->width() / 2;
@@ -43,117 +44,215 @@ static QColor centerPixel(SphericalProjection &e, std::shared_ptr<Frame> f) {
   return img->pixelColor(cx, cy);
 }
 
-TEST_CASE("sphere mode default and invert", "[effect][spherical]") {
-  SphericalProjection e;
-  e.projection_mode = 0;
-  e.yaw = Keyframe(45.0);
-
-  {
-    auto f0 = loadFrame("eq_sphere.png");
-    e.invert = 0;
-    e.interpolation = 0;
-    // eq_sphere.png has green stripe at center
-    CHECK(centerPixel(e, f0) == QColor(255, 0, 0, 255));
-  }
-  {
-    auto f1 = loadFrame("eq_sphere.png");
-    e.yaw = Keyframe(-45.0);
-    e.invert = 0;
-    e.interpolation = 1;
-    // invert flips view 180°, center maps to blue stripe
-    CHECK(centerPixel(e, f1) == QColor(0, 0, 255, 255));
-  }
-  {
-    auto f1 = loadFrame("eq_sphere.png");
-    e.yaw = Keyframe(0.0);
-    e.invert = 1;
-    e.interpolation = 0;
-    // invert flips view 180°, center maps to blue stripe
-    CHECK(centerPixel(e, f1) == QColor(0, 255, 0, 255));
-  }
+static QColor offsetPixel(std::shared_ptr<QImage> img, int dx, int dy) {
+  const int cx = img->width() / 2 + dx;
+  const int cy = img->height() / 2 + dy;
+  return img->pixelColor(std::clamp(cx, 0, img->width() - 1),
+                         std::clamp(cy, 0, img->height() - 1));
 }
 
-TEST_CASE("hemisphere mode default and invert", "[effect][spherical]") {
-  SphericalProjection e;
-  e.projection_mode = 1;
+// Loose classifiers for our colored guide lines
+static bool is_red(QColor c)    { return c.red()   >= 200 && c.green() <= 60 && c.blue() <= 60; }
+static bool is_yellow(QColor c) { return c.red()   >= 200 && c.green() >= 170 && c.blue() <= 60; }
 
-  {
-    auto f0 = loadFrame("eq_sphere.png");
-    e.yaw = Keyframe(45.0);
-    e.invert = 0;
-    e.interpolation = 0;
-    // hemisphere on full pano still shows green at center
-    CHECK(centerPixel(e, f0) == QColor(255, 0, 0, 255));
-  }
-  {
-    auto f1 = loadFrame("eq_sphere.png");
-    e.yaw = Keyframe(-45.0);
-    e.invert = 0;
-    e.interpolation = 1;
-    // invert=1 flips center to blue
-    CHECK(centerPixel(e, f1) == QColor(0, 0, 255, 255));
-  }
-  {
-    auto f1 = loadFrame("eq_sphere.png");
-    e.yaw = Keyframe(-180.0);
-    e.invert = 0;
-    e.interpolation = 0;
-    // invert=1 flips center to blue
-    CHECK(centerPixel(e, f1) == QColor(0, 255, 0, 255));
-  }
+/* ----------------------------------------------------------------------------
+ * Invert behavior vs Yaw+180 (Equirect input)
+ * ----------------------------------------------------------------------------
+ * In both RECT_SPHERE and RECT_HEMISPHERE, Invert should match adding 180° of
+ * yaw (no mirroring). Compare the center pixel using *fresh* inputs.
+ */
+
+TEST_CASE("sphere mode: invert equals yaw+180 (center pixel)", "[effect][spherical]") {
+  // A: invert=BACK, yaw=0
+  SphericalProjection eA;
+  eA.input_model = SphericalProjection::INPUT_EQUIRECT;
+  eA.projection_mode = SphericalProjection::MODE_RECT_SPHERE;
+  eA.in_fov = Keyframe(180.0);
+  eA.fov    = Keyframe(90.0);
+  eA.interpolation = SphericalProjection::INTERP_NEAREST;
+  eA.invert = SphericalProjection::INVERT_BACK;
+  eA.yaw = Keyframe(0.0);
+
+  // B: invert=NORMAL, yaw=180
+  SphericalProjection eB = eA;
+  eB.invert = SphericalProjection::INVERT_NORMAL;
+  eB.yaw = Keyframe(180.0);
+
+  auto fA = loadFrame("eq_sphere.png");
+  auto fB = loadFrame("eq_sphere.png");
+
+  CHECK(centerPixel(eA, fA) == centerPixel(eB, fB));
 }
 
-TEST_CASE("fisheye mode default and invert", "[effect][spherical]") {
-  SphericalProjection e;
-  e.projection_mode = 2;
-  e.input_model = 1;
-  e.in_fov = Keyframe(180.0);
-  e.fov = Keyframe(180.0);
+TEST_CASE("hemisphere mode: invert equals yaw+180 (center pixel)", "[effect][spherical]") {
+  // A: invert=BACK, yaw=0
+  SphericalProjection eA;
+  eA.input_model = SphericalProjection::INPUT_EQUIRECT;
+  eA.projection_mode = SphericalProjection::MODE_RECT_HEMISPHERE;
+  eA.in_fov = Keyframe(180.0);
+  eA.fov    = Keyframe(90.0);
+  eA.interpolation = SphericalProjection::INTERP_NEAREST;
+  eA.invert = SphericalProjection::INVERT_BACK;
+  eA.yaw = Keyframe(0.0);
 
-  {
-    auto f0 = loadFrame("fisheye.png");
-    e.invert = 0;
-    e.interpolation = 0;
-    // circular mask center remains white
-    CHECK(centerPixel(e, f0) == QColor(255, 255, 255, 255));
-  }
-  {
-    auto f1 = loadFrame("fisheye.png");
-    e.invert = 1;
-    e.interpolation = 1;
-    e.fov = Keyframe(90.0);
-    // invert has no effect on center
-    CHECK(centerPixel(e, f1) == QColor(255, 255, 255, 255));
-  }
+  // B: invert=NORMAL, yaw=180
+  SphericalProjection eB = eA;
+  eB.invert = SphericalProjection::INVERT_NORMAL;
+  eB.yaw = Keyframe(180.0);
+
+  auto fA = loadFrame("eq_sphere.png");
+  auto fB = loadFrame("eq_sphere.png");
+
+  CHECK(centerPixel(eA, fA) == centerPixel(eB, fB));
 }
 
-TEST_CASE("fisheye mode yaw has no effect at center", "[effect][spherical]") {
-  SphericalProjection e;
-  e.projection_mode = 2;
-  e.input_model = 1;
-  e.interpolation = 0;
-  e.in_fov = Keyframe(180.0);
-  e.fov = Keyframe(180.0);
-  e.invert = 0;
+/* ----------------------------------------------------------------------------
+ * Fisheye input: center pixel should be invariant to yaw/invert
+ * ----------------------------------------------------------------------------
+ */
 
-  auto f = loadFrame("fisheye.png");
-  e.yaw = Keyframe(45.0);
-  CHECK(centerPixel(e, f) == QColor(255, 255, 255, 255));
+TEST_CASE("fisheye input: center pixel invariant under invert and yaw", "[effect][spherical]") {
+  SphericalProjection base;
+  base.input_model = SphericalProjection::INPUT_FEQ_EQUIDISTANT;
+  base.projection_mode = SphericalProjection::MODE_RECT_SPHERE;
+  base.in_fov = Keyframe(180.0);
+  base.fov = Keyframe(180.0);
+  base.interpolation = SphericalProjection::INTERP_NEAREST;
+
+  // Baseline
+  SphericalProjection e0 = base;
+  e0.invert = SphericalProjection::INVERT_NORMAL;
+  e0.yaw = Keyframe(0.0);
+  QColor c0 = centerPixel(e0, loadFrame("fisheye.png"));
+
+  // Invert
+  SphericalProjection e1 = base;
+  e1.invert = SphericalProjection::INVERT_BACK;
+  e1.yaw = Keyframe(0.0);
+  QColor c1 = centerPixel(e1, loadFrame("fisheye.png"));
+
+  // Yaw +45
+  SphericalProjection e2 = base;
+  e2.invert = SphericalProjection::INVERT_NORMAL;
+  e2.yaw = Keyframe(45.0);
+  QColor c2 = centerPixel(e2, loadFrame("fisheye.png"));
+
+  CHECK(c0 == c1);
+  CHECK(c0 == c2);
 }
+
+/* ----------------------------------------------------------------------------
+ * Cache invalidation sanity check
+ * ----------------------------------------------------------------------------
+ */
 
 TEST_CASE("changing properties invalidates cache", "[effect][spherical]") {
   SphericalProjection e;
-  e.projection_mode = 0;
+  e.input_model = SphericalProjection::INPUT_EQUIRECT;
+  e.projection_mode = SphericalProjection::MODE_RECT_SPHERE;
   e.yaw = Keyframe(45.0);
-  e.invert = 0;
-  e.interpolation = 0;
+  e.invert = SphericalProjection::INVERT_NORMAL;
+  e.interpolation = SphericalProjection::INTERP_NEAREST;
 
-  auto f0 = loadFrame("eq_sphere.png");
-  QColor c0 = centerPixel(e, f0);
-
-  auto f1 = loadFrame("eq_sphere.png");
-  e.invert = 1; // should rebuild UV map
-  QColor c1 = centerPixel(e, f1);
+  QColor c0 = centerPixel(e, loadFrame("eq_sphere.png"));
+  e.invert = SphericalProjection::INVERT_BACK; // should rebuild UV map
+  QColor c1 = centerPixel(e, loadFrame("eq_sphere.png"));
 
   CHECK(c1 != c0);
+}
+
+/* ----------------------------------------------------------------------------
+ * Checker-plane fixtures (rectilinear output)
+ * ----------------------------------------------------------------------------
+ * Validate the colored guide lines (red vertical meridian at center, yellow
+ * equator horizontally). We use tolerant classifiers to avoid brittle
+ * single-pixel mismatches.
+ */
+
+TEST_CASE("input models: checker-plane colored guides are consistent", "[effect][spherical]") {
+  SphericalProjection e;
+  e.projection_mode = SphericalProjection::MODE_RECT_SPHERE;
+  e.fov = Keyframe(90.0);
+  e.in_fov = Keyframe(180.0);
+  e.yaw = Keyframe(0.0);
+  e.pitch = Keyframe(0.0);
+  e.roll = Keyframe(0.0);
+  e.interpolation = SphericalProjection::INTERP_NEAREST;
+
+  auto check_guides = [&](int input_model, const char *file) {
+    e.input_model = input_model;
+    auto out = e.GetFrame(loadFrame(file), 1)->GetImage();
+
+    // Center column should hit the red meridian
+    REQUIRE(is_red(offsetPixel(out, 0, 0)));
+
+    // A bit left/right along the equator should be yellow
+    CHECK(is_yellow(offsetPixel(out, -60, 0)));
+    CHECK(is_yellow(offsetPixel(out,  60, 0)));
+  };
+
+  SECTION("equirect input") {
+    check_guides(SphericalProjection::INPUT_EQUIRECT, "eq_sphere_plane.png");
+  }
+  SECTION("fisheye equidistant input") {
+    check_guides(SphericalProjection::INPUT_FEQ_EQUIDISTANT, "fisheye_plane_equidistant.png");
+  }
+  SECTION("fisheye equisolid input") {
+    check_guides(SphericalProjection::INPUT_FEQ_EQUISOLID, "fisheye_plane_equisolid.png");
+  }
+  SECTION("fisheye stereographic input") {
+    check_guides(SphericalProjection::INPUT_FEQ_STEREOGRAPHIC, "fisheye_plane_stereographic.png");
+  }
+  SECTION("fisheye orthographic input") {
+    check_guides(SphericalProjection::INPUT_FEQ_ORTHOGRAPHIC, "fisheye_plane_orthographic.png");
+  }
+}
+
+/* ----------------------------------------------------------------------------
+ * Fisheye output modes from equirect plane
+ * ----------------------------------------------------------------------------
+ * - Center pixel should match the rect view's center (same yaw).
+ * - Corners are outside the fisheye disk and should be fully transparent.
+ */
+
+TEST_CASE("output fisheye modes: center matches rect view, corners outside disk", "[effect][spherical]") {
+  // Expected center color using rectilinear view
+  SphericalProjection rect;
+  rect.input_model = SphericalProjection::INPUT_EQUIRECT;
+  rect.projection_mode = SphericalProjection::MODE_RECT_SPHERE;
+  rect.in_fov = Keyframe(180.0);
+  rect.fov = Keyframe(90.0);
+  rect.interpolation = SphericalProjection::INTERP_NEAREST;
+  QColor expected_center = centerPixel(rect, loadFrame("eq_sphere_plane.png"));
+
+  auto verify_mode = [&](int mode) {
+    SphericalProjection e;
+    e.input_model = SphericalProjection::INPUT_EQUIRECT;
+    e.projection_mode = mode;            // one of the fisheye outputs
+    e.in_fov = Keyframe(180.0);
+    e.fov = Keyframe(180.0);
+    e.interpolation = SphericalProjection::INTERP_NEAREST;
+
+    auto img = e.GetFrame(loadFrame("eq_sphere_plane.png"), 1)->GetImage();
+
+    // Center matches rect view
+    CHECK(is_red(expected_center) == is_red(offsetPixel(img, 0, 0)));
+
+    // Corners are fully outside disk => transparent black
+    QColor transparent(0,0,0,0);
+    QColor tl = offsetPixel(img, -img->width()/2 + 2, -img->height()/2 + 2);
+    QColor tr = offsetPixel(img,  img->width()/2 - 2, -img->height()/2 + 2);
+    QColor bl = offsetPixel(img, -img->width()/2 + 2,  img->height()/2 - 2);
+    QColor br = offsetPixel(img,  img->width()/2 - 2,  img->height()/2 - 2);
+
+    CHECK(tl == transparent);
+    CHECK(tr == transparent);
+    CHECK(bl == transparent);
+    CHECK(br == transparent);
+  };
+
+  verify_mode(SphericalProjection::MODE_FISHEYE_EQUIDISTANT);
+  verify_mode(SphericalProjection::MODE_FISHEYE_EQUISOLID);
+  verify_mode(SphericalProjection::MODE_FISHEYE_STEREOGRAPHIC);
+  verify_mode(SphericalProjection::MODE_FISHEYE_ORTHOGRAPHIC);
 }
