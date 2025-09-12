@@ -677,7 +677,6 @@ TEST_CASE( "transform_path_identity_vs_scaled", "[libopenshot][clip][pr]" )
 		// Measure difference vs identity in a central region to avoid edges
 		const int x0 = 8, y0 = 8, x1 = W - 9, y1 = H - 9;
 		int changed = diff_count(*out_identity->GetImage(), *img_scaled, x0, y0, x1, y1);
-		int region_area = (x1 - x0 + 1) * (y1 - y0 + 1);
 
 		// After scaling, the image must not be identical to identity output.
 		// Using a minimal check keeps this robust across Qt versions and platforms.

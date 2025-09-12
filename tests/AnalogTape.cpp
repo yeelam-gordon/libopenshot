@@ -14,19 +14,16 @@
 
 using namespace openshot;
 
-static std::shared_ptr<Frame> makeGrayFrame() {
-	QImage img(5, 5, QImage::Format_ARGB32);
-	img.fill(QColor(100, 100, 100, 255));
-	auto f = std::make_shared<Frame>();
-	*f->GetImage() = img;
-	return f;
-}
+// Fixed helper ensures Frame invariants are respected (size/format/flags)
+static std::shared_ptr<Frame> makeGrayFrame(int w = 64, int h = 64) {
+	auto f = std::make_shared<Frame>(1, w, h, "#000000", 0, 2);
 
-static std::shared_ptr<Frame> makeGrayFrame(int w, int h) {
-	QImage img(w, h, QImage::Format_ARGB32);
-	img.fill(QColor(100, 100, 100, 255));
-	auto f = std::make_shared<Frame>();
-	*f->GetImage() = img;
+	// Use premultiplied format to match Frame::AddImage expectations
+	auto img = std::make_shared<QImage>(w, h, QImage::Format_RGBA8888_Premultiplied);
+	img->fill(QColor(100, 100, 100, 255));
+
+	// Route through AddImage so width/height/has_image_data are set correctly
+	f->AddImage(img);
 	return f;
 }
 
