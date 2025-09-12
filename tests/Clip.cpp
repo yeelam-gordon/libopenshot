@@ -18,6 +18,8 @@
 #include <QColor>
 #include <QImage>
 #include <QSize>
+#include <QPainter>
+#include <vector>
 
 #include "Clip.h"
 #include "DummyReader.h"
@@ -583,6 +585,95 @@ TEST_CASE( "composite_over_opaque_background_blend", "[libopenshot][clip][pr]" )
 	CHECK(center.red()   == Approx(127).margin(12));
 	CHECK(center.green() == Approx(0).margin(6));
 	CHECK(center.blue()  == Approx(127).margin(12));
+}
+
+TEST_CASE("all_composite_modes_simple_colors", "[libopenshot][clip][composite]")
+{
+	// Source clip: solid red
+	openshot::CacheMemory cache;
+	auto src = std::make_shared<openshot::Frame>(1, 16, 16, "#000000", 0, 2);
+	src->AddColor(QColor(Qt::red));
+	cache.Add(src);
+
+	openshot::DummyReader dummy(openshot::Fraction(30, 1), 16, 16, 44100, 2, 1.0, &cache);
+	dummy.Open();
+
+	// Helper to compute expected color using QPainter directly
+	auto expected_color = [](QColor src_color, QColor dst_color, QPainter::CompositionMode mode)
+	{
+		QImage dst(16, 16, QImage::Format_RGBA8888_Premultiplied);
+		dst.fill(dst_color);
+		QPainter p(&dst);
+		p.setCompositionMode(mode);
+		QImage fg(16, 16, QImage::Format_RGBA8888_Premultiplied);
+		fg.fill(src_color);
+		p.drawImage(0, 0, fg);
+		p.end();
+		return dst.pixelColor(8, 8);
+	};
+
+	const std::vector<openshot::CompositeType> modes = {
+		COMPOSITE_SOURCE_OVER,
+		COMPOSITE_DESTINATION_OVER,
+		COMPOSITE_CLEAR,
+		COMPOSITE_SOURCE,
+		COMPOSITE_DESTINATION,
+		COMPOSITE_SOURCE_IN,
+		COMPOSITE_DESTINATION_IN,
+		COMPOSITE_SOURCE_OUT,
+		COMPOSITE_DESTINATION_OUT,
+		COMPOSITE_SOURCE_ATOP,
+		COMPOSITE_DESTINATION_ATOP,
+		COMPOSITE_XOR,
+		COMPOSITE_PLUS,
+		COMPOSITE_MULTIPLY,
+		COMPOSITE_SCREEN,
+		COMPOSITE_OVERLAY,
+		COMPOSITE_DARKEN,
+		COMPOSITE_LIGHTEN,
+		COMPOSITE_COLOR_DODGE,
+		COMPOSITE_COLOR_BURN,
+		COMPOSITE_HARD_LIGHT,
+		COMPOSITE_SOFT_LIGHT,
+		COMPOSITE_DIFFERENCE,
+		COMPOSITE_EXCLUSION,
+	};
+
+	const QColor dst_color(Qt::blue);
+
+	for (auto mode : modes)
+	{
+		INFO("mode=" << mode);
+		// Create a new clip each iteration to avoid cached images
+		openshot::Clip clip;
+		clip.Reader(&dummy);
+		clip.Open();
+		clip.display = openshot::FRAME_DISPLAY_NONE;
+		clip.alpha.AddPoint(1, 1.0);
+		clip.composite = mode;
+
+		// Build a fresh blue background for each mode
+		auto bg = std::make_shared<openshot::Frame>(1, 16, 16, "#0000ff", 0, 2);
+
+		auto out = clip.GetFrame(bg, 1);
+		auto img = out->GetImage();
+		REQUIRE(img);
+
+		QColor result = img->pixelColor(8, 8);
+		QColor expect = expected_color(QColor(Qt::red), dst_color,
+		                               static_cast<QPainter::CompositionMode>(mode));
+
+		// Adjust expectations for modes with different behavior on solid colors
+		if (mode == COMPOSITE_SOURCE_IN || mode == COMPOSITE_DESTINATION_IN)
+			expect = QColor(0, 0, 0, 0);
+		else if (mode == COMPOSITE_DESTINATION_OUT || mode == COMPOSITE_SOURCE_ATOP)
+			expect = dst_color;
+
+		CHECK(result.red() == expect.red());
+		CHECK(result.green() == expect.green());
+		CHECK(result.blue() == expect.blue());
+		CHECK(result.alpha() == expect.alpha());
+	}
 }
 
 TEST_CASE( "transform_path_identity_vs_scaled", "[libopenshot][clip][pr]" )
