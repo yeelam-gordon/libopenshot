@@ -515,8 +515,13 @@ std::shared_ptr<openshot::TrackedObjectBase> Clip::GetParentTrackedObject() {
 // Get file extension
 std::string Clip::get_file_extension(std::string path)
 {
-	// return last part of path
-	return path.substr(path.find_last_of(".") + 1);
+	// Return last part of path safely (handle filenames without a dot)
+	const auto dot_pos = path.find_last_of('.');
+	if (dot_pos == std::string::npos || dot_pos + 1 >= path.size()) {
+		return std::string();
+	}
+
+	return path.substr(dot_pos + 1);
 }
 
 // Adjust the audio and image of a time mapped frame
@@ -1190,7 +1195,6 @@ void Clip::apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_
 	// Add background canvas
 	std::shared_ptr<QImage> background_canvas = background_frame->GetImage();
 	QPainter painter(background_canvas.get());
-	painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform | QPainter::TextAntialiasing, true);
 
 	// Composite a new layer onto the image
 	painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
@@ -1248,14 +1252,26 @@ void Clip::apply_keyframes(std::shared_ptr<Frame> frame, QSize timeline_size) {
 
 	// Load timeline's new frame image into a QPainter
 	QPainter painter(background_canvas.get());
-	painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform | QPainter::TextAntialiasing, true);
-
+	painter.setRenderHint(QPainter::TextAntialiasing, true);
+	if (!transform.isIdentity()) {
+		painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+	}
 	// Apply transform (translate, rotate, scale)
 	painter.setTransform(transform);
 
 	// Composite a new layer onto the image
 	painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
-	painter.drawImage(0, 0, *source_image);
+
+	// Apply opacity via painter instead of per-pixel alpha manipulation
+	const float alpha_value = alpha.GetValue(frame->number);
+	if (alpha_value != 1.0f) {
+		painter.setOpacity(alpha_value);
+		painter.drawImage(0, 0, *source_image);
+		// Reset so any subsequent drawing (e.g., overlays) isn’t faded
+		painter.setOpacity(1.0);
+	} else {
+		painter.drawImage(0, 0, *source_image);
+	}
 
 	if (timeline) {
 		Timeline *t = static_cast<Timeline *>(timeline);
@@ -1347,31 +1363,6 @@ QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int heig
 {
 	// Get image from clip
 	std::shared_ptr<QImage> source_image = frame->GetImage();
-
-	/* ALPHA & OPACITY */
-	if (alpha.GetValue(frame->number) != 1.0)
-	{
-		float alpha_value = alpha.GetValue(frame->number);
-
-		// Get source image's pixels
-		unsigned char *pixels = source_image->bits();
-
-		// Loop through pixels
-		for (int pixel = 0, byte_index=0; pixel < source_image->width() * source_image->height(); pixel++, byte_index+=4)
-		{
-			// Apply alpha to pixel values (since we use a premultiplied value, we must
-			// multiply the alpha with all colors).
-			pixels[byte_index + 0] *= alpha_value;
-			pixels[byte_index + 1] *= alpha_value;
-			pixels[byte_index + 2] *= alpha_value;
-			pixels[byte_index + 3] *= alpha_value;
-		}
-
-		// Debug output
-		ZmqLogger::Instance()->AppendDebugMethod("Clip::get_transform (Set Alpha & Opacity)",
-			"alpha_value", alpha_value,
-			"frame->number", frame->number);
-	}
 
 	/* RESIZE SOURCE IMAGE - based on scale type */
 	QSize source_size = scale_size(source_image->size(), scale, width, height);

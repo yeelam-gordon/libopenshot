@@ -490,3 +490,203 @@ TEST_CASE( "resample_audio_8000_to_48000_reverse", "[libopenshot][clip]" )
 	reader.Close();
 	clip.Close();
 }
+
+// -----------------------------------------------------------------------------
+// Additional tests validating PR changes:
+//  - safe extension parsing (no dot in path)
+//  - painter-based opacity behavior (no per-pixel mutation)
+//  - transform/scaling path sanity (conditional render hint use)
+// -----------------------------------------------------------------------------
+
+TEST_CASE( "safe_extension_parsing_no_dot", "[libopenshot][clip][pr]" )
+{
+	// Constructing a Clip with a path that has no dot used to risk UB in get_file_extension();
+	// This should now be safe and simply result in no reader being set.
+	openshot::Clip c1("this_is_not_a_real_path_and_has_no_extension");
+
+	// Reader() should throw since no reader could be inferred.
+	CHECK_THROWS_AS(c1.Reader(), openshot::ReaderClosed);
+
+	// Opening also throws (consistent with other tests for unopened readers).
+	CHECK_THROWS_AS(c1.Open(), openshot::ReaderClosed);
+}
+
+TEST_CASE( "painter_opacity_applied_no_per_pixel_mutation", "[libopenshot][clip][pr]" )
+{
+	// Build a red frame via DummyReader (no copies/assignments of DummyReader)
+	openshot::CacheMemory cache;
+	auto f = std::make_shared<openshot::Frame>(1, 80, 60, "#000000", 0, 2);
+	f->AddColor(QColor(Qt::red)); // opaque red
+	cache.Add(f);
+
+	openshot::DummyReader dummy(openshot::Fraction(30,1), 80, 60, 44100, 2, 1.0, &cache);
+	dummy.Open();
+
+	// Clip that uses the dummy reader
+	openshot::Clip clip;
+	clip.Reader(&dummy);
+	clip.Open();
+
+	// Alpha 0.5 at frame 1 (exercise painter.setOpacity path)
+	clip.alpha.AddPoint(1, 0.5);
+	clip.display = openshot::FRAME_DISPLAY_NONE; // avoid font/overlay variability
+
+	// Render frame 1 (no timeline needed for this check)
+	std::shared_ptr<openshot::Frame> out_f = clip.GetFrame(1);
+	auto img = out_f->GetImage();
+	REQUIRE(img); // must exist
+	REQUIRE(img->format() == QImage::Format_RGBA8888_Premultiplied);
+
+	// Pixel well inside the image should be "half-transparent red" over transparent bg.
+	// In Qt, pixelColor() returns unpremultiplied values, so expect alpha ≈ 127 and red ≈ 255.
+	QColor p = img->pixelColor(70, 50);
+	CHECK(p.alpha() == Approx(127).margin(10));
+	CHECK(p.red()   == Approx(255).margin(2));
+	CHECK(p.green() == Approx(0).margin(2));
+	CHECK(p.blue()  == Approx(0).margin(2));
+}
+
+TEST_CASE( "composite_over_opaque_background_blend", "[libopenshot][clip][pr]" )
+{
+	// Red source clip frame (fully opaque)
+	openshot::CacheMemory cache;
+	auto f = std::make_shared<openshot::Frame>(1, 64, 64, "#000000", 0, 2);
+	f->AddColor(QColor(Qt::red));
+	cache.Add(f);
+
+	openshot::DummyReader dummy(openshot::Fraction(30,1), 64, 64, 44100, 2, 1.0, &cache);
+	dummy.Open();
+
+	openshot::Clip clip;
+	clip.Reader(&dummy);
+	clip.Open();
+
+	// Make clip semi-transparent via alpha (0.5)
+	clip.alpha.AddPoint(1, 0.5);
+	clip.display = openshot::FRAME_DISPLAY_NONE; // no overlay here
+
+	// Build a blue, fully-opaque background frame and composite into it
+	auto bg = std::make_shared<openshot::Frame>(1, 64, 64, "#000000", 0, 2);
+	bg->AddColor(QColor(Qt::blue)); // blue background, opaque
+
+	// Composite the clip onto bg
+	std::shared_ptr<openshot::Frame> out = clip.GetFrame(bg, /*clip_frame_number*/1);
+	auto img = out->GetImage();
+	REQUIRE(img);
+
+	// Center pixel should be purple-ish and fully opaque (red over blue @ 50% -> roughly (127,0,127), A=255)
+	QColor center = img->pixelColor(32, 32);
+	CHECK(center.alpha() == Approx(255).margin(0));
+	CHECK(center.red()   == Approx(127).margin(12));
+	CHECK(center.green() == Approx(0).margin(6));
+	CHECK(center.blue()  == Approx(127).margin(12));
+}
+
+TEST_CASE( "transform_path_identity_vs_scaled", "[libopenshot][clip][pr]" )
+{
+	// Create a small checker-ish image to make scaling detectable
+	const int W = 60, H = 40;
+	QImage src(W, H, QImage::Format_RGBA8888_Premultiplied);
+	src.fill(QColor(Qt::black));
+	{
+		QPainter p(&src);
+		p.setPen(QColor(Qt::white));
+		for (int x = 0; x < W; x += 4) p.drawLine(x, 0, x, H-1);
+		for (int y = 0; y < H; y += 4) p.drawLine(0, y, W-1, y);
+	}
+
+	// Stuff the image into a Frame -> Cache -> DummyReader
+	openshot::CacheMemory cache;
+	auto f = std::make_shared<openshot::Frame>(1, W, H, "#000000", 0, 2);
+	f->AddImage(std::make_shared<QImage>(src));
+	cache.Add(f);
+
+	openshot::DummyReader dummy(openshot::Fraction(30,1), W, H, 44100, 2, 1.0, &cache);
+	dummy.Open();
+
+	openshot::Clip clip;
+	clip.Reader(&dummy);
+	clip.Open();
+
+	// Helper lambda to count "near-white" pixels in a region (for debug/metrics)
+	auto count_white = [](const QImage& im, int x0, int y0, int x1, int y1)->int {
+		int cnt = 0;
+		for (int y = y0; y <= y1; ++y) {
+			for (int x = x0; x <= x1; ++x) {
+				QColor c = im.pixelColor(x, y);
+				if (c.red() > 240 && c.green() > 240 && c.blue() > 240) ++cnt;
+			}
+		}
+		return cnt;
+	};
+
+	// Helper lambda to compute per-pixel difference count between two images
+	auto diff_count = [](const QImage& a, const QImage& b, int x0, int y0, int x1, int y1)->int {
+		int cnt = 0;
+		for (int y = y0; y <= y1; ++y) {
+			for (int x = x0; x <= x1; ++x) {
+				QColor ca = a.pixelColor(x, y);
+				QColor cb = b.pixelColor(x, y);
+				int dr = std::abs(ca.red()   - cb.red());
+				int dg = std::abs(ca.green() - cb.green());
+				int db = std::abs(ca.blue()  - cb.blue());
+				// treat any noticeable RGB change as a difference
+				if ((dr + dg + db) > 24) ++cnt;
+			}
+		}
+		return cnt;
+	};
+
+	// Case A: Identity transform (no move/scale/rotate). Output should match source at a white grid point.
+	std::shared_ptr<openshot::Frame> out_identity;
+	{
+		clip.scale_x = openshot::Keyframe(1.0);
+		clip.scale_y = openshot::Keyframe(1.0);
+		clip.rotation = openshot::Keyframe(0.0);
+		clip.location_x = openshot::Keyframe(0.0);
+		clip.location_y = openshot::Keyframe(0.0);
+		clip.display = openshot::FRAME_DISPLAY_NONE;
+
+		out_identity = clip.GetFrame(1);
+		auto img = out_identity->GetImage();
+		REQUIRE(img);
+		// Pick a mid pixel that is white in the grid (multiple of 4)
+		QColor c = img->pixelColor(20, 20);
+		CHECK(c.red()   >= 240);
+		CHECK(c.green() >= 240);
+		CHECK(c.blue()  >= 240);
+	}
+
+	// Case B: Downscale (trigger transform path). Clear the clip cache so we don't
+	// accidentally re-use the identity frame from final_cache.
+	{
+		clip.GetCache()->Clear(); // **critical fix** ensure recompute after keyframe changes
+
+		// Force a downscale to half
+		clip.scale_x = openshot::Keyframe(0.5);
+		clip.scale_y = openshot::Keyframe(0.5);
+		clip.rotation = openshot::Keyframe(0.0);
+		clip.location_x = openshot::Keyframe(0.0);
+		clip.location_y = openshot::Keyframe(0.0);
+		clip.display = openshot::FRAME_DISPLAY_NONE;
+
+		auto out_scaled = clip.GetFrame(1);
+		auto img_scaled = out_scaled->GetImage();
+		REQUIRE(img_scaled);
+
+		// Measure difference vs identity in a central region to avoid edges
+		const int x0 = 8, y0 = 8, x1 = W - 9, y1 = H - 9;
+		int changed = diff_count(*out_identity->GetImage(), *img_scaled, x0, y0, x1, y1);
+		int region_area = (x1 - x0 + 1) * (y1 - y0 + 1);
+
+		// After scaling, the image must not be identical to identity output.
+		// Using a minimal check keeps this robust across Qt versions and platforms.
+		CHECK(changed > 0);
+
+		// Optional diagnostic: scaled typically yields <= number of pure whites vs identity.
+		int white_id = count_white(*out_identity->GetImage(), x0, y0, x1, y1);
+		int white_sc = count_white(*img_scaled,            x0, y0, x1, y1);
+		CHECK(white_sc <= white_id);
+	}
+}
+
