@@ -21,6 +21,7 @@
 #include <QSize>
 #include <QPainter>
 #include <vector>
+#include <cmath>
 
 #include "Clip.h"
 #include "DummyReader.h"
@@ -796,10 +797,12 @@ TEST_CASE("all_composite_modes_simple_colors", "[libopenshot][clip][composite]")
 		else if (mode == COMPOSITE_DESTINATION_OUT || mode == COMPOSITE_SOURCE_ATOP)
 			expect = dst_color;
 
-		CHECK(result.red() == expect.red());
-		CHECK(result.green() == expect.green());
-		CHECK(result.blue() == expect.blue());
-		CHECK(result.alpha() == expect.alpha());
+		// Allow a small tolerance to account for platform-specific
+		// rounding differences in Qt's composition modes
+		CHECK(std::abs(result.red()   - expect.red())   <= 1);
+		CHECK(std::abs(result.green() - expect.green()) <= 1);
+		CHECK(std::abs(result.blue()  - expect.blue())  <= 1);
+		CHECK(std::abs(result.alpha() - expect.alpha()) <= 1);
 	}
 }
 
