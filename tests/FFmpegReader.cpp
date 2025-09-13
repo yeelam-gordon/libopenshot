@@ -12,6 +12,7 @@
 
 #include <sstream>
 #include <memory>
+#include <set>
 
 #include "openshot_catch.h"
 
@@ -187,6 +188,35 @@ TEST_CASE( "Frame_Rate", "[libopenshot][ffmpegreader]" )
 	CHECK(rate.den == 1);
 
 	r.Close();
+}
+
+TEST_CASE( "GIF_TimeBase", "[libopenshot][ffmpegreader]" )
+{
+        // Create a reader
+        std::stringstream path;
+        path << TEST_MEDIA_PATH << "animation.gif";
+        FFmpegReader r(path.str());
+        r.Open();
+
+        // Verify basic info
+        CHECK(r.info.fps.num == 5);
+        CHECK(r.info.fps.den == 1);
+        CHECK(r.info.video_length == 20);
+        CHECK(r.info.duration == Approx(4.0f).margin(0.01));
+
+        auto frame_color = [](std::shared_ptr<Frame> f) {
+                const unsigned char* row = f->GetPixels(25);
+                return row[25 * 4];
+        };
+        auto expected_color = [](int frame) {
+                return (frame - 1) * 10;
+        };
+
+        for (int i = 1; i <= r.info.video_length; ++i) {
+                CHECK(frame_color(r.GetFrame(i)) == expected_color(i));
+        }
+
+        r.Close();
 }
 
 TEST_CASE( "Multiple_Open_and_Close", "[libopenshot][ffmpegreader]" )

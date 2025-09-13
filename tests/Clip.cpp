@@ -12,6 +12,7 @@
 
 #include <sstream>
 #include <memory>
+#include <set>
 
 #include "openshot_catch.h"
 
@@ -224,6 +225,132 @@ TEST_CASE( "effects", "[libopenshot][clip]" )
 
 	// Check the # of Effects
 	CHECK((int)c10.Effects().size() == 2);
+}
+
+TEST_CASE( "GIF_clip_properties", "[libopenshot][clip][gif]" )
+{
+        std::stringstream path;
+        path << TEST_MEDIA_PATH << "animation.gif";
+        Clip c(path.str());
+        c.Open();
+
+        FFmpegReader *r = dynamic_cast<FFmpegReader*>(c.Reader());
+        REQUIRE(r != nullptr);
+        CHECK(r->info.video_length == 20);
+        CHECK(r->info.fps.num == 5);
+        CHECK(r->info.fps.den == 1);
+        CHECK(r->info.duration == Approx(4.0f).margin(0.01));
+
+        c.Close();
+}
+
+TEST_CASE( "GIF_time_mapping", "[libopenshot][clip][gif]" )
+{
+        std::stringstream path;
+        path << TEST_MEDIA_PATH << "animation.gif";
+
+        auto frame_color = [](std::shared_ptr<Frame> f) {
+                const unsigned char* row = f->GetPixels(25);
+                return row[25 * 4];
+        };
+        auto expected_color = [](int frame) {
+                return (frame - 1) * 10;
+        };
+
+        // Slow mapping: stretch 20 frames over 50 frames
+        Clip slow(path.str());
+        slow.time.AddPoint(1,1, LINEAR);
+        slow.time.AddPoint(50,20, LINEAR);
+        slow.Open();
+
+        std::set<int> slow_colors;
+        for (int i = 1; i <= 50; ++i) {
+                int src = slow.time.GetLong(i);
+                int c = frame_color(slow.GetFrame(i));
+                CHECK(c == expected_color(src));
+                slow_colors.insert(c);
+        }
+        CHECK((int)slow_colors.size() == 20);
+        slow.Close();
+
+        // Fast mapping: shrink 20 frames to 10 frames
+        Clip fast(path.str());
+        fast.time.AddPoint(1,1, LINEAR);
+        fast.time.AddPoint(10,20, LINEAR);
+        fast.Open();
+
+        std::set<int> fast_colors;
+        for (int i = 1; i <= 10; ++i) {
+                int src = fast.time.GetLong(i);
+                int c = frame_color(fast.GetFrame(i));
+                CHECK(c == expected_color(src));
+                fast_colors.insert(c);
+        }
+        CHECK((int)fast_colors.size() == 10);
+        fast.Close();
+}
+
+TEST_CASE( "GIF_timeline_mapping", "[libopenshot][clip][gif]" )
+{
+	// Create a timeline
+	Timeline t1(50, 50, Fraction(5, 1), 44100, 2, LAYOUT_STEREO);
+
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "animation.gif";
+
+	auto frame_color = [](std::shared_ptr<Frame> f) {
+		const unsigned char* row = f->GetPixels(25);
+		return row[25 * 4];
+	};
+	auto expected_color = [](int frame) {
+		return (frame - 1) * 10;
+	};
+
+	// Slow mapping: stretch 20 frames over 50 frames
+	Clip slow(path.str());
+	slow.Position(0.0);
+	slow.Layer(1);
+	slow.time.AddPoint(1,1, LINEAR);
+	slow.time.AddPoint(50,20, LINEAR);
+	slow.End(10.0);
+	t1.AddClip(&slow);
+	t1.Open();
+
+	std::set<int> slow_colors;
+	for (int i = 1; i <= 50; ++i) {
+		int src = slow.time.GetLong(i);
+		std::stringstream frame_save;
+		t1.GetFrame(i)->Save(frame_save.str(), 1.0, "PNG", 100);
+		int c = frame_color(t1.GetFrame(i));
+		std::cout << c << std::endl;
+		CHECK(c == expected_color(src));
+		slow_colors.insert(c);
+	}
+	CHECK((int)slow_colors.size() == 20);
+	t1.Close();
+
+	// Create a timeline
+	Timeline t2(50, 50, Fraction(5, 1), 44100, 2, LAYOUT_STEREO);
+
+	// Fast mapping: shrink 20 frames to 10 frames
+	Clip fast(path.str());
+	fast.Position(0.0);
+	fast.Layer(1);
+	fast.time.AddPoint(1,1, LINEAR);
+	fast.time.AddPoint(10,20, LINEAR);
+	fast.End(2.0);
+	t2.AddClip(&fast);
+	t2.Open();
+
+	std::set<int> fast_colors;
+	for (int i = 1; i <= 10; ++i) {
+		int src = fast.time.GetLong(i);
+		int c = frame_color(t2.GetFrame(i));
+		CHECK(c == expected_color(src));
+		fast_colors.insert(c);
+	}
+	CHECK((int)fast_colors.size() == 10);
+	t2.Close();
 }
 
 TEST_CASE( "verify parent Timeline", "[libopenshot][clip]" )
