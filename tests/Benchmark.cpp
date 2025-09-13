@@ -19,7 +19,11 @@
 #include "FFmpegWriter.h"
 #include "Fraction.h"
 #include "FrameMapper.h"
+#ifdef USE_IMAGEMAGICK
 #include "ImageReader.h"
+#else
+#include "QtImageReader.h"
+#endif
 #include "ReaderBase.h"
 #include "Timeline.h"
 #include "effects/Brightness.h"
@@ -161,20 +165,24 @@ int main() {
 		t.Close();
 	});
 
-	total += time_trial("Effect_Mask", [&]() {
-		FFmpegReader r(video);
-		r.Open();
-		ImageReader mask_reader(mask_img);
-		mask_reader.Open();
-		Clip clip(&r);
-		clip.Open();
-		Mask m(&mask_reader, Keyframe(0.0), Keyframe(0.5));
-		clip.AddEffect(&m);
-		read_forward_backward(clip);
-		mask_reader.Close();
-		clip.Close();
-		r.Close();
-	});
+        total += time_trial("Effect_Mask", [&]() {
+                FFmpegReader r(video);
+                r.Open();
+#ifdef USE_IMAGEMAGICK
+                ImageReader mask_reader(mask_img);
+#else
+                QtImageReader mask_reader(mask_img);
+#endif
+                mask_reader.Open();
+                Clip clip(&r);
+                clip.Open();
+                Mask m(&mask_reader, Keyframe(0.0), Keyframe(0.5));
+                clip.AddEffect(&m);
+                read_forward_backward(clip);
+                mask_reader.Close();
+                clip.Close();
+                r.Close();
+        });
 
 	total += time_trial("Effect_Brightness", [&]() {
 		FFmpegReader r(video);
