@@ -151,6 +151,15 @@ namespace openshot {
 		/// Get a frame object or create a blank one
 		std::shared_ptr<openshot::Frame> GetOrCreateFrame(int64_t number, bool enable_time=true);
 
+		/// Determine the frames-per-second context used for timeline playback
+		double resolve_timeline_fps() const;
+
+		/// Determine the number of frames implied by time-mapping curves
+		int64_t curve_extent_frames() const;
+
+		/// Determine the number of frames implied by the clip's trim range
+		int64_t trim_extent_frames(double fps_value) const;
+
 		/// Adjust the audio and image of a time mapped frame
 		void apply_timemapping(std::shared_ptr<openshot::Frame> frame);
 
@@ -278,6 +287,10 @@ namespace openshot {
 
 		/// Get the current reader
 		openshot::ReaderBase* Reader();
+
+		/// Duration and video length helpers which take into account time-mapping curves
+		float MaxDuration() const;
+		int64_t VideoLength() const override;
 
 		// Override End() position (in seconds) of clip (trim end of video)
 		float End() const override; ///< Get end position (in seconds) of clip (trim end of video), which can be affected by the time curve.

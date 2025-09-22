@@ -125,6 +125,11 @@ namespace openshot
 		/// Open the reader (and start consuming resources, such as images or video files)
 		virtual void Open() = 0;
 
+		/// Get the detected number of frames in this reader.
+		/// Derived readers can override this to provide custom logic
+		/// for dynamic or procedurally generated frame counts.
+		virtual int64_t VideoLength() const { return info.video_length; }
+
 		virtual ~ReaderBase() = default;
 	};
 
