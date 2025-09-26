@@ -913,3 +913,109 @@ TEST_CASE( "transform_path_identity_vs_scaled", "[libopenshot][clip][pr]" )
 	}
 }
 
+TEST_CASE("Reverse time curve (sample-exact, no resampling)", "[libopenshot][clip][time][reverse]")
+{
+	using namespace openshot;
+
+	// --- Construct predictable source audio in a cache (abs(sin)), 30fps, 44100Hz, stereo ---
+	const Fraction fps(30, 1);
+	const int sample_rate = 44100;
+	const int channels    = 2;
+	const int frames_n    = 90;             // 3 seconds at 30fps
+	const int sppf        = sample_rate / fps.ToDouble(); // 44100 / 30 = 1470
+	const int total_samples = frames_n * sppf;
+
+	const int   OFFSET      = 0;
+	const float AMPLITUDE   = 0.75f;
+	const int   NUM_SINE_STEPS = 100;
+	double angle = 0.0;
+
+	CacheMemory cache;
+	cache.SetMaxBytes(0);
+
+	for (int64_t fn = 1; fn <= frames_n; ++fn) {
+	   auto f = std::make_shared<Frame>(fn, sppf, channels);
+	   f->SampleRate(sample_rate);
+
+	   // channel buffers for this frame
+	   std::vector<float> chbuf(sppf);
+	   for (int s = 0; s < sppf; ++s) {
+		  const float v = std::fabs(float(AMPLITUDE * std::sin(angle) + OFFSET));
+		  chbuf[s] = v;
+		  angle += (2.0 * M_PI) / NUM_SINE_STEPS;
+	   }
+	   f->AddAudio(true, 0, 0, chbuf.data(), sppf, 1.0);
+	   f->AddAudio(true, 1, 0, chbuf.data(), sppf, 1.0);
+
+	   cache.Add(f);
+	}
+
+	DummyReader r(fps, 1920, 1080, sample_rate, channels, /*video_length_sec*/ 30.0, &cache);
+	r.Open();
+	r.info.has_audio = true;
+
+	// --- Build the expected "global reverse" vector (channel 0) ---
+	std::vector<float> expected;
+	expected.reserve(total_samples);
+	for (int64_t fn = 1; fn <= frames_n; ++fn) {
+	   auto f = cache.GetFrame(fn);
+	   const float* p = f->GetAudioSamples(0);
+	   expected.insert(expected.end(), p, p + sppf);
+	}
+	std::reverse(expected.begin(), expected.end());
+
+	// --- Clip with reverse time curve: timeline 1..frames_n -> source frames_n..1
+	Clip clip(&r);
+	clip.time = Keyframe();
+	clip.time.AddPoint(1.0, double(frames_n), LINEAR);
+	clip.time.AddPoint(double(frames_n), 1.0, LINEAR);
+	clip.time.PrintValues();
+
+	// set End to exactly frames_n/fps so timeline outputs frames_n frames
+	clip.End(float(frames_n) / float(fps.ToDouble()));
+	clip.Position(0.0);
+
+	// Timeline matches reader (no resampling)
+	Timeline tl(1920, 1080, fps, sample_rate, channels, LAYOUT_STEREO);
+	tl.AddClip(&clip);
+	tl.Open();
+
+	// --- Pull timeline audio and concatenate into 'actual'
+	std::vector<float> actual;
+	actual.reserve(total_samples);
+
+	for (int64_t tf = 1; tf <= clip.VideoLength(); ++tf) {
+	   auto fr = tl.GetFrame(tf);
+	   const int n = fr->GetAudioSamplesCount();
+	   REQUIRE(n == sppf); // no resampling path => fixed count expected
+
+	   for (int i = 0; i < n; ++i) {
+		  actual.push_back(fr->GetAudioSample(0, i, 1.0));
+	   }
+	}
+
+	//REQUIRE(actual.size() == expected.size());
+
+	// --- Strict element-wise comparison
+	size_t mismatches = 0;
+	for (size_t i = 0; i < expected.size(); ++i) {
+	   // The inputs are identical floats generated deterministically (no resampling),
+	   // so we can compare with a very small tolerance.
+	   if (actual[i] != Approx(expected[i]).margin(1e-6f)) {
+		  // log a handful to make any future issues obvious
+		  if (mismatches < 20) {
+			 std::cout << "[DBG reverse no-resample] i=" << i
+					 << " out=" << actual[i] << " exp=" << expected[i] << "\n";
+		  }
+		  ++mismatches;
+	   }
+	}
+
+	CHECK(mismatches == 0);
+
+	// Clean up
+	tl.Close();
+	clip.Close();
+	r.Close();
+	cache.Clear();
+}
