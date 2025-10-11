@@ -736,7 +736,8 @@ void Clip::apply_timemapping(std::shared_ptr<Frame> frame)
 
 		// Get delta (difference from this frame to the next time mapped frame: Y value)
 		double delta = time.GetDelta(clip_frame_number + 1);
-		bool is_increasing = time.IsIncreasing(clip_frame_number + 1);
+		const bool prev_is_increasing = time.IsIncreasing(clip_frame_number);
+		const bool is_increasing = time.IsIncreasing(clip_frame_number + 1);
 
 		// Determine length of source audio (in samples)
 		// A delta of 1.0 == normal expected samples
@@ -749,7 +750,7 @@ void Clip::apply_timemapping(std::shared_ptr<Frame> frame)
 
 		// Determine starting audio location
 		AudioLocation location;
-		if (previous_location.frame == 0 || abs(new_frame_number - previous_location.frame) > 2) {
+		if (previous_location.frame == 0 || abs(new_frame_number - previous_location.frame) > 2 || prev_is_increasing != is_increasing) {
 			// No previous location OR gap detected
 			location.frame = new_frame_number;
 			location.sample_start = 0;
@@ -758,6 +759,7 @@ void Clip::apply_timemapping(std::shared_ptr<Frame> frame)
 			// We don't want to interpolate between unrelated audio data
 			if (resampler) {
 				delete resampler;
+				resampler = nullptr;
 			}
 			// Init resampler with # channels from Reader (should match the timeline)
 			resampler = new AudioResampler(Reader()->info.channels);
@@ -790,6 +792,12 @@ void Clip::apply_timemapping(std::shared_ptr<Frame> frame)
 		while (remaining_samples > 0) {
 			std::shared_ptr<Frame> source_frame = GetOrCreateFrame(location.frame, false);
 			int frame_sample_count = source_frame->GetAudioSamplesCount() - location.sample_start;
+
+            // Inform FrameMapper of the direction for THIS mapper frame
+            if (auto *fm = dynamic_cast<FrameMapper*>(reader)) {
+                fm->SetDirectionHint(is_increasing);
+            }
+            source_frame->SetAudioDirection(is_increasing);
 
 			if (frame_sample_count == 0) {
 				// No samples found in source frame (fill with silence)
@@ -877,10 +885,17 @@ std::shared_ptr<Frame> Clip::GetOrCreateFrame(int64_t number, bool enable_time)
 	try {
 		// Init to requested frame
 		int64_t clip_frame_number = adjust_frame_number_minimum(number);
+		bool is_increasing = true;
 
 		// Adjust for time-mapping (if any)
 		if (enable_time && time.GetLength() > 1) {
-			clip_frame_number = adjust_frame_number_minimum(time.GetLong(clip_frame_number));
+			is_increasing = time.IsIncreasing(clip_frame_number + 1);
+			const int64_t time_frame_number = adjust_frame_number_minimum(time.GetLong(clip_frame_number));
+			if (auto *fm = dynamic_cast<FrameMapper*>(reader)) {
+				// Inform FrameMapper which direction this mapper frame is being requested
+				fm->SetDirectionHint(is_increasing);
+			}
+			clip_frame_number = time_frame_number;
 		}
 
 		// Debug output
@@ -893,6 +908,7 @@ std::shared_ptr<Frame> Clip::GetOrCreateFrame(int64_t number, bool enable_time)
 		if (reader_frame) {
 			// Override frame # (due to time-mapping might change it)
 			reader_frame->number = number;
+			reader_frame->SetAudioDirection(is_increasing);
 
 			// Return real frame
 			// Create a new copy of reader frame
