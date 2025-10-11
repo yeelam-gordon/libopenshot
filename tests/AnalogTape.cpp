@@ -29,6 +29,8 @@ static std::shared_ptr<Frame> makeGrayFrame(int w = 64, int h = 64) {
 
 TEST_CASE("AnalogTape modifies frame", "[effect][analogtape]") {
 	AnalogTape eff;
+	eff.Id("analogtape-test-seed");
+	eff.seed_offset = 1234;
 	auto frame = makeGrayFrame();
 	QColor before = frame->GetImage()->pixelColor(2, 2);
 	auto out = eff.GetFrame(frame, 1);
