@@ -161,9 +161,8 @@ TEST_CASE( "Extract waveform data clip slowed by time curve", "[libopenshot][aud
 	const double expected_duration = (static_cast<double>(original_video_length) * 2.0) / fps_value;
 	const int expected_total = static_cast<int>(std::ceil(expected_duration * samples_per_second));
 	CHECK(waveform.rms_samples.size() == expected_total);
-	CHECK(clip.VideoLength() == original_video_length * 2);
-	CHECK(clip.VideoLength() == static_cast<int64_t>(std::llround(expected_duration * fps_value)));
-	CHECK(clip.MaxDuration() == Approx(expected_duration).margin(0.0001));
+	CHECK(clip.time.GetLength() == original_video_length * 2);
+	CHECK(clip.time.GetLength() == static_cast<int64_t>(std::llround(expected_duration * fps_value)));
 
 	clip.Close();
 	reader.Close();
@@ -196,9 +195,8 @@ TEST_CASE( "Extract waveform data clip reversed by time curve", "[libopenshot][a
 	const int expected_total = static_cast<int>(std::ceil(expected_duration * samples_per_second));
 	CHECK(waveform.rms_samples.size() == expected_total);
 	CHECK(expected_total == base_total);
-	CHECK(clip.VideoLength() == original_video_length);
-	CHECK(clip.VideoLength() == static_cast<int64_t>(std::llround(expected_duration * fps_value)));
-	CHECK(clip.MaxDuration() == Approx(expected_duration).margin(0.0001));
+	CHECK(clip.time.GetLength() == original_video_length);
+	CHECK(clip.time.GetLength() == static_cast<int64_t>(std::llround(expected_duration * fps_value)));
 
 	clip.Close();
 	reader.Close();
@@ -231,9 +229,8 @@ TEST_CASE( "Extract waveform data clip reversed and slowed", "[libopenshot][audi
 	const int expected_total = static_cast<int>(std::ceil(expected_duration * samples_per_second));
 	CHECK(waveform.rms_samples.size() == expected_total);
 	CHECK(expected_total > base_total);
-	CHECK(clip.VideoLength() == original_video_length * 2);
-	CHECK(clip.VideoLength() == static_cast<int64_t>(std::llround(expected_duration * fps_value)));
-	CHECK(clip.MaxDuration() == Approx(expected_duration).margin(0.0001));
+	CHECK(clip.time.GetLength() == original_video_length * 2);
+	CHECK(clip.time.GetLength() == static_cast<int64_t>(std::llround(expected_duration * fps_value)));
 
 	clip.Close();
 	reader.Close();
@@ -272,46 +269,11 @@ TEST_CASE( "Clip duration uses parent timeline FPS when time-mapped", "[libopens
 	REQUIRE(timeline_fps > 0.0);
 
 	const double expected_duration = (static_cast<double>(original_video_length) * 2.0) / timeline_fps;
-	CHECK(clip.MaxDuration() == Approx(expected_duration).margin(0.0001));
-	CHECK(clip.VideoLength() == static_cast<int64_t>(std::llround(expected_duration * timeline_fps)));
+	CHECK(clip.time.GetLength() == static_cast<int64_t>(std::llround(expected_duration * timeline_fps)));
 
 	clip.Close();
 	reader.Close();
 }
-TEST_CASE( "Image clip VideoLength matches trim on timeline", "[libopenshot][clip][timeline]" )
-{
-	std::stringstream path;
-	path << TEST_MEDIA_PATH << "front.png";
-
-	FFmpegReader reader(path.str());
-	Clip clip(&reader);
-	clip.Open();
-
-	Timeline timeline(
-		640,
-		480,
-		Fraction(30, 1),
-		44100,
-		2,
-		LAYOUT_STEREO);
-
-	clip.ParentTimeline(&timeline);
-	clip.End(5.0f);
-
-	const double timeline_fps = timeline.info.fps.ToDouble();
-	REQUIRE(timeline_fps > 0.0);
-
-	const float clip_end = clip.End();
-	const int64_t expected_length = static_cast<int64_t>(std::llround(static_cast<double>(clip_end) * timeline_fps));
-
-	REQUIRE(clip.Reader()->info.video_length > 0);
-	REQUIRE(expected_length > clip.Reader()->info.video_length);
-	CHECK(clip.VideoLength() == expected_length);
-
-	clip.Close();
-	reader.Close();
-}
-
 
 TEST_CASE( "Extract waveform from image (no audio)", "[libopenshot][audiowaveformer]" )
 {

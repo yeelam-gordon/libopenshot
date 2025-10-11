@@ -17,6 +17,8 @@
 #include <algorithm>
 #include <vector>
 
+#include "Clip.h"
+
 
 using namespace std;
 using namespace openshot;
@@ -59,7 +61,14 @@ AudioWaveformData AudioWaveformer::ExtractSamples(int channel, int num_per_secon
 		sample_divisor = 1;
 	}
 
-	int64_t reader_video_length = reader->VideoLength();
+	// Determine length of video frames (for waveform)
+	int64_t reader_video_length = reader->info.video_length;
+	if (const auto *clip = dynamic_cast<Clip*>(reader)) {
+		// If Clip-based reader, and time keyframes present
+		if (clip->time.GetCount() > 1) {
+			reader_video_length = clip->time.GetLength();
+		}
+	}
 	if (reader_video_length < 0) {
 		reader_video_length = 0;
 	}

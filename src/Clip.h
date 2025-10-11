@@ -288,10 +288,6 @@ namespace openshot {
 		/// Get the current reader
 		openshot::ReaderBase* Reader();
 
-		/// Duration and video length helpers which take into account time-mapping curves
-		float MaxDuration() const;
-		int64_t VideoLength() const override;
-
 		// Override End() position (in seconds) of clip (trim end of video)
 		float End() const override; ///< Get end position (in seconds) of clip (trim end of video), which can be affected by the time curve.
 		void End(float value) override; ///< Set end position (in seconds) of clip (trim end of video)

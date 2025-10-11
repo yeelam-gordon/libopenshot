@@ -1085,7 +1085,7 @@ TEST_CASE("Reverse time curve (sample-exact, no resampling)", "[libopenshot][cli
 	std::vector<float> actual;
 	actual.reserve(total_samples);
 
-	for (int64_t tf = 1; tf <= clip.VideoLength(); ++tf) {
+	for (int64_t tf = 1; tf <= frames_n; ++tf) {
 		auto fr = tl.GetFrame(tf);
 		const int n = fr->GetAudioSamplesCount();
 		REQUIRE(n == sppf);
