@@ -13,11 +13,15 @@
 #include "openshot_catch.h"
 #include "AudioWaveformer.h"
 #include "Clip.h"
+#include "Exceptions.h"
 #include "FFmpegReader.h"
 #include "Timeline.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <future>
+#include <thread>
 
 
 using namespace openshot;
@@ -104,6 +108,65 @@ TEST_CASE( "Extract waveform data sintel (all channels)", "[libopenshot][audiowa
 
 	// Clean up
 	r.Close();
+}
+
+
+TEST_CASE( "Extract waveform waits for reader reopen", "[libopenshot][audiowaveformer][stability]" )
+{
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "sintel_trailer-720p.mp4";
+	FFmpegReader reader(path.str());
+	reader.Open();
+
+	AudioWaveformer waveformer(&reader);
+	const int samples_per_second = 20;
+
+	auto future_waveform = std::async(std::launch::async, [&]() {
+		return waveformer.ExtractSamples(-1, samples_per_second, false);
+	});
+
+	reader.Close();
+	reader.Open();
+	reader.Close();
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	reader.Open();
+
+	AudioWaveformData waveform;
+	REQUIRE_NOTHROW(waveform = future_waveform.get());
+	CHECK_FALSE(waveform.rms_samples.empty());
+
+	reader.Close();
+}
+
+TEST_CASE( "Extract waveform times out when reader stays closed", "[libopenshot][audiowaveformer][stability]" )
+{
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "sintel_trailer-720p.mp4";
+	FFmpegReader reader(path.str());
+	reader.Open();
+
+	AudioWaveformer waveformer(&reader);
+	const int samples_per_second = 20;
+
+	auto future_waveform = std::async(std::launch::async, [&]() {
+		return waveformer.ExtractSamples(-1, samples_per_second, false);
+	});
+
+	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	reader.Close();
+
+	const auto start = std::chrono::steady_clock::now();
+	try {
+		(void) future_waveform.get();
+		FAIL("Expected ReaderClosed to be thrown after timeout");
+	} catch (const openshot::ReaderClosed&) {
+		const auto elapsed = std::chrono::steady_clock::now() - start;
+		const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed);
+		CHECK(elapsed_ms.count() >= 2900);
+		CHECK(elapsed_ms.count() < 4500);
+	}
+
+	reader.Close();
 }
 
 TEST_CASE( "Normalize & scale waveform data piano.wav", "[libopenshot][audiowaveformer]" )

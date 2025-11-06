@@ -15,9 +15,12 @@
 #include <cmath>
 
 #include <algorithm>
+#include <chrono>
+#include <thread>
 #include <vector>
 
 #include "Clip.h"
+#include "Exceptions.h"
 
 
 using namespace std;
@@ -51,6 +54,29 @@ AudioWaveformData AudioWaveformer::ExtractSamples(int channel, int num_per_secon
 	}
 	// Disable video for faster processing
 	reader->info.has_video = false;
+
+	const auto retry_delay = std::chrono::milliseconds(100);
+	const auto max_wait_for_open = std::chrono::milliseconds(3000);
+
+	auto get_frame_with_retry = [&](int64_t frame_number) -> std::shared_ptr<openshot::Frame> {
+		std::chrono::steady_clock::time_point wait_start;
+		bool waiting_for_open = false;
+		while (true) {
+			try {
+				return reader->GetFrame(frame_number);
+			} catch (const openshot::ReaderClosed&) {
+				auto now = std::chrono::steady_clock::now();
+				if (!waiting_for_open) {
+					waiting_for_open = true;
+					wait_start = now;
+				} else if (now - wait_start >= max_wait_for_open) {
+					throw;
+				}
+
+				std::this_thread::sleep_for(retry_delay);
+			}
+		}
+	};
 
 	int sample_rate = reader->info.sample_rate;
 	if (sample_rate <= 0) {
@@ -118,53 +144,58 @@ AudioWaveformData AudioWaveformer::ExtractSamples(int channel, int num_per_secon
 	int channel_count = (channel == -1) ? reader->info.channels : 1;
 	std::vector<float*> channels(reader->info.channels, nullptr);
 
-	for (int64_t f = 1; f <= reader_video_length && extracted_index < total_samples; f++) {
-		std::shared_ptr<openshot::Frame> frame = reader->GetFrame(f);
+	try {
+		for (int64_t f = 1; f <= reader_video_length && extracted_index < total_samples; f++) {
+			std::shared_ptr<openshot::Frame> frame = get_frame_with_retry(f);
 
-		for (int channel_index = 0; channel_index < reader->info.channels; channel_index++) {
-			if (channel == channel_index || channel == -1) {
-				channels[channel_index] = frame->GetAudioSamples(channel_index);
-			}
-		}
-
-		for (int s = 0; s < frame->GetAudioSamplesCount(); s++) {
 			for (int channel_index = 0; channel_index < reader->info.channels; channel_index++) {
 				if (channel == channel_index || channel == -1) {
-					float *samples = channels[channel_index];
-					if (!samples) {
-						continue;
-					}
-					float rms_sample_value = std::sqrt(samples[s] * samples[s]);
-
-					chunk_squared_sum += rms_sample_value;
-					chunk_max = std::max(chunk_max, rms_sample_value);
+					channels[channel_index] = frame->GetAudioSamples(channel_index);
 				}
 			}
 
-			sample_index += 1;
+			for (int s = 0; s < frame->GetAudioSamplesCount(); s++) {
+				for (int channel_index = 0; channel_index < reader->info.channels; channel_index++) {
+					if (channel == channel_index || channel == -1) {
+						float *samples = channels[channel_index];
+						if (!samples) {
+							continue;
+						}
+						float rms_sample_value = std::sqrt(samples[s] * samples[s]);
 
-			if (sample_index % sample_divisor == 0) {
-				float avg_squared_sum = 0.0f;
-				if (channel_count > 0) {
-					avg_squared_sum = chunk_squared_sum / static_cast<float>(sample_divisor * channel_count);
+						chunk_squared_sum += rms_sample_value;
+						chunk_max = std::max(chunk_max, rms_sample_value);
+					}
 				}
 
-				if (extracted_index < total_samples) {
-					data.max_samples[extracted_index] = chunk_max;
-					data.rms_samples[extracted_index] = avg_squared_sum;
-					samples_max = std::max(samples_max, chunk_max);
-					extracted_index++;
-				}
+				sample_index += 1;
 
-				sample_index = 0;
-				chunk_max = 0.0f;
-				chunk_squared_sum = 0.0f;
+				if (sample_index % sample_divisor == 0) {
+					float avg_squared_sum = 0.0f;
+					if (channel_count > 0) {
+						avg_squared_sum = chunk_squared_sum / static_cast<float>(sample_divisor * channel_count);
+					}
 
-				if (extracted_index >= total_samples) {
-					break;
+					if (extracted_index < total_samples) {
+						data.max_samples[extracted_index] = chunk_max;
+						data.rms_samples[extracted_index] = avg_squared_sum;
+						samples_max = std::max(samples_max, chunk_max);
+						extracted_index++;
+					}
+
+					sample_index = 0;
+					chunk_max = 0.0f;
+					chunk_squared_sum = 0.0f;
+
+					if (extracted_index >= total_samples) {
+						break;
+					}
 				}
 			}
 		}
+	} catch (...) {
+		reader->info.has_video = does_reader_have_video;
+		throw;
 	}
 
 	if (sample_index > 0 && extracted_index < total_samples) {
@@ -188,4 +219,3 @@ AudioWaveformData AudioWaveformer::ExtractSamples(int channel, int num_per_secon
 
 	return data;
 }
-
