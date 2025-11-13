@@ -182,6 +182,47 @@ TEST_CASE( "properties", "[libopenshot][clip]" )
 	delete reader;
 }
 
+TEST_CASE( "Metadata rotation does not override manual scaling", "[libopenshot][clip]" )
+{
+	DummyReader reader(Fraction(24, 1), 640, 480, 48000, 2, 5.0f);
+	Clip clip;
+	clip.scale_x = Keyframe(0.5);
+	clip.scale_y = Keyframe(0.5);
+
+	clip.Reader(&reader);
+
+	REQUIRE(clip.rotation.GetCount() == 0);
+	CHECK(clip.scale_x.GetPoint(0).co.Y == Approx(0.5).margin(0.00001));
+	CHECK(clip.scale_y.GetPoint(0).co.Y == Approx(0.5).margin(0.00001));
+}
+
+TEST_CASE( "Metadata rotation scales only default clips", "[libopenshot][clip]" )
+{
+	DummyReader rotated(Fraction(24, 1), 640, 480, 48000, 2, 5.0f);
+	rotated.info.metadata["rotate"] = "90";
+
+	Clip auto_clip;
+	auto_clip.Reader(&rotated);
+
+	REQUIRE(auto_clip.rotation.GetCount() == 1);
+	CHECK(auto_clip.rotation.GetPoint(0).co.Y == Approx(90.0).margin(0.00001));
+	CHECK(auto_clip.scale_x.GetPoint(0).co.Y == Approx(0.75).margin(0.00001));
+	CHECK(auto_clip.scale_y.GetPoint(0).co.Y == Approx(0.75).margin(0.00001));
+
+	DummyReader rotated_custom(Fraction(24, 1), 640, 480, 48000, 2, 5.0f);
+	rotated_custom.info.metadata["rotate"] = "90";
+
+	Clip custom_clip;
+	custom_clip.scale_x = Keyframe(0.5);
+	custom_clip.scale_y = Keyframe(0.5);
+	custom_clip.Reader(&rotated_custom);
+
+	REQUIRE(custom_clip.rotation.GetCount() == 1);
+	CHECK(custom_clip.rotation.GetPoint(0).co.Y == Approx(90.0).margin(0.00001));
+	CHECK(custom_clip.scale_x.GetPoint(0).co.Y == Approx(0.5).margin(0.00001));
+	CHECK(custom_clip.scale_y.GetPoint(0).co.Y == Approx(0.5).margin(0.00001));
+}
+
 TEST_CASE( "effects", "[libopenshot][clip]" )
 {
 	// Load clip with video

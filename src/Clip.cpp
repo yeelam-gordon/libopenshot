@@ -144,36 +144,48 @@ void Clip::init_reader_settings() {
 }
 
 void Clip::init_reader_rotation() {
-	// Don't init rotation if clip already has keyframes.
-	if (rotation.GetCount() > 0)
+	// Only apply metadata rotation if clip rotation has not been explicitly set.
+	if (rotation.GetCount() > 0 || !reader)
 		return;
 
-	// Get rotation from metadata (if any)
+	const auto rotate_meta = reader->info.metadata.find("rotate");
+	if (rotate_meta == reader->info.metadata.end())
+		return;
+
 	float rotate_angle = 0.0f;
-	if (reader && reader->info.metadata.count("rotate") > 0) {
-		try {
-			rotate_angle = strtof(reader->info.metadata["rotate"].c_str(), nullptr);
-		} catch (const std::exception& e) {
-			// Leave rotate_angle at default 0.0f
-		}
+	try {
+		rotate_angle = strtof(rotate_meta->second.c_str(), nullptr);
+	} catch (const std::exception& e) {
+		return; // ignore invalid metadata
 	}
+
 	rotation = Keyframe(rotate_angle);
 
-	// Compute uniform scale factors for rotated video.
-	// Assume reader->info.width and reader->info.height are the clip's natural dimensions.
+	// Do not overwrite user-authored scale curves.
+	auto has_default_scale = [](const Keyframe& kf) {
+		return kf.GetCount() == 1 && fabs(kf.GetPoint(0).co.Y - 1.0) < 0.00001;
+	};
+	if (!has_default_scale(scale_x) || !has_default_scale(scale_y))
+		return;
+
+	// No need to adjust scaling when the metadata rotation is effectively zero.
+	if (fabs(rotate_angle) < 0.0001f)
+		return;
+
 	float w = static_cast<float>(reader->info.width);
 	float h = static_cast<float>(reader->info.height);
-	float rad = rotate_angle * M_PI / 180.0f;
+	if (w <= 0.0f || h <= 0.0f)
+		return;
 
-	// Calculate the dimensions of the bounding box for the rotated clip.
+	float rad = rotate_angle * static_cast<float>(M_PI) / 180.0f;
+
 	float new_width  = fabs(w * cos(rad)) + fabs(h * sin(rad));
 	float new_height = fabs(w * sin(rad)) + fabs(h * cos(rad));
+	if (new_width <= 0.0f || new_height <= 0.0f)
+		return;
 
-	// To have the rotated clip appear the same size as the unrotated clip,
-	// compute a uniform scale factor S that brings the bounding box back to (w, h).
 	float uniform_scale = std::min(w / new_width, h / new_height);
 
-	// Set scale keyframes uniformly.
 	scale_x = Keyframe(uniform_scale);
 	scale_y = Keyframe(uniform_scale);
 }
