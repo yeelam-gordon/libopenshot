@@ -149,8 +149,11 @@ void Clip::init_reader_rotation() {
 		return;
 
 	const auto rotate_meta = reader->info.metadata.find("rotate");
-	if (rotate_meta == reader->info.metadata.end())
+	if (rotate_meta == reader->info.metadata.end()) {
+		// Ensure rotation keyframes always start with a default 0° point.
+		rotation = Keyframe(0.0f);
 		return;
+	}
 
 	float rotate_angle = 0.0f;
 	try {
