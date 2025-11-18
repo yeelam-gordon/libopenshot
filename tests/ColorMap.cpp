@@ -47,6 +47,13 @@ static std::string lutPath()
     return path.str();
 }
 
+static std::string lut1dPath()
+{
+    std::stringstream path;
+    path << TEST_MEDIA_PATH << "example-1d-lut.cube";
+    return path.str();
+}
+
 TEST_CASE("Default ColorMap with no LUT path leaves image unchanged", "[effect][colormap]")
 {
     ColorMap effect;
@@ -183,6 +190,24 @@ TEST_CASE("Half-intensity LUT changes pixel values less than full-intensity", "[
                   + std::abs(f.blue() - before.blue());
 
     CHECK(diff_half < diff_full);
+}
+
+TEST_CASE("1D LUT files alter pixel values", "[effect][colormap][lut][1d]")
+{
+    ColorMap effect(
+        lut1dPath(),
+        Keyframe(1.0),
+        Keyframe(1.0),
+        Keyframe(1.0),
+        Keyframe(1.0)
+    );
+
+    auto in = makeTestFrame();
+    QColor before = in->GetImage()->pixelColor(0,0);
+    auto out = effect.GetFrame(in, 4);
+    QColor after = out->GetImage()->pixelColor(0,0);
+
+    CHECK(after != before);
 }
 
 TEST_CASE("Disabling red channel produces different result than full-intensity", "[effect][colormap][lut]")
