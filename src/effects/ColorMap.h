@@ -21,6 +21,7 @@
 #include <QTextStream>
 #include <vector>
 #include <string>
+#include <array>
 
 namespace openshot
 {
@@ -41,6 +42,8 @@ namespace openshot
         std::vector<float> lut_data;      ///< Flat array containing LUT entries
         LUTType lut_type;                 ///< Indicates if LUT is 1D or 3D
         bool needs_refresh;               ///< Reload LUT on next frame
+        std::array<float, 3> lut_domain_min; ///< Input domain minimum per channel
+        std::array<float, 3> lut_domain_max; ///< Input domain maximum per channel
 
         /// Populate info fields (class_name, name, description)
         void init_effect_details();

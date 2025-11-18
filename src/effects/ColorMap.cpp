@@ -31,6 +31,8 @@ void ColorMap::load_cube_file()
     int parsed_size = 0;
     std::vector<float> parsed_data;
     bool parsed_is_3d = false;
+    std::array<float, 3> parsed_domain_min{0.0f, 0.0f, 0.0f};
+    std::array<float, 3> parsed_domain_max{1.0f, 1.0f, 1.0f};
 
     #pragma omp critical(load_lut)
     {
@@ -40,6 +42,23 @@ void ColorMap::load_cube_file()
         } else {
             QTextStream in(&file);
             QRegularExpression ws_re("\\s+");
+            auto parse_domain_line = [&](const QString &line) {
+                if (!line.startsWith("DOMAIN_MIN") && !line.startsWith("DOMAIN_MAX"))
+                    return;
+                auto parts = line.split(ws_re);
+                if (parts.size() < 4)
+                    return;
+                auto assign_values = [&](std::array<float, 3> &target) {
+                    target[0] = parts[1].toFloat();
+                    target[1] = parts[2].toFloat();
+                    target[2] = parts[3].toFloat();
+                };
+                if (line.startsWith("DOMAIN_MIN"))
+                    assign_values(parsed_domain_min);
+                else
+                    assign_values(parsed_domain_max);
+            };
+
             auto try_parse = [&](const QString &keyword, bool want3d) -> bool {
                 if (!file.seek(0) || !in.seek(0))
                     return false;
@@ -48,6 +67,7 @@ void ColorMap::load_cube_file()
                 int detected_size = 0;
                 while (!in.atEnd()) {
                     line = in.readLine().trimmed();
+                    parse_domain_line(line);
                     if (line.startsWith(keyword)) {
                         auto parts = line.split(ws_re);
                         if (parts.size() >= 2) {
@@ -68,9 +88,14 @@ void ColorMap::load_cube_file()
                     line = in.readLine().trimmed();
                     if (line.isEmpty() ||
                         line.startsWith("#") ||
-                        line.startsWith("TITLE") ||
-                        line.startsWith("DOMAIN"))
+                        line.startsWith("TITLE"))
                     {
+                        continue;
+                    }
+                    if (line.startsWith("DOMAIN_MIN") ||
+                        line.startsWith("DOMAIN_MAX"))
+                    {
+                        parse_domain_line(line);
                         continue;
                     }
                     auto vals = line.split(ws_re);
@@ -99,10 +124,14 @@ void ColorMap::load_cube_file()
         lut_size = parsed_size;
         lut_data.swap(parsed_data);
         lut_type = parsed_is_3d ? LUTType::LUT3D : LUTType::LUT1D;
+        lut_domain_min = parsed_domain_min;
+        lut_domain_max = parsed_domain_max;
     } else {
         lut_data.clear();
         lut_size = 0;
         lut_type = LUTType::None;
+        lut_domain_min = std::array<float, 3>{0.0f, 0.0f, 0.0f};
+        lut_domain_max = std::array<float, 3>{1.0f, 1.0f, 1.0f};
     }
     needs_refresh = false;
 }
@@ -119,6 +148,7 @@ void ColorMap::init_effect_details()
 
 ColorMap::ColorMap()
     : lut_path(""), lut_size(0), lut_type(LUTType::None), needs_refresh(true),
+      lut_domain_min{0.0f, 0.0f, 0.0f}, lut_domain_max{1.0f, 1.0f, 1.0f},
       intensity(1.0), intensity_r(1.0), intensity_g(1.0), intensity_b(1.0)
 {
     init_effect_details();
@@ -134,6 +164,7 @@ ColorMap::ColorMap(const std::string &path,
       lut_size(0),
       lut_type(LUTType::None),
       needs_refresh(true),
+      lut_domain_min{0.0f, 0.0f, 0.0f}, lut_domain_max{1.0f, 1.0f, 1.0f},
       intensity(i),
       intensity_r(iR),
       intensity_g(iG),
@@ -204,14 +235,27 @@ ColorMap::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
         float Gn = G * (1.0f / 255.0f);
         float Bn = B * (1.0f / 255.0f);
 
+        auto normalize_to_domain = [&](float value, int channel) -> float {
+            float min_val = lut_domain_min[channel];
+            float max_val = lut_domain_max[channel];
+            float range = max_val - min_val;
+            if (range <= 0.0f)
+                return std::clamp(value, 0.0f, 1.0f);
+            float normalized = (value - min_val) / range;
+            return std::clamp(normalized, 0.0f, 1.0f);
+        };
+        float Rdn = normalize_to_domain(Rn, 0);
+        float Gdn = normalize_to_domain(Gn, 1);
+        float Bdn = normalize_to_domain(Bn, 2);
+
         float lr = Rn;
         float lg = Gn;
         float lb = Bn;
 
         if (use3d) {
-            float rf = Rn * (lut_dim - 1);
-            float gf = Gn * (lut_dim - 1);
-            float bf = Bn * (lut_dim - 1);
+            float rf = Rdn * (lut_dim - 1);
+            float gf = Gdn * (lut_dim - 1);
+            float bf = Bdn * (lut_dim - 1);
 
             int r0 = int(floor(rf)), r1 = std::min(r0 + 1, lut_dim - 1);
             int g0 = int(floor(gf)), g1 = std::min(g0 + 1, lut_dim - 1);
@@ -254,9 +298,9 @@ ColorMap::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
             c1  = c01 * (1 - dg) + c11 * dg;
             lb = c0 * (1 - db) + c1 * db;
         } else if (use1d) {
-            lr = sample1d(Rn, 0);
-            lg = sample1d(Gn, 1);
-            lb = sample1d(Bn, 2);
+            lr = sample1d(Rdn, 0);
+            lg = sample1d(Gdn, 1);
+            lb = sample1d(Bdn, 2);
         }
 
         // blend per-channel, re-premultiply alpha

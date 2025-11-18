@@ -54,6 +54,20 @@ static std::string lut1dPath()
     return path.str();
 }
 
+static std::string lutDomain1dPath()
+{
+    std::stringstream path;
+    path << TEST_MEDIA_PATH << "domain-1d-lut.cube";
+    return path.str();
+}
+
+static std::string lutDomain3dPath()
+{
+    std::stringstream path;
+    path << TEST_MEDIA_PATH << "domain-3d-lut.cube";
+    return path.str();
+}
+
 TEST_CASE("Default ColorMap with no LUT path leaves image unchanged", "[effect][colormap]")
 {
     ColorMap effect;
@@ -208,6 +222,42 @@ TEST_CASE("1D LUT files alter pixel values", "[effect][colormap][lut][1d]")
     QColor after = out->GetImage()->pixelColor(0,0);
 
     CHECK(after != before);
+}
+
+TEST_CASE("1D LUT obeys DOMAIN_MIN and DOMAIN_MAX", "[effect][colormap][lut][domain]")
+{
+    ColorMap effect(
+        lutDomain1dPath(),
+        Keyframe(1.0),
+        Keyframe(1.0),
+        Keyframe(1.0),
+        Keyframe(1.0)
+    );
+
+    auto out = effect.GetFrame(makeTestFrame(), 0);
+    QColor after = out->GetImage()->pixelColor(0,0);
+
+    CHECK(after.red() == 5);
+    CHECK(after.green() == 10);
+    CHECK(after.blue() == 15);
+}
+
+TEST_CASE("3D LUT obeys DOMAIN_MIN and DOMAIN_MAX", "[effect][colormap][lut][domain]")
+{
+    ColorMap effect(
+        lutDomain3dPath(),
+        Keyframe(1.0),
+        Keyframe(1.0),
+        Keyframe(1.0),
+        Keyframe(1.0)
+    );
+
+    auto out = effect.GetFrame(makeTestFrame(), 0);
+    QColor after = out->GetImage()->pixelColor(0,0);
+
+    CHECK(after.red() == 5);
+    CHECK(after.green() == 10);
+    CHECK(after.blue() == 15);
 }
 
 TEST_CASE("Disabling red channel produces different result than full-intensity", "[effect][colormap][lut]")
