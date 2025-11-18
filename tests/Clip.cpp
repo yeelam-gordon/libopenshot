@@ -191,7 +191,9 @@ TEST_CASE( "Metadata rotation does not override manual scaling", "[libopenshot][
 
 	clip.Reader(&reader);
 
-	REQUIRE(clip.rotation.GetCount() == 0);
+
+	REQUIRE(clip.rotation.GetCount() == 1);
+	CHECK(clip.rotation.GetPoint(0).co.Y == Approx(0.0).margin(0.00001));
 	CHECK(clip.scale_x.GetPoint(0).co.Y == Approx(0.5).margin(0.00001));
 	CHECK(clip.scale_y.GetPoint(0).co.Y == Approx(0.5).margin(0.00001));
 }
