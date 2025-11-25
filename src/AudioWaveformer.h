@@ -17,6 +17,7 @@
 #include "Frame.h"
 #include "KeyFrame.h"
 #include "Fraction.h"
+#include <memory>
 #include <vector>
 #include <string>
 
@@ -82,6 +83,9 @@ namespace openshot {
     class AudioWaveformer {
     private:
         ReaderBase* reader;
+        std::unique_ptr<ReaderBase> detached_reader; ///< Optional detached reader clone for waveform extraction
+        ReaderBase* resolved_reader = nullptr;       ///< Cached pointer to the reader used for extraction
+        bool source_initialized = false;
 
     public:
         /// Default constructor
@@ -123,6 +127,7 @@ namespace openshot {
         AudioWaveformData ExtractSamplesFromReader(openshot::ReaderBase* source_reader, int channel, int num_per_second, bool normalize);
         openshot::ReaderBase* ResolveSourceReader(openshot::ReaderBase* source_reader);
         openshot::Fraction ResolveSourceFPS(openshot::ReaderBase* source_reader);
+        openshot::ReaderBase* ResolveWaveformReader();
     };
 
 }

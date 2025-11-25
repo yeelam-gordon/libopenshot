@@ -138,6 +138,31 @@ TEST_CASE( "Channel selection returns data and rejects invalid channel", "[libop
 	r.Close();
 }
 
+TEST_CASE( "Waveform extraction does not mutate source reader video flag", "[libopenshot][audiowaveformer][mutation]" )
+{
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "sintel_trailer-720p.mp4";
+	FFmpegReader reader(path.str());
+	Clip clip(&reader);
+	clip.Open();
+
+	const bool original_has_video_clip = clip.Reader()->info.has_video;
+	const bool original_has_video_reader = reader.info.has_video;
+	REQUIRE(original_has_video_clip == original_has_video_reader);
+	REQUIRE(original_has_video_reader);
+
+	AudioWaveformer waveformer(&clip);
+	AudioWaveformData waveform = waveformer.ExtractSamples(-1, 5, false);
+
+	// Extraction should not flip has_video on the live reader/clip
+	CHECK_FALSE(waveform.rms_samples.empty());
+	CHECK(clip.Reader()->info.has_video == original_has_video_clip);
+	CHECK(reader.info.has_video == original_has_video_reader);
+
+	clip.Close();
+	reader.Close();
+}
+
 
 TEST_CASE( "Extract waveform waits for reader reopen", "[libopenshot][audiowaveformer][stability]" )
 {
@@ -166,7 +191,7 @@ TEST_CASE( "Extract waveform waits for reader reopen", "[libopenshot][audiowavef
 	reader.Close();
 }
 
-TEST_CASE( "Extract waveform times out when reader stays closed", "[libopenshot][audiowaveformer][stability]" )
+TEST_CASE( "Extract waveform continues if caller closes original reader", "[libopenshot][audiowaveformer][stability]" )
 {
 	std::stringstream path;
 	path << TEST_MEDIA_PATH << "sintel_trailer-720p.mp4";
@@ -180,19 +205,13 @@ TEST_CASE( "Extract waveform times out when reader stays closed", "[libopenshot]
 		return waveformer.ExtractSamples(-1, samples_per_second, false);
 	});
 
+	// Closing the caller's reader should not affect a detached clone used for waveform extraction.
 	std::this_thread::sleep_for(std::chrono::milliseconds(50));
 	reader.Close();
 
-	const auto start = std::chrono::steady_clock::now();
-	try {
-		(void) future_waveform.get();
-		FAIL("Expected ReaderClosed to be thrown after timeout");
-	} catch (const openshot::ReaderClosed&) {
-		const auto elapsed = std::chrono::steady_clock::now() - start;
-		const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed);
-		CHECK(elapsed_ms.count() >= 2900);
-		CHECK(elapsed_ms.count() < 4500);
-	}
+	AudioWaveformData waveform;
+	REQUIRE_NOTHROW(waveform = future_waveform.get());
+	CHECK_FALSE(waveform.rms_samples.empty());
 
 	reader.Close();
 }

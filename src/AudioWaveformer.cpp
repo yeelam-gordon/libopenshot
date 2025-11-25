@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -31,7 +32,11 @@ using namespace openshot;
 
 
 // Default constructor
-AudioWaveformer::AudioWaveformer(ReaderBase* new_reader) : reader(new_reader)
+AudioWaveformer::AudioWaveformer(ReaderBase* new_reader) :
+	reader(new_reader),
+	detached_reader(nullptr),
+	resolved_reader(nullptr),
+	source_initialized(false)
 {
 
 }
@@ -50,7 +55,8 @@ AudioWaveformData AudioWaveformer::ExtractSamples(int channel, int num_per_secon
 		return data;
 	}
 
-	ReaderBase* source = ResolveSourceReader(reader);
+	ReaderBase* source = ResolveWaveformReader();
+
 	Fraction source_fps = ResolveSourceFPS(source);
 
 	AudioWaveformData base = ExtractSamplesFromReader(source, channel, num_per_second, false);
@@ -212,12 +218,9 @@ AudioWaveformData AudioWaveformer::ExtractSamplesFromReader(ReaderBase* source_r
 	}
 
 	// Open reader (if needed)
-	bool does_reader_have_video = source_reader->info.has_video;
 	if (!source_reader->IsOpen()) {
 		source_reader->Open();
 	}
-	// Disable video for faster processing
-	source_reader->info.has_video = false;
 
 	const auto retry_delay = std::chrono::milliseconds(100);
 	const auto max_wait_for_open = std::chrono::milliseconds(3000);
@@ -270,18 +273,15 @@ AudioWaveformData AudioWaveformer::ExtractSamplesFromReader(ReaderBase* source_r
 	}
 
 	if (!source_reader->info.has_audio) {
-		source_reader->info.has_video = does_reader_have_video;
 		return data;
 	}
 
 	int total_samples = static_cast<int>(std::ceil(reader_duration * num_per_second));
 	if (total_samples <= 0 || source_reader->info.channels == 0) {
-		source_reader->info.has_video = does_reader_have_video;
 		return data;
 	}
 
 	if (channel != -1 && (channel < 0 || channel >= source_reader->info.channels)) {
-		source_reader->info.has_video = does_reader_have_video;
 		return data;
 	}
 
@@ -348,7 +348,6 @@ AudioWaveformData AudioWaveformer::ExtractSamplesFromReader(ReaderBase* source_r
 			}
 		}
 	} catch (...) {
-		source_reader->info.has_video = does_reader_have_video;
 		throw;
 	}
 
@@ -368,8 +367,6 @@ AudioWaveformData AudioWaveformer::ExtractSamplesFromReader(ReaderBase* source_r
 		float scale = 1.0f / samples_max;
 		data.scale(total_samples, scale);
 	}
-
-	source_reader->info.has_video = does_reader_have_video;
 
 	return data;
 }
@@ -399,4 +396,35 @@ Fraction AudioWaveformer::ResolveSourceFPS(ReaderBase* source_reader) {
 		return Fraction(0, 1);
 	}
 	return source_reader->info.fps;
+}
+
+// Resolve and cache the reader used for waveform extraction (prefer a detached FFmpegReader clone)
+ReaderBase* AudioWaveformer::ResolveWaveformReader() {
+	if (source_initialized) {
+		return resolved_reader ? resolved_reader : reader;
+	}
+	source_initialized = true;
+
+	resolved_reader = ResolveSourceReader(reader);
+
+	// Prefer a detached, audio-only FFmpegReader clone so we never mutate the live reader used for preview.
+	if (auto ff_reader = dynamic_cast<FFmpegReader*>(resolved_reader)) {
+		const Json::Value ff_json = ff_reader->JsonValue();
+		const std::string path = ff_json.get("path", "").asString();
+		if (!path.empty()) {
+			try {
+				auto clone = std::make_unique<FFmpegReader>(path, false);
+				clone->SetJsonValue(ff_json);
+				clone->info.has_video = false; // explicitly audio-only for waveform extraction
+				detached_reader = std::move(clone);
+				resolved_reader = detached_reader.get();
+			} catch (...) {
+				// Fall back to using the original reader if cloning fails
+				detached_reader.reset();
+				resolved_reader = ResolveSourceReader(reader);
+			}
+		}
+	}
+
+	return resolved_reader ? resolved_reader : reader;
 }
