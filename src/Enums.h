@@ -56,6 +56,13 @@ enum FrameDisplayType
 	FRAME_DISPLAY_BOTH      ///< Display both the clip's and timeline's frame number
 };
 
+/// This enumeration determines which duration source to favor.
+enum class DurationStrategy {
+	LongestStream,   ///< Use the longest value from video, audio, or container
+	VideoPreferred,  ///< Prefer the video stream's duration, fallback to audio then container
+	AudioPreferred,  ///< Prefer the audio stream's duration, fallback to video then container
+};
+
 /// This enumeration determines the strategy when mixing audio with other clips.
 enum VolumeMixType
 {

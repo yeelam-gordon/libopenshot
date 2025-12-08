@@ -1040,7 +1040,7 @@ TEST_CASE( "ApplyJSONDiff Update Reader Info", "[libopenshot][timeline]" )
 	CHECK(clip1.info.fps.den == 1);
 	CHECK(clip1.info.video_timebase.num == 1);
 	CHECK(clip1.info.video_timebase.den == 24);
-	CHECK(clip1.info.duration == Approx(51.94667).margin(0.00001));
+	CHECK(clip1.info.duration == Approx(52.20833).margin(0.00001));
 
 	// Create JSON change to increase FPS from 24 to 60
 	Json::Value reader_root = openshot::stringToJson(reader_json);
@@ -1065,14 +1065,14 @@ TEST_CASE( "ApplyJSONDiff Update Reader Info", "[libopenshot][timeline]" )
 	CHECK(mapper->Reader()->info.fps.den == 1);
 	CHECK(mapper->Reader()->info.video_timebase.num == 1);
 	CHECK(mapper->Reader()->info.video_timebase.den == 60);
-	CHECK(mapper->Reader()->info.duration == Approx(20.77867).margin(0.00001));
+	CHECK(mapper->Reader()->info.duration == Approx(20.88333).margin(0.00001));
 
 	// Verify clip has updated properties and info struct
 	CHECK(clip1.info.fps.num == 24);
 	CHECK(clip1.info.fps.den == 1);
 	CHECK(clip1.info.video_timebase.num == 1);
 	CHECK(clip1.info.video_timebase.den == 24);
-	CHECK(clip1.info.duration == Approx(20.77867).margin(0.00001));
+	CHECK(clip1.info.duration == Approx(20.88333).margin(0.00001));
 
 	// Open Clip object, and verify this does not clobber our 60 FPS change
 	clip1.Open();
@@ -1080,6 +1080,6 @@ TEST_CASE( "ApplyJSONDiff Update Reader Info", "[libopenshot][timeline]" )
 	CHECK(mapper->Reader()->info.fps.den == 1);
 	CHECK(mapper->Reader()->info.video_timebase.num == 1);
 	CHECK(mapper->Reader()->info.video_timebase.den == 60);
-	CHECK(mapper->Reader()->info.duration == Approx(20.77867).margin(0.00001));
+	CHECK(mapper->Reader()->info.duration == Approx(20.88333).margin(0.00001));
 
 }

@@ -72,7 +72,7 @@ TEST_CASE( "path string constructor", "[libopenshot][clip]" )
 	CHECK(c1.Layer() == 0);
 	CHECK(c1.Position() == Approx(0.0f).margin(0.00001));
 	CHECK(c1.Start() == Approx(0.0f).margin(0.00001));
-	CHECK(c1.End() == Approx(4.39937f).margin(0.00001));
+	CHECK(c1.End() == Approx(4.4).margin(0.00001));
 }
 
 TEST_CASE( "basic getters and setters", "[libopenshot][clip]" )
