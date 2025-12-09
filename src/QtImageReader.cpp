@@ -100,12 +100,13 @@ void QtImageReader::Open()
         }
         info.pixel_ratio.num = 1;
         info.pixel_ratio.den = 1;
-        info.duration = 60 * 60 * 1;  // 1 hour duration
         info.fps.num = 30;
         info.fps.den = 1;
         info.video_timebase.num = 1;
         info.video_timebase.den = 30;
-        info.video_length = round(info.duration * info.fps.ToDouble());
+        // Default still-image duration: 1 hour, aligned to fps
+        info.video_length = 60 * 60 * info.fps.num; // 3600 seconds * 30 fps
+        info.duration = static_cast<float>(info.video_length / info.fps.ToDouble());
 
         // Calculate the DAR (display aspect ratio)
         Fraction size(info.width * info.pixel_ratio.num, info.height * info.pixel_ratio.den);
