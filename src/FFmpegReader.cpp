@@ -23,6 +23,7 @@
 
 #include "FFmpegReader.h"
 #include "Exceptions.h"
+#include "MemoryTrim.h"
 #include "Timeline.h"
 #include "ZmqLogger.h"
 
@@ -77,7 +78,7 @@ FFmpegReader::FFmpegReader(const std::string &path, DurationStrategy duration_st
 		: last_frame(0), is_seeking(0), seeking_pts(0), seeking_frame(0), seek_count(0), NO_PTS_OFFSET(-99999),
 		  path(path), is_video_seek(true), check_interlace(false), check_fps(false), enable_seek(true), is_open(false),
 		  seek_audio_frame_found(0), seek_video_frame_found(0),is_duration_known(false), largest_frame_processed(0),
-		  current_video_frame(0), packet(NULL), max_concurrent_frames(OPEN_MP_NUM_PROCESSORS), duration_strategy(duration_strategy),
+		  current_video_frame(0), packet(NULL), duration_strategy(duration_strategy),
 		  audio_pts(0), video_pts(0), pFormatCtx(NULL), videoStream(-1), audioStream(-1), pCodecCtx(NULL), aCodecCtx(NULL),
 		pStream(NULL), aStream(NULL), pFrame(NULL), previous_packet_location{-1,0},
 		hold_packet(false) {
@@ -92,8 +93,8 @@ FFmpegReader::FFmpegReader(const std::string &path, DurationStrategy duration_st
 	audio_pts_seconds = NO_PTS_OFFSET;
 
 	// Init cache
-	working_cache.SetMaxBytesFromInfo(max_concurrent_frames * info.fps.ToDouble() * 2, info.width, info.height, info.sample_rate, info.channels);
-	final_cache.SetMaxBytesFromInfo(max_concurrent_frames * 2, info.width, info.height, info.sample_rate, info.channels);
+	working_cache.SetMaxBytesFromInfo(info.fps.ToDouble() * 2, info.width, info.height, info.sample_rate, info.channels);
+	final_cache.SetMaxBytesFromInfo(24, info.width, info.height, info.sample_rate, info.channels);
 
 	// Open and Close the reader, to populate its attributes (such as height, width, etc...)
 	if (inspect_reader) {
@@ -610,8 +611,8 @@ void FFmpegReader::Open() {
 		previous_packet_location.sample_start = 0;
 
 		// Adjust cache size based on size of frame and audio
-		working_cache.SetMaxBytesFromInfo(max_concurrent_frames * info.fps.ToDouble() * 2, info.width, info.height, info.sample_rate, info.channels);
-		final_cache.SetMaxBytesFromInfo(max_concurrent_frames * 2, info.width, info.height, info.sample_rate, info.channels);
+		working_cache.SetMaxBytesFromInfo(info.fps.ToDouble() * 2, info.width, info.height, info.sample_rate, info.channels);
+		final_cache.SetMaxBytesFromInfo(24, info.width, info.height, info.sample_rate, info.channels);
 
 		// Scan PTS for any offsets (i.e. non-zero starting streams). At least 1 stream must start at zero timestamp.
 		// This method allows us to shift timestamps to ensure at least 1 stream is starting at zero.
@@ -712,6 +713,9 @@ void FFmpegReader::Close() {
 		// Close the video file
 		avformat_close_input(&pFormatCtx);
 		av_freep(&pFormatCtx);
+
+		// Release free’d arenas back to OS after heavy teardown
+		TrimMemoryToOS(true);
 
 		// Reset some variables
 		last_frame = 0;
@@ -1101,7 +1105,7 @@ std::shared_ptr<Frame> FFmpegReader::ReadStream(int64_t requested_frame) {
 	int packet_error = -1;
 
 	// Debug output
-	ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ReadStream", "requested_frame", requested_frame, "max_concurrent_frames", max_concurrent_frames);
+	ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ReadStream", "requested_frame", requested_frame);
 
 	// Loop through the stream until the correct frame is found
 	while (true) {
@@ -1939,7 +1943,7 @@ void FFmpegReader::Seek(int64_t requested_frame) {
 	seek_count++;
 
 	// If seeking near frame 1, we need to close and re-open the file (this is more reliable than seeking)
-	int buffer_amount = std::max(max_concurrent_frames, 8);
+	int buffer_amount = 12;
 	if (requested_frame - buffer_amount < 20) {
 		// prevent Open() from seeking again
 		is_seeking = true;

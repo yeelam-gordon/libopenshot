@@ -72,6 +72,7 @@ set(OPENSHOT_SOURCES
   Fraction.cpp
   Frame.cpp
   FrameMapper.cpp
+  MemoryTrim.cpp
   Json.cpp
   KeyFrame.cpp
   OpenShotVersion.cpp

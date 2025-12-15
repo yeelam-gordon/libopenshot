@@ -117,7 +117,6 @@ namespace openshot {
 		bool is_duration_known;
 		bool check_interlace;
 		bool check_fps;
-		int max_concurrent_frames;
 		DurationStrategy duration_strategy;
 
 		CacheMemory working_cache;

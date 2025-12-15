@@ -29,8 +29,7 @@ using namespace openshot;
 
 // Default Constructor for the timeline (which sets the canvas width and height)
 Timeline::Timeline(int width, int height, Fraction fps, int sample_rate, int channels, ChannelLayout channel_layout) :
-		is_open(false), auto_map_clips(true), managed_cache(true), path(""),
-		max_concurrent_frames(OPEN_MP_NUM_PROCESSORS), max_time(0.0)
+		is_open(false), auto_map_clips(true), managed_cache(true), path(""), max_time(0.0)
 {
 	// Create CrashHandler and Attach (incase of errors)
 	CrashHandler::Instance();
@@ -70,7 +69,7 @@ Timeline::Timeline(int width, int height, Fraction fps, int sample_rate, int cha
 
 	// Init cache
 	final_cache = new CacheMemory();
-	final_cache->SetMaxBytesFromInfo(max_concurrent_frames * 4, info.width, info.height, info.sample_rate, info.channels);
+	final_cache->SetMaxBytesFromInfo(24, info.width, info.height, info.sample_rate, info.channels);
 }
 
 // Delegating constructor that copies parameters from a provided ReaderInfo
@@ -80,8 +79,7 @@ Timeline::Timeline(const ReaderInfo info) : Timeline::Timeline(
 
 // Constructor for the timeline (which loads a JSON structure from a file path, and initializes a timeline)
 Timeline::Timeline(const std::string& projectPath, bool convert_absolute_paths) :
-		is_open(false), auto_map_clips(true), managed_cache(true), path(projectPath),
-		max_concurrent_frames(OPEN_MP_NUM_PROCESSORS), max_time(0.0) {
+		is_open(false), auto_map_clips(true), managed_cache(true), path(projectPath), max_time(0.0) {
 
 	// Create CrashHandler and Attach (incase of errors)
 	CrashHandler::Instance();
@@ -203,7 +201,7 @@ Timeline::Timeline(const std::string& projectPath, bool convert_absolute_paths) 
 
 	// Init cache
 	final_cache = new CacheMemory();
-	final_cache->SetMaxBytesFromInfo(max_concurrent_frames * 4, info.width, info.height, info.sample_rate, info.channels);
+	final_cache->SetMaxBytesFromInfo(24, info.width, info.height, info.sample_rate, info.channels);
 }
 
 Timeline::~Timeline() {

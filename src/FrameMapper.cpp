@@ -17,6 +17,7 @@
 #include "FrameMapper.h"
 #include "Exceptions.h"
 #include "Clip.h"
+#include "MemoryTrim.h"
 #include "ZmqLogger.h"
 
 using namespace std;
@@ -745,6 +746,9 @@ void FrameMapper::Close()
 		SWR_FREE(&avr);
 		avr = NULL;
 	}
+
+	// Release free’d arenas back to OS after heavy teardown
+	TrimMemoryToOS(true);
 }
 
 
@@ -841,7 +845,7 @@ void FrameMapper::ChangeMapping(Fraction target_fps, PulldownType target_pulldow
 	final_cache.Clear();
 
 	// Adjust cache size based on size of frame and audio
-	final_cache.SetMaxBytesFromInfo(OPEN_MP_NUM_PROCESSORS, info.width, info.height, info.sample_rate, info.channels);
+	final_cache.SetMaxBytesFromInfo(24, info.width, info.height, info.sample_rate, info.channels);
 
 	// Deallocate resample buffer
 	if (avr) {
