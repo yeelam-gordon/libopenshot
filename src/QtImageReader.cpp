@@ -16,7 +16,9 @@
 #include "CacheMemory.h"
 #include "Exceptions.h"
 #include "Timeline.h"
+#include "effects/CropHelpers.h"
 
+#include <algorithm>
 #include <QString>
 #include <QImage>
 #include <QPainter>
@@ -244,6 +246,9 @@ QSize QtImageReader::calculate_max_size() {
             max_width = info.width * max_scale_x * preview_ratio;
             max_height = info.height * max_scale_y * preview_ratio;
         }
+
+        // If a crop effect is resizing the image, request enough pixels to preserve detail
+        ApplyCropResizeScale(parent, info.width, info.height, max_width, max_height);
     }
 
     // Return new QSize of the current max size

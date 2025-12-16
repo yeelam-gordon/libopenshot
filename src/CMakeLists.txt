@@ -115,6 +115,7 @@ set(EFFECTS_SOURCES
   effects/ColorMap.cpp
   effects/ColorShift.cpp
   effects/Crop.cpp
+  effects/CropHelpers.cpp
   effects/Deinterlace.cpp
   effects/Hue.cpp
   effects/LensFlare.cpp

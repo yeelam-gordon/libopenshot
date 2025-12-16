@@ -20,6 +20,7 @@
 #include <unistd.h>
 
 #include "FFmpegUtilities.h"
+#include "effects/CropHelpers.h"
 
 #include "FFmpegReader.h"
 #include "Exceptions.h"
@@ -1594,6 +1595,9 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
 			max_width = info.width * max_scale_x * preview_ratio;
 			max_height = info.height * max_scale_y * preview_ratio;
 		}
+
+		// If a crop effect is resizing the image, request enough pixels to preserve detail
+		ApplyCropResizeScale(parent, info.width, info.height, max_width, max_height);
 	}
 
 	// Determine if image needs to be scaled (for performance reasons)
