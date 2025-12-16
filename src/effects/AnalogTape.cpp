@@ -2,7 +2,13 @@
  * @file
  * @brief Source file for AnalogTape effect class
  * @author Jonathan Thomas <jonathan@openshot.org>
+ *
+ * @ref License
  */
+
+// Copyright (c) 2008-2025 OpenShot Studios, LLC
+//
+// SPDX-License-Identifier: LGPL-3.0-or-later
 
 #include "AnalogTape.h"
 #include "Clip.h"

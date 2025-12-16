@@ -5,7 +5,13 @@
  * Vintage home video wobble, bleed, and grain.
  *
  * @author Jonathan Thomas <jonathan@openshot.org>
+ *
+ * @ref License
  */
+
+// Copyright (c) 2008-2025 OpenShot Studios, LLC
+//
+// SPDX-License-Identifier: LGPL-3.0-or-later
 
 #ifndef OPENSHOT_ANALOGTAPE_EFFECT_H
 #define OPENSHOT_ANALOGTAPE_EFFECT_H
