@@ -17,6 +17,7 @@
 #include <iostream>
 #include <cmath>
 #include <ctime>
+#include <sstream>
 #include <unistd.h>
 
 #include "FFmpegUtilities.h"

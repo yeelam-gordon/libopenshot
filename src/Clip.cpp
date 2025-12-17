@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <sstream>
 
 #ifdef USE_IMAGEMAGICK
 	#include "MagickUtilities.h"

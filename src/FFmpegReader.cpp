@@ -17,6 +17,7 @@
 #include <chrono>	// for std::chrono::milliseconds
 #include <algorithm>
 #include <cmath>
+#include <sstream>
 #include <unistd.h>
 
 #include "FFmpegUtilities.h"

@@ -13,6 +13,7 @@
 #include "openshot_catch.h"
 
 #include <QGuiApplication>
+#include <sstream>
 
 #include "QtImageReader.h"
 #include "Clip.h"

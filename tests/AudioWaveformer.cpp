@@ -22,6 +22,7 @@
 #include <cmath>
 #include <future>
 #include <thread>
+#include <sstream>
 
 
 using namespace openshot;
