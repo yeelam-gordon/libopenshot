@@ -117,7 +117,7 @@ if (NOT DEFINED PYTHON_MODULE_PATH)
     if (NOT EXISTS "${CMAKE_INSTALL_PREFIX}/${PYTHON_MODULE_PATH}")
       ### Calculate the python module path (prefer sysconfig, fallback to distutils for compatibility)
       execute_process(
-              COMMAND ${PYTHON_EXECUTABLE} -c "import sysconfig; print(sysconfig.get_path('platlib', scheme='posix_prefix')[1:])"
+              COMMAND ${PYTHON_EXECUTABLE} -c "import sysconfig; p=sysconfig.get_path('platlib', scheme='posix_prefix'); p=p[5:] if p.startswith('/usr/') else p.lstrip('/'); print(p)"
               OUTPUT_VARIABLE PYTHON_MODULE_PATH
               OUTPUT_STRIP_TRAILING_WHITESPACE)
     endif()
