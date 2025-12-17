@@ -15,6 +15,7 @@
 #include "ImageReader.h"
 #include "Exceptions.h"
 #include "Frame.h"
+#include <sstream>
 
 using namespace openshot;
 

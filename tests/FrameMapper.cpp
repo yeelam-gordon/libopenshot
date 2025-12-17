@@ -21,6 +21,7 @@
 #include "Frame.h"
 #include "FrameMapper.h"
 #include "Timeline.h"
+#include <sstream>
 
 using namespace openshot;
 
