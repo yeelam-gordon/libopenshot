@@ -52,6 +52,34 @@
 #%template() std::vector<std::pair<std::string, std::string>>;
 %template() std::vector<std::vector<float>>;
 
+%inline %{
+typedef struct OpenShotByteBuffer {
+    const unsigned char* data;
+    int size;
+} OpenShotByteBuffer;
+%}
+
+%typemap(jni) OpenShotByteBuffer "jbyteArray"
+%typemap(jstype) OpenShotByteBuffer "byte[]"
+%typemap(jtype) OpenShotByteBuffer "byte[]"
+%typemap(javaout) OpenShotByteBuffer {
+    return $jnicall;
+}
+%typemap(out) OpenShotByteBuffer {
+    if ($1.data && $1.size > 0) {
+        jbyteArray jarr = jenv->NewByteArray($1.size);
+        if (jarr == NULL) {
+            SWIG_JavaThrowException(jenv, SWIG_JavaOutOfMemoryError, "Unable to allocate byte array");
+            return NULL;
+        }
+        jenv->SetByteArrayRegion(jarr, 0, $1.size,
+                                 reinterpret_cast<const jbyte*>($1.data));
+        $result = jarr;
+    } else {
+        $result = NULL;
+    }
+}
+
 %{
 #include "OpenShotVersion.h"
 #include "ReaderBase.h"
@@ -117,6 +145,45 @@
 
 /* Deprecated */
 %template(AudioDeviceInfoVector) std::vector<openshot::AudioDeviceInfo>;
+
+%extend openshot::Frame {
+    OpenShotByteBuffer GetPixelsBytes() {
+        OpenShotByteBuffer out = {NULL, 0};
+        std::shared_ptr<QImage> img = $self->GetImage();
+        if (!img) return out;
+
+        const int size = img->bytesPerLine() * img->height();
+
+        const unsigned char* p = $self->GetPixels();
+        if (!p || size <= 0) return out;
+
+        out.data = p;
+        out.size = size;
+        return out;
+    }
+
+    OpenShotByteBuffer GetPixelsRowBytes(int row) {
+        OpenShotByteBuffer out = {NULL, 0};
+        std::shared_ptr<QImage> img = $self->GetImage();
+        if (!img) return out;
+
+        if (row < 0 || row >= img->height()) {
+            return out;
+        }
+
+        const unsigned char* p = $self->GetPixels(row);
+        if (!p) return out;
+
+        out.data = p;
+        out.size = img->bytesPerLine();
+        return out;
+    }
+
+    int GetBytesPerLine() {
+        std::shared_ptr<QImage> img = $self->GetImage();
+        return img ? img->bytesPerLine() : 0;
+    }
+}
 
 %include "OpenShotVersion.h"
 %include "ReaderBase.h"

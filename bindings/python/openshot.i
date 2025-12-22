@@ -284,6 +284,74 @@
     }
 }
 
+%extend openshot::Frame {
+    PyObject* GetPixelsBytes() {
+        PyGILState_STATE gstate = PyGILState_Ensure();
+        PyObject* result = NULL;
+
+        std::shared_ptr<QImage> img = $self->GetImage();
+        if (!img) {
+            Py_INCREF(Py_None);
+            result = Py_None;
+            PyGILState_Release(gstate);
+            return result;
+        }
+
+        const Py_ssize_t size =
+            static_cast<Py_ssize_t>(img->bytesPerLine()) *
+            static_cast<Py_ssize_t>(img->height());
+
+        const unsigned char* p = img->constBits();
+        if (!p || size <= 0) {
+            Py_INCREF(Py_None);
+            result = Py_None;
+            PyGILState_Release(gstate);
+            return result;
+        }
+
+        result = PyBytes_FromStringAndSize(reinterpret_cast<const char*>(p), size);
+        PyGILState_Release(gstate);
+        return result;
+    }
+
+    PyObject* GetPixelsRowBytes(int row) {
+        PyGILState_STATE gstate = PyGILState_Ensure();
+        PyObject* result = NULL;
+
+        std::shared_ptr<QImage> img = $self->GetImage();
+        if (!img) {
+            Py_INCREF(Py_None);
+            result = Py_None;
+            PyGILState_Release(gstate);
+            return result;
+        }
+
+        if (row < 0 || row >= img->height()) {
+            PyErr_SetString(PyExc_IndexError, "row out of range");
+            PyGILState_Release(gstate);
+            return NULL;
+        }
+
+        const unsigned char* p = img->constScanLine(row);
+        if (!p) {
+            Py_INCREF(Py_None);
+            result = Py_None;
+            PyGILState_Release(gstate);
+            return result;
+        }
+
+        const Py_ssize_t row_bytes = static_cast<Py_ssize_t>(img->bytesPerLine());
+        result = PyBytes_FromStringAndSize(reinterpret_cast<const char*>(p), row_bytes);
+        PyGILState_Release(gstate);
+        return result;
+    }
+
+    int GetBytesPerLine() {
+        std::shared_ptr<QImage> img = $self->GetImage();
+        return img ? img->bytesPerLine() : 0;
+    }
+}
+
 %include "OpenShotVersion.h"
 %include "ReaderBase.h"
 %include "WriterBase.h"

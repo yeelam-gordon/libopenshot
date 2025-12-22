@@ -52,6 +52,21 @@
 %template() std::vector<std::pair<std::string, std::string>>;
 %template() std::vector<std::vector<float>>;
 
+%inline %{
+typedef struct OpenShotByteBuffer {
+    const unsigned char* data;
+    int size;
+} OpenShotByteBuffer;
+%}
+
+%typemap(out) OpenShotByteBuffer {
+    if ($1.data && $1.size > 0) {
+        $result = rb_str_new(reinterpret_cast<const char*>($1.data), $1.size);
+    } else {
+        $result = Qnil;
+    }
+}
+
 %{
 /* Ruby and FFmpeg define competing RSHIFT macros,
  * so we move Ruby's out of the way for now. We'll
@@ -135,6 +150,45 @@
 
 /* Deprecated */
 %template(AudioDeviceInfoVector) std::vector<openshot::AudioDeviceInfo>;
+
+%extend openshot::Frame {
+    OpenShotByteBuffer GetPixelsBytes() {
+        OpenShotByteBuffer out = {NULL, 0};
+        std::shared_ptr<QImage> img = $self->GetImage();
+        if (!img) return out;
+
+        const int size = img->bytesPerLine() * img->height();
+
+        const unsigned char* p = $self->GetPixels();
+        if (!p || size <= 0) return out;
+
+        out.data = p;
+        out.size = size;
+        return out;
+    }
+
+    OpenShotByteBuffer GetPixelsRowBytes(int row) {
+        OpenShotByteBuffer out = {NULL, 0};
+        std::shared_ptr<QImage> img = $self->GetImage();
+        if (!img) return out;
+
+        if (row < 0 || row >= img->height()) {
+            rb_raise(rb_eIndexError, "row out of range");
+        }
+
+        const unsigned char* p = $self->GetPixels(row);
+        if (!p) return out;
+
+        out.data = p;
+        out.size = img->bytesPerLine();
+        return out;
+    }
+
+    int GetBytesPerLine() {
+        std::shared_ptr<QImage> img = $self->GetImage();
+        return img ? img->bytesPerLine() : 0;
+    }
+}
 
 %include "OpenShotVersion.h"
 %include "ReaderBase.h"
