@@ -164,7 +164,10 @@ software packages available to download and install.
                         python3-dev \
                         qtbase5-dev \
                         qtmultimedia5-dev \
-                        swig
+                        swig \
+                        python3-zmq \
+                        python3-pyqt5.qtwebengine
+                        
 ```
 
 If you want to build against Qt6 on Ubuntu 24.04 or newer, install the Qt6 dev stack instead and configure with the default `USE_QT6=AUTO` (prefers Qt6 when available) or `-DUSE_QT6=ON` to force it:
