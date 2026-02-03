@@ -211,15 +211,21 @@ namespace openshot
     	return reader;
     }
 
-    // Set the QWidget pointer to display the video on (as a LONG pointer id)
-    void QtPlayer::SetQWidget(int64_t qwidget_address) {
+    // Set the QWidget pointer to display the video on (as a pointer-sized unsigned id)
+    void QtPlayer::SetQWidget(uintptr_t qwidget_address) {
     	// Update override QWidget address on the video renderer
     	p->renderer->OverrideWidget(qwidget_address);
     }
 
-    // Get the Renderer pointer address (for Python to cast back into a QObject)
-    int64_t QtPlayer::GetRendererQObject() {
-    	return (int64_t)(VideoRenderer*)p->renderer;
+    // Set the QWidget pointer to display the video on (using a real QWidget pointer)
+    void QtPlayer::SetQWidget(QWidget *widget) {
+    	SetQWidget(reinterpret_cast<uintptr_t>(widget));
+    }
+
+    // Get the Renderer pointer address (for Python to cast back into a VideoRenderer)
+	uintptr_t QtPlayer::GetRendererQObject() {
+    	auto* vr = static_cast<VideoRenderer*>(p->renderer);
+    	return reinterpret_cast<uintptr_t>(vr);
     }
 
     // Get the Playback speed

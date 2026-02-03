@@ -42,6 +42,7 @@ set(OPENSHOT_TESTS
   KeyFrame
   Point
   Profiles
+  QtPlayer
   QtImageReader
   ReaderBase
   Settings

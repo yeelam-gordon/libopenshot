@@ -27,6 +27,10 @@
 %include "std_vector.i"
 %include "std_map.i"
 %include <stdint.i>
+%apply uint64_t { uintptr_t };
+
+// Ignore QWidget overloads (Qt types are not wrapped in Java bindings)
+%ignore openshot::QtPlayer::SetQWidget(QWidget *);
 
 /* Unhandled STL Exception Handling */
 %include <std_except.i>

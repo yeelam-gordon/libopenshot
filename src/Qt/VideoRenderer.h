@@ -14,6 +14,7 @@
 #define OPENSHOT_VIDEO_RENDERER_H
 
 #include "../RendererBase.h"
+#include <cstdint>
 #include <QtCore/QObject>
 #include <QtGui/QImage>
 #include <memory>
@@ -30,7 +31,7 @@ public:
     ~VideoRenderer();
 
     /// Override QWidget which needs to be painted
-    void OverrideWidget(int64_t qwidget_address);
+    void OverrideWidget(uintptr_t qwidget_address);
 
 signals:
 	void present(const QImage &image);
