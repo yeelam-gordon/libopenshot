@@ -109,12 +109,20 @@ static void *openshot_swig_pylong_as_ptr(PyObject *obj) {
     if (!obj) {
         return nullptr;
     }
-    void *ptr = PyLong_AsVoidPtr(obj);
-    if (PyErr_Occurred()) {
-        PyErr_Clear();
-        return nullptr;
+
+    unsigned long long ull = PyLong_AsUnsignedLongLong(obj);
+    if (!PyErr_Occurred()) {
+        return reinterpret_cast<void*>(static_cast<uintptr_t>(ull));
     }
-    return ptr;
+    PyErr_Clear();
+
+    long long ll = PyLong_AsLongLong(obj);
+    if (!PyErr_Occurred()) {
+        return reinterpret_cast<void*>(static_cast<intptr_t>(ll));
+    }
+    PyErr_Clear();
+
+    return nullptr;
 }
 
 static void *openshot_swig_get_qwidget_ptr(PyObject *obj) {
@@ -123,7 +131,8 @@ static void *openshot_swig_get_qwidget_ptr(PyObject *obj) {
     }
 
     if (PyLong_Check(obj)) {
-        return openshot_swig_pylong_as_ptr(obj);
+        void *ptr = openshot_swig_pylong_as_ptr(obj);
+        return ptr;
     }
 
     const char *sip_modules[] = {"sip", "PyQt6.sip", "PyQt5.sip"};
@@ -241,7 +250,7 @@ static int openshot_swig_is_qwidget(PyObject *obj) {
 }
 
 %typemap(out) uintptr_t openshot::QtPlayer::GetRendererQObject {
-    $result = PyLong_FromVoidPtr(reinterpret_cast<void *>($1));
+    $result = PyLong_FromLongLong((long long)(intptr_t)$1);
 }
 
 
