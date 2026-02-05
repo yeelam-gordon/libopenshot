@@ -29,6 +29,7 @@ namespace openshot
         , last_speed(1)
         , last_dir(1)                   // assume forward (+1) on first launch
         , userSeeked(false)
+        , preroll_on_next_fill(false)
         , requested_display_frame(1)
         , current_display_frame(1)
         , cached_frame_count(0)
@@ -56,7 +57,11 @@ namespace openshot
             return true;
         }
 
-        return (cached_frame_count > min_frames_ahead);
+        int dir = computeDirection();
+        if (dir > 0) {
+            return (last_cached_index >= requested_display_frame + min_frames_ahead);
+        }
+        return (last_cached_index <= requested_display_frame - min_frames_ahead);
     }
 
     void VideoCacheThread::setSpeed(int new_speed)
@@ -112,10 +117,15 @@ namespace openshot
                 Timeline* timeline = static_cast<Timeline*>(reader);
                 timeline->ClearAllCache();
                 cached_frame_count = 0;
+                preroll_on_next_fill = true;
             }
             else if (cache)
             {
                 cached_frame_count = cache->Count();
+                preroll_on_next_fill = false;
+            }
+            else {
+                preroll_on_next_fill = false;
             }
         }
         requested_display_frame = new_position;
@@ -136,6 +146,39 @@ namespace openshot
     {
         // Place last_cached_index just “behind” playhead in the given dir
         last_cached_index = playhead - dir;
+    }
+
+    void VideoCacheThread::handleUserSeekWithPreroll(int64_t playhead,
+                                                     int dir,
+                                                     int64_t timeline_end,
+                                                     int64_t preroll_frames)
+    {
+        int64_t preroll_start = playhead;
+        if (preroll_frames > 0) {
+            if (dir > 0) {
+                preroll_start = std::max<int64_t>(1, playhead - preroll_frames);
+            }
+            else {
+                preroll_start = std::min<int64_t>(timeline_end, playhead + preroll_frames);
+            }
+        }
+        last_cached_index = preroll_start - dir;
+    }
+
+    int64_t VideoCacheThread::computePrerollFrames(const Settings* settings) const
+    {
+        if (!settings) {
+            return 0;
+        }
+        int64_t min_frames = settings->VIDEO_CACHE_MIN_PREROLL_FRAMES;
+        int64_t max_frames = settings->VIDEO_CACHE_MAX_PREROLL_FRAMES;
+        if (min_frames < 0) {
+            return 0;
+        }
+        if (max_frames > 0 && min_frames > max_frames) {
+            min_frames = max_frames;
+        }
+        return min_frames;
     }
 
     bool VideoCacheThread::clearCacheIfPaused(int64_t playhead,
@@ -242,6 +285,7 @@ namespace openshot
             int64_t  timeline_end = timeline->GetMaxFrame();
             int64_t  playhead     = requested_display_frame;
             bool     paused       = (speed == 0);
+            int64_t  preroll_frames = computePrerollFrames(settings);
 
             cached_frame_count = cache->Count();
 
@@ -269,9 +313,16 @@ namespace openshot
             }
 
             // Handle a user-initiated seek
+            bool use_preroll = preroll_on_next_fill;
             if (userSeeked) {
-                handleUserSeek(playhead, dir);
+                if (use_preroll) {
+                    handleUserSeekWithPreroll(playhead, dir, timeline_end, preroll_frames);
+                }
+                else {
+                    handleUserSeek(playhead, dir);
+                }
                 userSeeked = false;
+                preroll_on_next_fill = false;
             }
             else if (!paused && capacity >= 1) {
                 // In playback mode, check if last_cached_index drifted outside the new window
@@ -316,7 +367,7 @@ namespace openshot
             // If paused and playhead is no longer in cache, clear everything
             bool did_clear = clearCacheIfPaused(playhead, paused, cache);
             if (did_clear) {
-                handleUserSeek(playhead, dir);
+                handleUserSeekWithPreroll(playhead, dir, timeline_end, preroll_frames);
             }
 
             // Compute the current caching window
