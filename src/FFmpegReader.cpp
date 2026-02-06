@@ -79,7 +79,9 @@ FFmpegReader::FFmpegReader(const std::string &path, bool inspect_reader)
 FFmpegReader::FFmpegReader(const std::string &path, DurationStrategy duration_strategy, bool inspect_reader)
 		: last_frame(0), is_seeking(0), seeking_pts(0), seeking_frame(0), seek_count(0), NO_PTS_OFFSET(-99999),
 		  path(path), is_video_seek(true), check_interlace(false), check_fps(false), enable_seek(true), is_open(false),
-		  seek_audio_frame_found(0), seek_video_frame_found(0),is_duration_known(false), largest_frame_processed(0),
+		  seek_audio_frame_found(0), seek_video_frame_found(0),
+		  last_seek_max_frame(-1), seek_stagnant_count(0),
+		  is_duration_known(false), largest_frame_processed(0),
 		  current_video_frame(0), packet(NULL), duration_strategy(duration_strategy),
 		  audio_pts(0), video_pts(0), pFormatCtx(NULL), videoStream(-1), audioStream(-1), pCodecCtx(NULL), aCodecCtx(NULL),
 		pStream(NULL), aStream(NULL), pFrame(NULL), previous_packet_location{-1,0},
@@ -136,52 +138,69 @@ static enum AVPixelFormat get_hw_dec_format(AVCodecContext *ctx, const enum AVPi
 {
 	const enum AVPixelFormat *p;
 
+	// Prefer only the format matching the selected hardware decoder
+	int selected = openshot::Settings::Instance()->HARDWARE_DECODER;
+
 	for (p = pix_fmts; *p != AV_PIX_FMT_NONE; p++) {
 		switch (*p) {
 #if defined(__linux__)
 			// Linux pix formats
 			case AV_PIX_FMT_VAAPI:
-				hw_de_av_pix_fmt_global = AV_PIX_FMT_VAAPI;
-				hw_de_av_device_type_global = AV_HWDEVICE_TYPE_VAAPI;
-				return *p;
+				if (selected == 1) {
+					hw_de_av_pix_fmt_global = AV_PIX_FMT_VAAPI;
+					hw_de_av_device_type_global = AV_HWDEVICE_TYPE_VAAPI;
+					return *p;
+				}
 				break;
 			case AV_PIX_FMT_VDPAU:
-				hw_de_av_pix_fmt_global = AV_PIX_FMT_VDPAU;
-				hw_de_av_device_type_global = AV_HWDEVICE_TYPE_VDPAU;
-				return *p;
+				if (selected == 6) {
+					hw_de_av_pix_fmt_global = AV_PIX_FMT_VDPAU;
+					hw_de_av_device_type_global = AV_HWDEVICE_TYPE_VDPAU;
+					return *p;
+				}
 				break;
 #endif
 #if defined(_WIN32)
 			// Windows pix formats
 			case AV_PIX_FMT_DXVA2_VLD:
-				hw_de_av_pix_fmt_global = AV_PIX_FMT_DXVA2_VLD;
-				hw_de_av_device_type_global = AV_HWDEVICE_TYPE_DXVA2;
-				return *p;
+				if (selected == 3) {
+					hw_de_av_pix_fmt_global = AV_PIX_FMT_DXVA2_VLD;
+					hw_de_av_device_type_global = AV_HWDEVICE_TYPE_DXVA2;
+					return *p;
+				}
 				break;
 			case AV_PIX_FMT_D3D11:
-				hw_de_av_pix_fmt_global = AV_PIX_FMT_D3D11;
-				hw_de_av_device_type_global = AV_HWDEVICE_TYPE_D3D11VA;
-				return *p;
+				if (selected == 4) {
+					hw_de_av_pix_fmt_global = AV_PIX_FMT_D3D11;
+					hw_de_av_device_type_global = AV_HWDEVICE_TYPE_D3D11VA;
+					return *p;
+				}
 				break;
 #endif
 #if defined(__APPLE__)
 			// Apple pix formats
 			case AV_PIX_FMT_VIDEOTOOLBOX:
-				hw_de_av_pix_fmt_global = AV_PIX_FMT_VIDEOTOOLBOX;
-				hw_de_av_device_type_global = AV_HWDEVICE_TYPE_VIDEOTOOLBOX;
-				return *p;
+				if (selected == 5) {
+					hw_de_av_pix_fmt_global = AV_PIX_FMT_VIDEOTOOLBOX;
+					hw_de_av_device_type_global = AV_HWDEVICE_TYPE_VIDEOTOOLBOX;
+					return *p;
+				}
 				break;
 #endif
 				// Cross-platform pix formats
 			case AV_PIX_FMT_CUDA:
-				hw_de_av_pix_fmt_global = AV_PIX_FMT_CUDA;
-				hw_de_av_device_type_global = AV_HWDEVICE_TYPE_CUDA;
-				return *p;
+				if (selected == 2) {
+					hw_de_av_pix_fmt_global = AV_PIX_FMT_CUDA;
+					hw_de_av_device_type_global = AV_HWDEVICE_TYPE_CUDA;
+					return *p;
+				}
 				break;
 			case AV_PIX_FMT_QSV:
-				hw_de_av_pix_fmt_global = AV_PIX_FMT_QSV;
-				hw_de_av_device_type_global = AV_HWDEVICE_TYPE_QSV;
-				return *p;
+				if (selected == 7) {
+					hw_de_av_pix_fmt_global = AV_PIX_FMT_QSV;
+					hw_de_av_device_type_global = AV_HWDEVICE_TYPE_QSV;
+					return *p;
+				}
 				break;
 			default:
 				// This is only here to silence unused-enum warnings
@@ -302,7 +321,7 @@ void FFmpegReader::Open() {
 					char *adapter_ptr = NULL;
 					int adapter_num;
 					adapter_num = openshot::Settings::Instance()->HW_DE_DEVICE_SET;
-					fprintf(stderr, "Hardware decoding device number: %d\n", adapter_num);
+					ZmqLogger::Instance()->AppendDebugMethod("Hardware decoding device number", "adapter_num", adapter_num);
 
 					// Set hardware pix format (callback)
 					pCodecCtx->get_format = get_hw_dec_format;
@@ -388,6 +407,10 @@ void FFmpegReader::Open() {
 					hw_device_ctx = NULL;
 					// Here the first hardware initialisations are made
 					if (av_hwdevice_ctx_create(&hw_device_ctx, hw_de_av_device_type, adapter_ptr, NULL, 0) >= 0) {
+						const char* hw_name = av_hwdevice_get_type_name(hw_de_av_device_type);
+						std::string hw_msg = "HW decode active: ";
+						hw_msg += (hw_name ? hw_name : "unknown");
+						ZmqLogger::Instance()->Log(hw_msg);
 						if (!(pCodecCtx->hw_device_ctx = av_buffer_ref(hw_device_ctx))) {
 							throw InvalidCodec("Hardware device reference create failed.", path);
 						}
@@ -420,7 +443,8 @@ void FFmpegReader::Open() {
 						*/
 					}
 					else {
-						  throw InvalidCodec("Hardware device create failed.", path);
+						ZmqLogger::Instance()->Log("HW decode active: no (falling back to software)");
+						throw InvalidCodec("Hardware device create failed.", path);
 					}
 				}
 #endif // USE_HW_ACCEL
@@ -1035,6 +1059,8 @@ bool FFmpegReader::GetIsDurationKnown() {
 }
 
 std::shared_ptr<Frame> FFmpegReader::GetFrame(int64_t requested_frame) {
+	last_seek_max_frame = -1;
+	seek_stagnant_count = 0;
 	// Check for open reader (or throw exception)
 	if (!is_open)
 		throw ReaderClosed("The FFmpegReader is closed.  Call Open() before calling this method.", path);
@@ -1137,7 +1163,7 @@ std::shared_ptr<Frame> FFmpegReader::ReadStream(int64_t requested_frame) {
 
 		// Check the status of a seek (if any)
 		if (is_seeking) {
-			check_seek = CheckSeek(false);
+			check_seek = CheckSeek();
 		} else {
 			check_seek = false;
 		}
@@ -1446,9 +1472,12 @@ bool FFmpegReader::GetAVFrame() {
 }
 
 // Check the current seek position and determine if we need to seek again
-bool FFmpegReader::CheckSeek(bool is_video) {
+bool FFmpegReader::CheckSeek() {
 	// Are we seeking for a specific frame?
 	if (is_seeking) {
+		const int64_t kSeekRetryMax = 5;
+		const int kSeekStagnantMax = 2;
+
 		// Determine if both an audio and video packet have been decoded since the seek happened.
 		// If not, allow the ReadStream method to keep looping
 		if ((is_video_seek && !seek_video_frame_found) || (!is_video_seek && !seek_audio_frame_found))
@@ -1460,6 +1489,13 @@ bool FFmpegReader::CheckSeek(bool is_video) {
 
 		// Determine max seeked frame
 		int64_t max_seeked_frame = std::max(seek_audio_frame_found, seek_video_frame_found);
+		// Track stagnant seek results (no progress between retries)
+		if (max_seeked_frame == last_seek_max_frame) {
+			seek_stagnant_count++;
+		} else {
+			last_seek_max_frame = max_seeked_frame;
+			seek_stagnant_count = 0;
+		}
 
 		// determine if we are "before" the requested frame
 		if (max_seeked_frame >= seeking_frame) {
@@ -1473,7 +1509,22 @@ bool FFmpegReader::CheckSeek(bool is_video) {
 											"seek_audio_frame_found", seek_audio_frame_found);
 
 			// Seek again... to the nearest Keyframe
-			Seek(seeking_frame - (10 * seek_count * seek_count));
+			if (seek_count < kSeekRetryMax) {
+				Seek(seeking_frame - (10 * seek_count * seek_count));
+			} else {
+				if (seek_stagnant_count >= kSeekStagnantMax) {
+					// Overshot and no progress: restart from the beginning and walk forward
+					Seek(1);
+					is_seeking = false;
+					seeking_frame = 0;
+					seeking_pts = -1;
+				} else {
+					// Give up retrying and walk forward
+					is_seeking = false;
+					seeking_frame = 0;
+					seeking_pts = -1;
+				}
+			}
 		} else {
 			// SEEK WORKED
 			ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::CheckSeek (Successful)",
@@ -1980,7 +2031,7 @@ void FFmpegReader::Seek(int64_t requested_frame) {
 		if (!seek_worked && info.has_video && !HasAlbumArt()) {
 			seek_target = ConvertFrameToVideoPTS(requested_frame - buffer_amount);
 			if (av_seek_frame(pFormatCtx, info.video_stream_index, seek_target, AVSEEK_FLAG_BACKWARD) < 0) {
-				fprintf(stderr, "%s: error while seeking video stream\n", pFormatCtx->AV_FILENAME);
+				ZmqLogger::Instance()->Log(std::string(pFormatCtx->AV_FILENAME) + ": error while seeking video stream");
 			} else {
 				// VIDEO SEEK
 				is_video_seek = true;
@@ -1992,7 +2043,7 @@ void FFmpegReader::Seek(int64_t requested_frame) {
 		if (!seek_worked && info.has_audio) {
 			seek_target = ConvertFrameToAudioPTS(requested_frame - buffer_amount);
 			if (av_seek_frame(pFormatCtx, info.audio_stream_index, seek_target, AVSEEK_FLAG_BACKWARD) < 0) {
-				fprintf(stderr, "%s: error while seeking audio stream\n", pFormatCtx->AV_FILENAME);
+				ZmqLogger::Instance()->Log(std::string(pFormatCtx->AV_FILENAME) + ": error while seeking audio stream");
 			} else {
 				// AUDIO SEEK
 				is_video_seek = false;
