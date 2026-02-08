@@ -727,6 +727,7 @@ void FFmpegReader::Close() {
 		seek_video_frame_found = 0;
 		current_video_frame = 0;
 		last_video_frame.reset();
+		last_final_video_frame.reset();
 	}
 }
 
@@ -1105,6 +1106,11 @@ std::shared_ptr<Frame> FFmpegReader::ReadStream(int64_t requested_frame) {
 	// Allocate video frame
 	bool check_seek = false;
 	int packet_error = -1;
+	int64_t no_progress_count = 0;
+	int64_t prev_packets_read = packet_status.packets_read();
+	int64_t prev_packets_decoded = packet_status.packets_decoded();
+	int64_t prev_video_decoded = packet_status.video_decoded;
+	double prev_video_pts_seconds = video_pts_seconds;
 
 	// Debug output
 	ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ReadStream", "requested_frame", requested_frame);
@@ -1196,6 +1202,40 @@ std::shared_ptr<Frame> FFmpegReader::ReadStream(int64_t requested_frame) {
 			packet_status.end_of_file = true;
 			break;
 		}
+
+		// Detect decoder stalls with no progress at EOF and force completion so
+		// missing frames can be finalized from prior image data.
+		const bool has_progress =
+			(packet_status.packets_read() != prev_packets_read) ||
+			(packet_status.packets_decoded() != prev_packets_decoded) ||
+			(packet_status.video_decoded != prev_video_decoded) ||
+			(video_pts_seconds != prev_video_pts_seconds);
+
+		if (has_progress) {
+			no_progress_count = 0;
+		} else {
+			no_progress_count++;
+			if (no_progress_count >= 2000
+				&& packet_status.packets_eof
+				&& !packet
+				&& !hold_packet) {
+				ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ReadStream (force EOF after stall)",
+					"requested_frame", requested_frame,
+					"no_progress_count", no_progress_count,
+					"packets_read", packet_status.packets_read(),
+					"packets_decoded", packet_status.packets_decoded(),
+					"video_decoded", packet_status.video_decoded,
+					"audio_decoded", packet_status.audio_decoded);
+				packet_status.video_eof = true;
+				packet_status.audio_eof = true;
+				packet_status.end_of_file = true;
+				break;
+			}
+		}
+		prev_packets_read = packet_status.packets_read();
+		prev_packets_decoded = packet_status.packets_decoded();
+		prev_video_decoded = packet_status.video_decoded;
+		prev_video_pts_seconds = video_pts_seconds;
 	} // end while
 
 	// Debug output
@@ -1241,9 +1281,18 @@ std::shared_ptr<Frame> FFmpegReader::ReadStream(int64_t requested_frame) {
 
 			return frame;
 		} else {
-			// The largest processed frame is no longer in cache, return a blank frame
+			// The largest processed frame is no longer in cache. Prefer the most recent
+			// finalized image first, then decoded image, to avoid black flashes.
 			std::shared_ptr<Frame> f = CreateFrame(largest_frame_processed);
-			f->AddColor(info.width, info.height, "#000");
+			if (last_final_video_frame && last_final_video_frame->has_image_data
+				&& last_final_video_frame->number <= requested_frame) {
+				f->AddImage(std::make_shared<QImage>(last_final_video_frame->GetImage()->copy()));
+			} else if (last_video_frame && last_video_frame->has_image_data
+				&& last_video_frame->number <= requested_frame) {
+				f->AddImage(std::make_shared<QImage>(last_video_frame->GetImage()->copy()));
+			} else {
+				f->AddColor(info.width, info.height, "#000");
+			}
 			f->AddAudioSilence(samples_in_frame);
 			return f;
 		}
@@ -1938,6 +1987,7 @@ void FFmpegReader::Seek(int64_t requested_frame) {
 	last_frame = 0;
 	current_video_frame = 0;
 	largest_frame_processed = 0;
+	last_final_video_frame.reset();
 	bool has_audio_override = info.has_audio;
 	bool has_video_override = info.has_video;
 
@@ -2324,26 +2374,39 @@ void FFmpegReader::CheckWorkingFrames(int64_t requested_frame) {
 			// OR video stream is too far behind, missing, or end-of-file
 			is_video_ready = true;
 			ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::CheckWorkingFrames (video ready)",
-											"frame_number", f->number, 
-											"frame_pts_seconds", frame_pts_seconds, 
-											"video_pts_seconds", video_pts_seconds, 
-											"recent_pts_diff", recent_pts_diff);
+										"frame_number", f->number,
+										"frame_pts_seconds", frame_pts_seconds,
+										"video_pts_seconds", video_pts_seconds,
+										"recent_pts_diff", recent_pts_diff);
 			if (info.has_video && !f->has_image_data) {
-				// Frame has no image data (copy from previous frame)
-				// Loop backwards through final frames (looking for the nearest, previous frame image)
-				for (int64_t previous_frame = requested_frame - 1; previous_frame > 0; previous_frame--) {
-					std::shared_ptr<Frame> previous_frame_instance = final_cache.GetFrame(previous_frame);
-					if (previous_frame_instance && previous_frame_instance->has_image_data) {
-						// Copy image from last decoded frame
-						f->AddImage(std::make_shared<QImage>(previous_frame_instance->GetImage()->copy()));
-						break;
-					}
+				// Frame has no image data. Prefer timeline-previous frames to preserve
+				// visual order, especially when decode/prefetch is out-of-order.
+				std::shared_ptr<Frame> previous_frame_instance = final_cache.GetFrame(f->number - 1);
+				if (previous_frame_instance && previous_frame_instance->has_image_data) {
+					f->AddImage(std::make_shared<QImage>(previous_frame_instance->GetImage()->copy()));
 				}
-				
-				if (last_video_frame && !f->has_image_data) {
-					// Copy image from last decoded frame
+
+				// Fall back to last finalized timeline image (survives cache churn).
+				if (!f->has_image_data
+					&& last_final_video_frame
+					&& last_final_video_frame->has_image_data
+					&& last_final_video_frame->number <= f->number) {
+					f->AddImage(std::make_shared<QImage>(last_final_video_frame->GetImage()->copy()));
+				}
+
+				// Fall back to the last decoded image only when it is not from the future.
+				if (!f->has_image_data
+					&& last_video_frame
+					&& last_video_frame->has_image_data
+					&& last_video_frame->number <= f->number) {
 					f->AddImage(std::make_shared<QImage>(last_video_frame->GetImage()->copy()));
-				} else if (!f->has_image_data) {
+				}
+
+				// Last-resort fallback if no prior image is available.
+				if (!f->has_image_data) {
+					ZmqLogger::Instance()->AppendDebugMethod(
+						"FFmpegReader::CheckWorkingFrames (no previous image found; using black frame)",
+						"frame_number", f->number);
 					f->AddColor("#000000");
 				}
 			}
@@ -2393,6 +2456,9 @@ void FFmpegReader::CheckWorkingFrames(int64_t requested_frame) {
 			if (!is_seek_trash) {
 				// Move frame to final cache
 				final_cache.Add(f);
+				if (f->has_image_data) {
+					last_final_video_frame = f;
+				}
 
 				// Remove frame from working cache
 				working_cache.Remove(f->number);
