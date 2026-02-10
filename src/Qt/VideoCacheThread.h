@@ -21,6 +21,7 @@
 
 namespace openshot
 {
+    class Settings;
     using juce::Thread;
 
     /**
@@ -108,6 +109,21 @@ namespace openshot
         void handleUserSeek(int64_t playhead, int dir);
 
         /**
+         * @brief Reset last_cached_index to start caching with a directional preroll offset.
+         * @param playhead        Current requested_display_frame
+         * @param dir             Effective direction (±1)
+         * @param timeline_end    Last valid frame index
+         * @param preroll_frames  Number of frames to offset the cache start
+         */
+        void handleUserSeekWithPreroll(int64_t playhead,
+                                       int dir,
+                                       int64_t timeline_end,
+                                       int64_t preroll_frames);
+
+        /// @brief Compute preroll frame count from settings.
+        int64_t computePrerollFrames(const Settings* settings) const;
+
+        /**
          * @brief When paused and playhead is outside current cache, clear all frames.
          * @param playhead Current requested_display_frame
          * @param paused   True if speed == 0
@@ -163,6 +179,7 @@ namespace openshot
         int last_speed;       ///< Last non-zero speed (for tracking).
         int last_dir;         ///< Last direction sign (+1 forward, –1 backward).
         bool userSeeked;      ///< True if Seek(..., true) was called (forces a cache reset).
+        bool preroll_on_next_fill; ///< True if next cache rebuild should include preroll offset.
 
         int64_t requested_display_frame; ///< Frame index the user requested.
         int64_t current_display_frame;   ///< Currently displayed frame (unused here, reserved).

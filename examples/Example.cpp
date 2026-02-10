@@ -13,83 +13,116 @@
 #include <chrono>
 #include <iostream>
 #include <memory>
+#include <string>
+#include "Clip.h"
 #include "Frame.h"
 #include "FFmpegReader.h"
-#include "FFmpegWriter.h"
+#include "Settings.h"
 #include "Timeline.h"
-#include "Qt/VideoCacheThread.h"    // <— your new header
 
 using namespace openshot;
 
 int main(int argc, char* argv[]) {
+    using clock = std::chrono::high_resolution_clock;
+    auto total_start = clock::now();
 
+    const std::string output_dir = "/home/jonathan/Downloads";
+    const std::string input_paths[] = {
+        "/home/jonathan/Videos/3.4 Release/Screencasts/Timing.mp4",
+        "/home/jonathan/Downloads/openshot-testing/sintel_trailer-720p.mp4"
+    };
+    const int64_t frames_to_fetch[] = {175, 225, 240, 500, 1000};
+    const bool use_hw_decode = false;
 
-    // 1) Open the FFmpegReader as usual
-    const char* input_path = "/home/jonathan/Downloads/openshot-testing/sintel_trailer-720p.mp4";
-    FFmpegReader reader(input_path);
-    reader.Open();
+    std::cout << "Hardware decode: " << (use_hw_decode ? "ON" : "OFF") << "\n";
+    openshot::Settings::Instance()->HARDWARE_DECODER = use_hw_decode ? 1 : 0;
 
-    const int64_t total_frames = reader.info.video_length;
-    std::cout << "Total frames: " << total_frames << "\n";
+    for (const std::string& input_path : input_paths) {
+        auto file_start = clock::now();
+        std::string base = input_path;
+        size_t slash = base.find_last_of('/');
+        if (slash != std::string::npos) {
+            base = base.substr(slash + 1);
+        }
 
+        std::cout << "\n=== File: " << base << " ===\n";
 
+        auto t0 = clock::now();
+        FFmpegReader reader(input_path.c_str());
+        auto t1 = clock::now();
+        std::cout << "FFmpegReader ctor: "
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count()
+                  << " ms\n";
 
-    Timeline timeline(reader.info.width, reader.info.height, reader.info.fps, reader.info.sample_rate, reader.info.channels, reader.info.channel_layout);
-    Clip c1(&reader);
-    timeline.AddClip(&c1);
-    timeline.Open();
-    timeline.DisplayInfo();
+        auto t2 = clock::now();
+        reader.Open();
+        auto t3 = clock::now();
+        std::cout << "FFmpegReader Open(): "
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t2).count()
+                  << " ms\n";
 
+        auto t4 = clock::now();
+        Timeline timeline(1920, 1080, Fraction(30, 1), reader.info.sample_rate, reader.info.channels, reader.info.channel_layout);
+        timeline.SetMaxSize(640, 480);
+        auto t5 = clock::now();
+        std::cout << "Timeline ctor (1080p30): "
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(t5 - t4).count()
+                  << " ms\n";
 
-    // 2) Construct a VideoCacheThread around 'reader' and start its background loop
-    //    (VideoCacheThread inherits juce::Thread)
-    std::shared_ptr<VideoCacheThread> cache = std::make_shared<VideoCacheThread>();
-    cache->Reader(&timeline);    // attaches the FFmpegReader and internally calls Play()
-    cache->StartThread();      // juce::Thread method, begins run()
+        auto t6 = clock::now();
+        Clip c1(&reader);
+        auto t7 = clock::now();
+        std::cout << "Clip ctor: "
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(t7 - t6).count()
+                  << " ms\n";
 
-    // 3) Set up the writer exactly as before
-    FFmpegWriter writer("/home/jonathan/Downloads/performance‐cachetest.mp4");
-    writer.SetAudioOptions("aac", 48000, 192000);
-    writer.SetVideoOptions("libx264", 1280, 720, Fraction(30, 1), 5000000);
-    writer.Open();
+        timeline.AddClip(&c1);
 
-    // 4) Forward pass: for each frame 1…N, tell the cache thread to seek to that frame,
-    //    then immediately call cache->GetFrame(frame), which will block only if that frame
-    //    hasn’t been decoded into the cache yet.
-    auto t0 = std::chrono::high_resolution_clock::now();
-    cache->setSpeed(1);
-    for (int64_t f = 1; f <= total_frames; ++f) {
-        float pct = (float(f) / total_frames) * 100.0f;
-        std::cout << "Forward: requesting frame " << f << " (" << pct << "%)\n";
+        auto t8 = clock::now();
+        timeline.Open();
+        auto t9 = clock::now();
+        std::cout << "Timeline Open(): "
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(t9 - t8).count()
+                  << " ms\n";
 
-        cache->Seek(f);                   // signal “I need frame f now (and please prefetch f+1, f+2, …)”
-        std::shared_ptr<Frame> framePtr = timeline.GetFrame(f);
-        writer.WriteFrame(framePtr);
+        for (int64_t frame_number : frames_to_fetch) {
+            auto loop_start = clock::now();
+            std::cout << "Requesting frame " << frame_number << "...\n";
+
+            auto t10 = clock::now();
+            std::shared_ptr<Frame> frame = timeline.GetFrame(frame_number);
+            auto t11 = clock::now();
+            std::cout << "Timeline GetFrame(" << frame_number << "): "
+                      << std::chrono::duration_cast<std::chrono::milliseconds>(t11 - t10).count()
+                      << " ms\n";
+
+            std::string out_path = output_dir + "/frame-" + base + "-" + std::to_string(frame_number) + ".jpg";
+
+            auto t12 = clock::now();
+            frame->Thumbnail(out_path, 200, 80, "", "", "#000000", false, "JPEG", 95, 0.0f);
+            auto t13 = clock::now();
+            std::cout << "Frame Thumbnail() JPEG (" << frame_number << "): "
+                      << std::chrono::duration_cast<std::chrono::milliseconds>(t13 - t12).count()
+                      << " ms\n";
+
+            auto loop_end = clock::now();
+            std::cout << "Frame loop total (" << frame_number << "): "
+                      << std::chrono::duration_cast<std::chrono::milliseconds>(loop_end - loop_start).count()
+                      << " ms\n";
+        }
+
+        reader.Close();
+        timeline.Close();
+
+        auto file_end = clock::now();
+        std::cout << "File total (" << base << "): "
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(file_end - file_start).count()
+                  << " ms\n";
     }
-    auto t1 = std::chrono::high_resolution_clock::now();
-    auto forward_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
 
-    // 5) Backward pass: same idea in reverse
-    auto t2 = std::chrono::high_resolution_clock::now();
-    cache->setSpeed(-1);
-    for (int64_t f = total_frames; f >= 1; --f) {
-        float pct = (float(total_frames - f + 1) / total_frames) * 100.0f;
-        std::cout << "Backward: requesting frame " << f << " (" << pct << "%)\n";
-
-        cache->Seek(f);
-        std::shared_ptr<Frame> framePtr = timeline.GetFrame(f);
-        writer.WriteFrame(framePtr);
-    }
-    auto t3 = std::chrono::high_resolution_clock::now();
-    auto backward_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t2).count();
-
-    std::cout << "\nForward pass elapsed:  "  << forward_ms  << " ms\n";
-    std::cout << "Backward pass elapsed: " << backward_ms << " ms\n";
-
-    // 6) Shut down the cache thread, close everything
-    cache->StopThread(10000);  // politely tells run() to exit, waits up to 10s
-    reader.Close();
-    writer.Close();
-    timeline.Close();
+    auto total_end = clock::now();
+    std::cout << "Total elapsed: "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(total_end - total_start).count()
+              << " ms\n";
     return 0;
 }

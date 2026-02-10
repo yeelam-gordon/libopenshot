@@ -19,6 +19,7 @@
 #include "FrameMapper.h"
 #include "Exceptions.h"
 
+#include <algorithm>
 #include <QDir>
 #include <QFileInfo>
 #include <unordered_map>
@@ -69,7 +70,8 @@ Timeline::Timeline(int width, int height, Fraction fps, int sample_rate, int cha
 
 	// Init cache
 	final_cache = new CacheMemory();
-	final_cache->SetMaxBytesFromInfo(24, info.width, info.height, info.sample_rate, info.channels);
+	const int cache_frames = std::max(Settings::Instance()->CACHE_MIN_FRAMES, OPEN_MP_NUM_PROCESSORS * 4);
+	final_cache->SetMaxBytesFromInfo(cache_frames, info.width, info.height, info.sample_rate, info.channels);
 }
 
 // Delegating constructor that copies parameters from a provided ReaderInfo
@@ -201,7 +203,8 @@ Timeline::Timeline(const std::string& projectPath, bool convert_absolute_paths) 
 
 	// Init cache
 	final_cache = new CacheMemory();
-	final_cache->SetMaxBytesFromInfo(24, info.width, info.height, info.sample_rate, info.channels);
+	const int cache_frames = std::max(Settings::Instance()->CACHE_MIN_FRAMES, OPEN_MP_NUM_PROCESSORS * 4);
+	final_cache->SetMaxBytesFromInfo(cache_frames, info.width, info.height, info.sample_rate, info.channels);
 }
 
 Timeline::~Timeline() {
