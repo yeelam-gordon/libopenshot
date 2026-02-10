@@ -128,6 +128,7 @@ namespace openshot {
 		int64_t pts_total;
 		int64_t pts_counter;
 		std::shared_ptr<openshot::Frame> last_video_frame;
+		std::shared_ptr<openshot::Frame> last_final_video_frame;
 
 		bool is_seeking;
 		int64_t seeking_pts;
