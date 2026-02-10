@@ -67,11 +67,14 @@ namespace openshot {
 		/// Number of threads of OpenMP
 		int OMP_THREADS = 16;
 
-		/// Number of threads that ffmpeg uses
-		int FF_THREADS = 16;
+			/// Number of threads that ffmpeg uses
+			int FF_THREADS = 16;
 
-		/// Maximum rows that hardware decode can handle
-		int DE_LIMIT_HEIGHT_MAX = 1100;
+			/// Minimum number of frames for frame-count-based caches
+			int CACHE_MIN_FRAMES = 24;
+
+			/// Maximum rows that hardware decode can handle
+			int DE_LIMIT_HEIGHT_MAX = 1100;
 
 		/// Maximum columns that hardware decode can handle
 		int DE_LIMIT_WIDTH_MAX = 1950;

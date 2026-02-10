@@ -97,8 +97,10 @@ FFmpegReader::FFmpegReader(const std::string &path, DurationStrategy duration_st
 	audio_pts_seconds = NO_PTS_OFFSET;
 
 	// Init cache
-	working_cache.SetMaxBytesFromInfo(OPEN_MP_NUM_PROCESSORS * 4, info.width, info.height, info.sample_rate, info.channels);
-	final_cache.SetMaxBytesFromInfo(OPEN_MP_NUM_PROCESSORS * 4, info.width, info.height, info.sample_rate, info.channels);
+	const int init_working_cache_frames = std::max(Settings::Instance()->CACHE_MIN_FRAMES, OPEN_MP_NUM_PROCESSORS * 4);
+	const int init_final_cache_frames = std::max(Settings::Instance()->CACHE_MIN_FRAMES, OPEN_MP_NUM_PROCESSORS * 4);
+	working_cache.SetMaxBytesFromInfo(init_working_cache_frames, info.width, info.height, info.sample_rate, info.channels);
+	final_cache.SetMaxBytesFromInfo(init_final_cache_frames, info.width, info.height, info.sample_rate, info.channels);
 
 	// Open and Close the reader, to populate its attributes (such as height, width, etc...)
 	if (inspect_reader) {
@@ -637,8 +639,10 @@ void FFmpegReader::Open() {
 		previous_packet_location.sample_start = 0;
 
 		// Adjust cache size based on size of frame and audio
-		working_cache.SetMaxBytesFromInfo(OPEN_MP_NUM_PROCESSORS * info.fps.ToDouble() * 2, info.width, info.height, info.sample_rate, info.channels);
-		final_cache.SetMaxBytesFromInfo(OPEN_MP_NUM_PROCESSORS * 2, info.width, info.height, info.sample_rate, info.channels);
+		const int working_cache_frames = std::max(Settings::Instance()->CACHE_MIN_FRAMES, int(OPEN_MP_NUM_PROCESSORS * info.fps.ToDouble() * 2));
+		const int final_cache_frames = std::max(Settings::Instance()->CACHE_MIN_FRAMES, OPEN_MP_NUM_PROCESSORS * 2);
+		working_cache.SetMaxBytesFromInfo(working_cache_frames, info.width, info.height, info.sample_rate, info.channels);
+		final_cache.SetMaxBytesFromInfo(final_cache_frames, info.width, info.height, info.sample_rate, info.channels);
 
 		// Scan PTS for any offsets (i.e. non-zero starting streams). At least 1 stream must start at zero timestamp.
 		// This method allows us to shift timestamps to ensure at least 1 stream is starting at zero.

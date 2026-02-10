@@ -70,7 +70,7 @@ Timeline::Timeline(int width, int height, Fraction fps, int sample_rate, int cha
 
 	// Init cache
 	final_cache = new CacheMemory();
-	const int cache_frames = std::max(24, OPEN_MP_NUM_PROCESSORS * 4);
+	const int cache_frames = std::max(Settings::Instance()->CACHE_MIN_FRAMES, OPEN_MP_NUM_PROCESSORS * 4);
 	final_cache->SetMaxBytesFromInfo(cache_frames, info.width, info.height, info.sample_rate, info.channels);
 }
 
@@ -203,7 +203,7 @@ Timeline::Timeline(const std::string& projectPath, bool convert_absolute_paths) 
 
 	// Init cache
 	final_cache = new CacheMemory();
-	const int cache_frames = std::max(24, OPEN_MP_NUM_PROCESSORS * 4);
+	const int cache_frames = std::max(Settings::Instance()->CACHE_MIN_FRAMES, OPEN_MP_NUM_PROCESSORS * 4);
 	final_cache->SetMaxBytesFromInfo(cache_frames, info.width, info.height, info.sample_rate, info.channels);
 }
 
