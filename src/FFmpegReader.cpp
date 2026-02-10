@@ -1510,13 +1510,12 @@ bool FFmpegReader::CheckSeek() {
 			// Seek again... to the nearest Keyframe
 			if (seek_count < kSeekRetryMax) {
 				Seek(seeking_frame - (10 * seek_count * seek_count));
+			} else if (seek_stagnant_count >= kSeekStagnantMax) {
+				// Stagnant seek: force a much earlier target and keep seeking.
+				Seek(seeking_frame - (10 * kSeekRetryMax * kSeekRetryMax));
 			} else {
-				// Retry budget exhausted: always restart from frame 1 and walk forward.
-				// This avoids returning frames from an overshot seek position.
-				Seek(1);
-				is_seeking = false;
-				seeking_frame = 0;
-				seeking_pts = -1;
+				// Retry budget exhausted: keep seeking from a conservative offset.
+				Seek(seeking_frame - (10 * seek_count * seek_count));
 			}
 		} else {
 			// SEEK WORKED
