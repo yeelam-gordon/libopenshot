@@ -1511,18 +1511,12 @@ bool FFmpegReader::CheckSeek() {
 			if (seek_count < kSeekRetryMax) {
 				Seek(seeking_frame - (10 * seek_count * seek_count));
 			} else {
-				if (seek_stagnant_count >= kSeekStagnantMax) {
-					// Overshot and no progress: restart from the beginning and walk forward
-					Seek(1);
-					is_seeking = false;
-					seeking_frame = 0;
-					seeking_pts = -1;
-				} else {
-					// Give up retrying and walk forward
-					is_seeking = false;
-					seeking_frame = 0;
-					seeking_pts = -1;
-				}
+				// Retry budget exhausted: always restart from frame 1 and walk forward.
+				// This avoids returning frames from an overshot seek position.
+				Seek(1);
+				is_seeking = false;
+				seeking_frame = 0;
+				seeking_pts = -1;
 			}
 		} else {
 			// SEEK WORKED
