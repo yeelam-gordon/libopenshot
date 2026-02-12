@@ -17,6 +17,8 @@
 
 #include <AppConfig.h>
 #include <juce_audio_basics/juce_audio_basics.h>
+#include <atomic>
+#include <mutex>
 #include <memory>
 
 namespace openshot
@@ -57,7 +59,7 @@ namespace openshot
         void setSpeed(int new_speed);
 
         /// @return The current speed (1=normal, 2=fast, –1=rewind, etc.)
-        int getSpeed() const { return speed; }
+        int getSpeed() const { return speed.load(); }
 
         /// Seek to a specific frame (no preroll).
         void Seek(int64_t new_position);
@@ -175,23 +177,24 @@ namespace openshot
 
         std::shared_ptr<Frame> last_cached_frame; ///< Last frame pointer added to cache.
 
-        int speed;            ///< Current playback speed (0=paused, >0 forward, <0 backward).
-        int last_speed;       ///< Last non-zero speed (for tracking).
-        int last_dir;         ///< Last direction sign (+1 forward, –1 backward).
-        bool userSeeked;      ///< True if Seek(..., true) was called (forces a cache reset).
-        bool preroll_on_next_fill; ///< True if next cache rebuild should include preroll offset.
+        std::atomic<int> speed;            ///< Current playback speed (0=paused, >0 forward, <0 backward).
+        std::atomic<int> last_speed;       ///< Last non-zero speed (for tracking).
+        std::atomic<int> last_dir;         ///< Last direction sign (+1 forward, –1 backward).
+        std::atomic<bool> userSeeked;      ///< True if Seek(..., true) was called (forces a cache reset).
+        std::atomic<bool> preroll_on_next_fill; ///< True if next cache rebuild should include preroll offset.
 
-        int64_t requested_display_frame; ///< Frame index the user requested.
+        std::atomic<int64_t> requested_display_frame; ///< Frame index the user requested.
         int64_t current_display_frame;   ///< Currently displayed frame (unused here, reserved).
-        int64_t cached_frame_count;      ///< Estimated count of frames currently stored in cache.
+        std::atomic<int64_t> cached_frame_count;      ///< Estimated count of frames currently stored in cache.
 
-        int64_t min_frames_ahead;        ///< Minimum number of frames considered “ready” (pre-roll).
+        std::atomic<int64_t> min_frames_ahead;        ///< Minimum number of frames considered “ready” (pre-roll).
         int64_t timeline_max_frame;      ///< Highest valid frame index in the timeline.
 
         ReaderBase* reader;              ///< The source reader (e.g., Timeline, FFmpegReader).
         bool force_directional_cache;    ///< (Reserved for future use).
 
-        int64_t last_cached_index;       ///< Index of the most recently cached frame.
+        std::atomic<int64_t> last_cached_index;       ///< Index of the most recently cached frame.
+        mutable std::mutex seek_state_mutex;          ///< Protects coherent seek state updates/consumption.
     };
 
 } // namespace openshot

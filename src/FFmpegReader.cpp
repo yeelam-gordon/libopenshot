@@ -561,23 +561,81 @@ void FFmpegReader::Open() {
 			// Audio encoding does not typically use more than 2 threads (most codecs use 1 thread)
 			aCodecCtx->thread_count = std::min(FF_AUDIO_NUM_PROCESSORS, 2);
 
-			if (aCodec == NULL) {
-				throw InvalidCodec("A valid audio codec could not be found for this file.", path);
+			bool audio_opened = false;
+			if (aCodec != NULL) {
+				// Init options
+				AVDictionary *opts = NULL;
+				av_dict_set(&opts, "strict", "experimental", 0);
+
+				// Open audio codec
+				audio_opened = (avcodec_open2(aCodecCtx, aCodec, &opts) >= 0);
+
+				// Free options
+				av_dict_free(&opts);
 			}
 
-			// Init options
-			AVDictionary *opts = NULL;
-			av_dict_set(&opts, "strict", "experimental", 0);
+			if (audio_opened) {
+				// Update the File Info struct with audio details (if an audio stream is found)
+				UpdateAudioInfo();
 
-			// Open audio codec
-			if (avcodec_open2(aCodecCtx, aCodec, &opts) < 0)
-				throw InvalidCodec("An audio codec was found, but could not be opened.", path);
+				// Disable malformed audio stream metadata (prevents divide-by-zero / invalid resampling math)
+				const bool invalid_audio_info =
+					(info.channels <= 0) ||
+					(info.sample_rate <= 0) ||
+					(info.audio_timebase.num <= 0) ||
+					(info.audio_timebase.den <= 0);
+				if (invalid_audio_info) {
+					ZmqLogger::Instance()->AppendDebugMethod(
+						"FFmpegReader::Open (Disable invalid audio stream)",
+						"channels", info.channels,
+						"sample_rate", info.sample_rate,
+						"audio_timebase.num", info.audio_timebase.num,
+						"audio_timebase.den", info.audio_timebase.den);
+					info.has_audio = false;
+					info.audio_stream_index = -1;
+					audioStream = -1;
+					packet_status.audio_eof = true;
+					if (aCodecCtx) {
+						if (avcodec_is_open(aCodecCtx)) {
+							avcodec_flush_buffers(aCodecCtx);
+						}
+						AV_FREE_CONTEXT(aCodecCtx);
+						aCodecCtx = nullptr;
+					}
+					aStream = nullptr;
+				}
+			} else {
+				// Keep decoding video, but disable bad/unsupported audio stream.
+				ZmqLogger::Instance()->AppendDebugMethod(
+					"FFmpegReader::Open (Audio codec unavailable; disabling audio)",
+					"audioStream", audioStream);
+				info.has_audio = false;
+				info.audio_stream_index = -1;
+				audioStream = -1;
+				packet_status.audio_eof = true;
+				if (aCodecCtx) {
+					AV_FREE_CONTEXT(aCodecCtx);
+					aCodecCtx = nullptr;
+				}
+				aStream = nullptr;
+			}
+		}
 
-			// Free options
-			av_dict_free(&opts);
-
-			// Update the File Info struct with audio details (if an audio stream is found)
-			UpdateAudioInfo();
+		// Guard invalid frame-rate / timebase values from malformed streams.
+		if (info.fps.num <= 0 || info.fps.den <= 0) {
+			ZmqLogger::Instance()->AppendDebugMethod(
+				"FFmpegReader::Open (Invalid FPS detected; applying fallback)",
+				"fps.num", info.fps.num,
+				"fps.den", info.fps.den);
+			info.fps.num = 30;
+			info.fps.den = 1;
+		}
+		if (info.video_timebase.num <= 0 || info.video_timebase.den <= 0) {
+			ZmqLogger::Instance()->AppendDebugMethod(
+				"FFmpegReader::Open (Invalid video_timebase detected; applying fallback)",
+				"video_timebase.num", info.video_timebase.num,
+				"video_timebase.den", info.video_timebase.den);
+			info.video_timebase = info.fps.Reciprocal();
 		}
 
 		// Add format metadata (if any)
@@ -2236,12 +2294,17 @@ void FFmpegReader::UpdatePTSOffset() {
 int64_t FFmpegReader::ConvertVideoPTStoFrame(int64_t pts) {
 	// Apply PTS offset
 	int64_t previous_video_frame = current_video_frame;
+	const double fps_value = (info.fps.num > 0 && info.fps.den > 0) ? info.fps.ToDouble() : 30.0;
+	const double video_timebase_value =
+		(info.video_timebase.num > 0 && info.video_timebase.den > 0)
+			? info.video_timebase.ToDouble()
+			: (1.0 / 30.0);
 
 	// Get the video packet start time (in seconds)
-	double video_seconds = (double(pts) * info.video_timebase.ToDouble()) + pts_offset_seconds;
+	double video_seconds = (double(pts) * video_timebase_value) + pts_offset_seconds;
 
 	// Divide by the video timebase, to get the video frame number (frame # is decimal at this point)
-	int64_t frame = round(video_seconds * info.fps.ToDouble()) + 1;
+	int64_t frame = round(video_seconds * fps_value) + 1;
 
 	// Keep track of the expected video frame #
 	if (current_video_frame == 0)
@@ -2264,11 +2327,17 @@ int64_t FFmpegReader::ConvertVideoPTStoFrame(int64_t pts) {
 
 // Convert Frame Number into Video PTS
 int64_t FFmpegReader::ConvertFrameToVideoPTS(int64_t frame_number) {
+	const double fps_value = (info.fps.num > 0 && info.fps.den > 0) ? info.fps.ToDouble() : 30.0;
+	const double video_timebase_value =
+		(info.video_timebase.num > 0 && info.video_timebase.den > 0)
+			? info.video_timebase.ToDouble()
+			: (1.0 / 30.0);
+
 	// Get timestamp of this frame (in seconds)
-	double seconds = (double(frame_number - 1) / info.fps.ToDouble()) + pts_offset_seconds;
+	double seconds = (double(frame_number - 1) / fps_value) + pts_offset_seconds;
 
 	// Calculate the # of video packets in this timestamp
-	int64_t video_pts = round(seconds / info.video_timebase.ToDouble());
+	int64_t video_pts = round(seconds / video_timebase_value);
 
 	// Apply PTS offset (opposite)
 	return video_pts;
@@ -2276,11 +2345,17 @@ int64_t FFmpegReader::ConvertFrameToVideoPTS(int64_t frame_number) {
 
 // Convert Frame Number into Video PTS
 int64_t FFmpegReader::ConvertFrameToAudioPTS(int64_t frame_number) {
+	const double fps_value = (info.fps.num > 0 && info.fps.den > 0) ? info.fps.ToDouble() : 30.0;
+	const double audio_timebase_value =
+		(info.audio_timebase.num > 0 && info.audio_timebase.den > 0)
+			? info.audio_timebase.ToDouble()
+			: (1.0 / 48000.0);
+
 	// Get timestamp of this frame (in seconds)
-	double seconds = (double(frame_number - 1) / info.fps.ToDouble()) + pts_offset_seconds;
+	double seconds = (double(frame_number - 1) / fps_value) + pts_offset_seconds;
 
 	// Calculate the # of audio packets in this timestamp
-	int64_t audio_pts = round(seconds / info.audio_timebase.ToDouble());
+	int64_t audio_pts = round(seconds / audio_timebase_value);
 
 	// Apply PTS offset (opposite)
 	return audio_pts;
@@ -2288,11 +2363,17 @@ int64_t FFmpegReader::ConvertFrameToAudioPTS(int64_t frame_number) {
 
 // Calculate Starting video frame and sample # for an audio PTS
 AudioLocation FFmpegReader::GetAudioPTSLocation(int64_t pts) {
+	const double audio_timebase_value =
+		(info.audio_timebase.num > 0 && info.audio_timebase.den > 0)
+			? info.audio_timebase.ToDouble()
+			: (1.0 / 48000.0);
+	const double fps_value = (info.fps.num > 0 && info.fps.den > 0) ? info.fps.ToDouble() : 30.0;
+
 	// Get the audio packet start time (in seconds)
-	double audio_seconds = (double(pts) * info.audio_timebase.ToDouble()) + pts_offset_seconds;
+	double audio_seconds = (double(pts) * audio_timebase_value) + pts_offset_seconds;
 
 	// Divide by the video timebase, to get the video frame number (frame # is decimal at this point)
-	double frame = (audio_seconds * info.fps.ToDouble()) + 1;
+	double frame = (audio_seconds * fps_value) + 1;
 
 	// Frame # as a whole number (no more decimals)
 	int64_t whole_frame = int64_t(frame);

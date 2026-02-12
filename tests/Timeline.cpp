@@ -1010,6 +1010,29 @@ TEST_CASE( "ApplyJSONDiff and FrameMappers", "[libopenshot][timeline]" )
 	CHECK(clip1.Reader()->Name() == "QtImageReader");
 }
 
+TEST_CASE( "ApplyJSONDiff insert invalidates overlapping timeline cache", "[libopenshot][timeline]" )
+{
+	// Create timeline with no clips so cached frames are black placeholders
+	Timeline t(640, 480, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	t.Open();
+
+	// Cache a frame in the area where we'll insert a new clip
+	std::shared_ptr<Frame> cached_before = t.GetFrame(10);
+	REQUIRE(cached_before != nullptr);
+	REQUIRE(t.GetCache() != nullptr);
+	REQUIRE(t.GetCache()->Contains(10));
+
+	// Insert clip via JSON diff overlapping frame 10
+	std::stringstream path1;
+	path1 << TEST_MEDIA_PATH << "interlaced.png";
+	std::stringstream json_change;
+	json_change << "[{\"type\":\"insert\",\"key\":[\"clips\"],\"value\":{\"id\":\"INSERT_CACHE_INVALIDATE\",\"layer\":1,\"position\":0.0,\"start\":0,\"end\":10,\"reader\":{\"acodec\":\"\",\"audio_bit_rate\":0,\"audio_stream_index\":-1,\"audio_timebase\":{\"den\":1,\"num\":1},\"channel_layout\":4,\"channels\":0,\"display_ratio\":{\"den\":1,\"num\":1},\"duration\":3600.0,\"file_size\":\"160000\",\"fps\":{\"den\":1,\"num\":30},\"has_audio\":false,\"has_single_image\":true,\"has_video\":true,\"height\":200,\"interlaced_frame\":false,\"metadata\":{},\"path\":\"" << path1.str() << "\",\"pixel_format\":-1,\"pixel_ratio\":{\"den\":1,\"num\":1},\"sample_rate\":0,\"top_field_first\":true,\"type\":\"QtImageReader\",\"vcodec\":\"\",\"video_bit_rate\":0,\"video_length\":\"108000\",\"video_stream_index\":-1,\"video_timebase\":{\"den\":30,\"num\":1},\"width\":200}},\"partial\":false}]";
+	t.ApplyJsonDiff(json_change.str());
+
+	// Overlapping cached frame should be invalidated
+	CHECK(!t.GetCache()->Contains(10));
+}
+
 TEST_CASE( "ApplyJSONDiff Update Reader Info", "[libopenshot][timeline]" )
 {
 	// Create a timeline
