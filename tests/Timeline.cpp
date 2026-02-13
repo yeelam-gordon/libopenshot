@@ -722,6 +722,40 @@ TEST_CASE( "GetMinFrame and GetMinTime", "[libopenshot][timeline]" )
     CHECK(t.GetMinFrame() == (5 * 30) + 1);
 }
 
+TEST_CASE( "GetMaxFrame with 24fps clip mapped to 30fps timeline", "[libopenshot][timeline]" )
+{
+	Timeline t(640, 480, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	t.AutoMapClips(true);
+
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "sintel_trailer-720p.mp4";
+	Clip clip(path.str());
+
+	REQUIRE(clip.Reader()->info.fps.num == 24);
+	REQUIRE(clip.Reader()->info.fps.den == 1);
+
+	t.AddClip(&clip);
+
+	REQUIRE(clip.Reader()->Name() == "FrameMapper");
+	auto* mapper = static_cast<FrameMapper*>(clip.Reader());
+	REQUIRE(mapper->info.fps.num == 30);
+	REQUIRE(mapper->info.fps.den == 1);
+	REQUIRE(mapper->info.video_length > 0);
+
+	const int64_t timeline_max_frame = t.GetMaxFrame();
+	const int64_t mapped_video_length = mapper->info.video_length;
+
+	// Timeline max frame is computed from duration (seconds), while mapper length is
+	// rounded frame count. They should stay aligned within one frame at this boundary.
+	CHECK(timeline_max_frame >= mapped_video_length);
+	CHECK((timeline_max_frame - mapped_video_length) <= 1);
+
+	// Regression guard: fetching the mapped tail frame should not throw.
+	t.Open();
+	CHECK_NOTHROW(t.GetFrame(mapped_video_length));
+	t.Close();
+}
+
 TEST_CASE( "Multi-threaded Timeline GetFrame", "[libopenshot][timeline]" )
 {
 	Timeline *t = new Timeline(1280, 720, Fraction(24, 1), 48000, 2, LAYOUT_STEREO);

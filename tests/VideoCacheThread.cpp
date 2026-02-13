@@ -130,6 +130,35 @@ TEST_CASE("isReady: requires cached frames ahead of playhead", "[VideoCacheThrea
     CHECK(thread.isReady());
 }
 
+TEST_CASE("isReady: clamps preroll requirement at timeline boundaries", "[VideoCacheThread]") {
+    TestableVideoCacheThread thread;
+
+    Timeline timeline(/*width=*/1280, /*height=*/720, /*fps=*/Fraction(30,1),
+                      /*sample_rate=*/48000, /*channels=*/2, ChannelLayout::LAYOUT_STEREO);
+    thread.Reader(&timeline);
+
+    const int64_t end = timeline.info.video_length;
+    REQUIRE(end > 10);
+
+    // Forward near end: only a few frames remain, so don't require full preroll.
+    thread.setMinFramesAhead(30);
+    thread.setSpeed(1);
+    thread.setPlayhead(end - 5);
+    thread.setLastCachedIndex(end - 4);
+    CHECK(!thread.isReady());
+    thread.setLastCachedIndex(end);
+    CHECK(thread.isReady());
+
+    // Backward near start: only a few frames exist behind playhead.
+    thread.setMinFramesAhead(30);
+    thread.setSpeed(-1);
+    thread.setPlayhead(3);
+    thread.setLastCachedIndex(2);
+    CHECK(!thread.isReady());
+    thread.setLastCachedIndex(1);
+    CHECK(thread.isReady());
+}
+
 TEST_CASE("clearCacheIfPaused: clears only when paused and not in cache", "[VideoCacheThread]") {
     TestableVideoCacheThread thread;
     CacheMemory cache(/*max_bytes=*/100000000);
