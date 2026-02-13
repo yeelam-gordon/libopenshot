@@ -583,14 +583,16 @@ void FFmpegReader::Open() {
 					(info.channels <= 0) ||
 					(info.sample_rate <= 0) ||
 					(info.audio_timebase.num <= 0) ||
-					(info.audio_timebase.den <= 0);
+					(info.audio_timebase.den <= 0) ||
+					(aCodecCtx->sample_fmt == AV_SAMPLE_FMT_NONE);
 				if (invalid_audio_info) {
 					ZmqLogger::Instance()->AppendDebugMethod(
 						"FFmpegReader::Open (Disable invalid audio stream)",
 						"channels", info.channels,
 						"sample_rate", info.sample_rate,
 						"audio_timebase.num", info.audio_timebase.num,
-						"audio_timebase.den", info.audio_timebase.den);
+						"audio_timebase.den", info.audio_timebase.den,
+						"sample_fmt", static_cast<int>(aCodecCtx ? aCodecCtx->sample_fmt : AV_SAMPLE_FMT_NONE));
 					info.has_audio = false;
 					info.audio_stream_index = -1;
 					audioStream = -1;
@@ -893,12 +895,20 @@ void FFmpegReader::ApplyDurationStrategy() {
 }
 
 void FFmpegReader::UpdateAudioInfo() {
+	const int codec_channels =
+#if HAVE_CH_LAYOUT
+		AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout.nb_channels;
+#else
+		AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channels;
+#endif
+
 	// Set default audio channel layout (if needed)
 #if HAVE_CH_LAYOUT
-	if (!av_channel_layout_check(&(AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout)))
+	if (codec_channels > 0 &&
+		!av_channel_layout_check(&(AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout)))
 		AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout = (AVChannelLayout) AV_CHANNEL_LAYOUT_STEREO;
 #else
-	if (AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channel_layout == 0)
+	if (codec_channels > 0 && AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channel_layout == 0)
 		AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channel_layout = av_get_default_channel_layout(AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channels);
 #endif
 
