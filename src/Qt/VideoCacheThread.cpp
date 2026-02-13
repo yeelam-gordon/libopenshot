@@ -61,10 +61,32 @@ namespace openshot
         const int64_t cached_index = last_cached_index.load();
         const int64_t playhead = requested_display_frame.load();
         int dir = computeDirection();
-        if (dir > 0) {
-            return (cached_index >= playhead + ready_min);
+
+        // Near timeline boundaries, don't require more pre-roll than can exist.
+        int64_t max_frame = reader->info.video_length;
+        if (auto* timeline = dynamic_cast<Timeline*>(reader)) {
+            const int64_t timeline_max = timeline->GetMaxFrame();
+            if (timeline_max > 0) {
+                max_frame = timeline_max;
+            }
         }
-        return (cached_index <= playhead - ready_min);
+        if (max_frame < 1) {
+            return false;
+        }
+
+        int64_t required_ahead = min_frames_ahead;
+        if (required_ahead < 0) {
+            required_ahead = 0;
+        }
+        int64_t available_ahead = (dir > 0)
+            ? std::max<int64_t>(0, max_frame - requested_display_frame)
+            : std::max<int64_t>(0, requested_display_frame - 1);
+        required_ahead = std::min(required_ahead, available_ahead);
+
+        if (dir > 0) {
+            return (cached_index >= playhead + required_ahead);
+        }
+        return (cached_index <= playhead - required_ahead);
     }
 
     void VideoCacheThread::setSpeed(int new_speed)
