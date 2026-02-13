@@ -74,13 +74,10 @@ namespace openshot
             return false;
         }
 
-        int64_t required_ahead = min_frames_ahead;
-        if (required_ahead < 0) {
-            required_ahead = 0;
-        }
+        int64_t required_ahead = ready_min;
         int64_t available_ahead = (dir > 0)
-            ? std::max<int64_t>(0, max_frame - requested_display_frame)
-            : std::max<int64_t>(0, requested_display_frame - 1);
+            ? std::max<int64_t>(0, max_frame - playhead)
+            : std::max<int64_t>(0, playhead - 1);
         required_ahead = std::min(required_ahead, available_ahead);
 
         if (dir > 0) {
