@@ -138,6 +138,14 @@ TEST_CASE( "Copy_Constructor", "[libopenshot][frame]" )
 	CHECK(f1.GetAudioSamplesCount() == f2.GetAudioSamplesCount());
 }
 
+TEST_CASE( "GetSamplesPerFrame invalid rate inputs", "[libopenshot][frame]" )
+{
+	CHECK(Frame::GetSamplesPerFrame(/*frame_number=*/1, Fraction(0, 1), /*sample_rate=*/44100, /*channels=*/2) == 0);
+	CHECK(Frame::GetSamplesPerFrame(/*frame_number=*/1, Fraction(30, 0), /*sample_rate=*/44100, /*channels=*/2) == 0);
+	CHECK(Frame::GetSamplesPerFrame(/*frame_number=*/1, Fraction(30, 1), /*sample_rate=*/0, /*channels=*/2) == 0);
+	CHECK(Frame::GetSamplesPerFrame(/*frame_number=*/1, Fraction(30, 1), /*sample_rate=*/44100, /*channels=*/0) == 0);
+}
+
 #ifdef USE_OPENCV
 TEST_CASE( "Convert_Image", "[libopenshot][opencv][frame]" )
 {

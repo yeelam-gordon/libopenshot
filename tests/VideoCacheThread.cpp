@@ -36,12 +36,12 @@ public:
     using VideoCacheThread::handleUserSeekWithPreroll;
     using VideoCacheThread::computePrerollFrames;
 
-    int64_t getLastCachedIndex() const { return last_cached_index; }
-    void    setLastCachedIndex(int64_t v) { last_cached_index = v; }
-    void    setPlayhead(int64_t v) { requested_display_frame = v; }
-    void    setMinFramesAhead(int64_t v) { min_frames_ahead = v; }
-    void    setLastDir(int d) { last_dir = d; }
-    void    forceUserSeekFlag() { userSeeked = true; }
+    int64_t getLastCachedIndex() const { return last_cached_index.load(); }
+    void    setLastCachedIndex(int64_t v) { last_cached_index.store(v); }
+    void    setPlayhead(int64_t v) { requested_display_frame.store(v); }
+    void    setMinFramesAhead(int64_t v) { min_frames_ahead.store(v); }
+    void    setLastDir(int d) { last_dir.store(d); }
+    void    forceUserSeekFlag() { userSeeked.store(true); }
 };
 
 // ----------------------------------------------------------------------------

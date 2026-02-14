@@ -70,6 +70,9 @@ void CacheMemory::Add(std::shared_ptr<Frame> frame)
 
 // Check if frame is already contained in cache
 bool CacheMemory::Contains(int64_t frame_number) {
+	// Create a scoped lock, to protect the cache from multiple threads
+	const std::lock_guard<std::recursive_mutex> lock(*cacheMutex);
+
 	if (frames.count(frame_number) > 0) {
 		return true;
 	} else {
