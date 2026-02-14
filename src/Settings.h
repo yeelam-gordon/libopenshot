@@ -67,11 +67,14 @@ namespace openshot {
 		/// Number of threads of OpenMP
 		int OMP_THREADS = 16;
 
-		/// Number of threads that ffmpeg uses
-		int FF_THREADS = 16;
+			/// Number of threads that ffmpeg uses
+			int FF_THREADS = 16;
 
-		/// Maximum rows that hardware decode can handle
-		int DE_LIMIT_HEIGHT_MAX = 1100;
+			/// Minimum number of frames for frame-count-based caches
+			int CACHE_MIN_FRAMES = 24;
+
+			/// Maximum rows that hardware decode can handle
+			int DE_LIMIT_HEIGHT_MAX = 1100;
 
 		/// Maximum columns that hardware decode can handle
 		int DE_LIMIT_WIDTH_MAX = 1950;
@@ -86,10 +89,10 @@ namespace openshot {
 		float VIDEO_CACHE_PERCENT_AHEAD = 0.7;
 
 		/// Minimum number of frames to cache before playback begins
-		int VIDEO_CACHE_MIN_PREROLL_FRAMES = 24;
+		int VIDEO_CACHE_MIN_PREROLL_FRAMES = 30;
 
 		/// Max number of frames (ahead of playhead) to cache during playback
-		int VIDEO_CACHE_MAX_PREROLL_FRAMES = 48;
+		int VIDEO_CACHE_MAX_PREROLL_FRAMES = 60;
 
 		/// Max number of frames (when paused) to cache for playback
 		int VIDEO_CACHE_MAX_FRAMES = 30 * 10;

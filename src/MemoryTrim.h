@@ -25,6 +25,6 @@ namespace openshot {
  * @param force If true, bypass the debounce interval (useful for teardown).
  * @return true if a platform-specific trim call was made, false otherwise.
  */
-bool TrimMemoryToOS(bool force = false) noexcept;
+bool TrimMemoryToOS() noexcept;
 
 }  // namespace openshot

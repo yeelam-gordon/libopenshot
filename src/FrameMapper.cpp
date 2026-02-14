@@ -11,6 +11,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 #include <cmath>
+#include <algorithm>
 #include <iostream>
 #include <iomanip>
 
@@ -49,7 +50,8 @@ FrameMapper::FrameMapper(ReaderBase *reader, Fraction target, PulldownType targe
 	field_toggle = true;
 
 	// Adjust cache size based on size of frame and audio
-	final_cache.SetMaxBytesFromInfo(OPEN_MP_NUM_PROCESSORS, info.width, info.height, info.sample_rate, info.channels);
+	const int initial_cache_frames = std::max(Settings::Instance()->CACHE_MIN_FRAMES, OPEN_MP_NUM_PROCESSORS);
+	final_cache.SetMaxBytesFromInfo(initial_cache_frames, info.width, info.height, info.sample_rate, info.channels);
 }
 
 // Destructor
@@ -746,9 +748,6 @@ void FrameMapper::Close()
 		SWR_FREE(&avr);
 		avr = NULL;
 	}
-
-	// Release free’d arenas back to OS after heavy teardown
-	TrimMemoryToOS(true);
 }
 
 
@@ -845,7 +844,8 @@ void FrameMapper::ChangeMapping(Fraction target_fps, PulldownType target_pulldow
 	final_cache.Clear();
 
 	// Adjust cache size based on size of frame and audio
-	final_cache.SetMaxBytesFromInfo(24, info.width, info.height, info.sample_rate, info.channels);
+	const int reset_cache_frames = std::max(Settings::Instance()->CACHE_MIN_FRAMES, OPEN_MP_NUM_PROCESSORS * 4);
+	final_cache.SetMaxBytesFromInfo(reset_cache_frames, info.width, info.height, info.sample_rate, info.channels);
 
 	// Deallocate resample buffer
 	if (avr) {

@@ -25,7 +25,7 @@
 
 namespace {
 // Limit trim attempts to once per interval to avoid spamming platform calls
-constexpr uint64_t kMinTrimIntervalMs = 1000; // 1s debounce
+constexpr uint64_t kMinTrimIntervalMs = 30000; // 30s debounce
 std::atomic<uint64_t> g_last_trim_ms{0};
 std::atomic<bool> g_trim_in_progress{false};
 
@@ -37,12 +37,12 @@ uint64_t NowMs() {
 
 namespace openshot {
 
-bool TrimMemoryToOS(bool force) noexcept {
+bool TrimMemoryToOS() noexcept {
 	const uint64_t now_ms = NowMs();
 	const uint64_t last_ms = g_last_trim_ms.load(std::memory_order_relaxed);
 
-	// Skip if we recently trimmed (unless forced)
-	if (!force && now_ms - last_ms < kMinTrimIntervalMs)
+	// Skip if we recently trimmed
+	if (now_ms - last_ms < kMinTrimIntervalMs)
 		return false;
 
 	// Only one trim attempt runs at a time
@@ -70,8 +70,9 @@ bool TrimMemoryToOS(bool force) noexcept {
 	did_trim = false;
 #endif
 
-	if (did_trim)
+	if (did_trim) {
 		g_last_trim_ms.store(now_ms, std::memory_order_relaxed);
+	}
 
 	g_trim_in_progress.store(false, std::memory_order_release);
 	return did_trim;

@@ -128,6 +128,7 @@ namespace openshot {
 		int64_t pts_total;
 		int64_t pts_counter;
 		std::shared_ptr<openshot::Frame> last_video_frame;
+		std::shared_ptr<openshot::Frame> last_final_video_frame;
 
 		bool is_seeking;
 		int64_t seeking_pts;
@@ -136,6 +137,8 @@ namespace openshot {
 		int seek_count;
 		int64_t seek_audio_frame_found;
 		int64_t seek_video_frame_found;
+		int64_t last_seek_max_frame;
+		int seek_stagnant_count;
 
 		int64_t last_frame;
 		int64_t largest_frame_processed;
@@ -172,7 +175,7 @@ namespace openshot {
 		void CheckFPS();
 
 		/// Check the current seek position and determine if we need to seek again
-		bool CheckSeek(bool is_video);
+		bool CheckSeek();
 
 		/// Check the working queue, and move finished frames to the finished queue
 		void CheckWorkingFrames(int64_t requested_frame);

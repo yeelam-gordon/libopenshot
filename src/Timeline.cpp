@@ -19,6 +19,7 @@
 #include "FrameMapper.h"
 #include "Exceptions.h"
 
+#include <algorithm>
 #include <QDir>
 #include <QFileInfo>
 #include <unordered_map>
@@ -69,7 +70,8 @@ Timeline::Timeline(int width, int height, Fraction fps, int sample_rate, int cha
 
 	// Init cache
 	final_cache = new CacheMemory();
-	final_cache->SetMaxBytesFromInfo(24, info.width, info.height, info.sample_rate, info.channels);
+	const int cache_frames = std::max(Settings::Instance()->CACHE_MIN_FRAMES, OPEN_MP_NUM_PROCESSORS * 4);
+	final_cache->SetMaxBytesFromInfo(cache_frames, info.width, info.height, info.sample_rate, info.channels);
 }
 
 // Delegating constructor that copies parameters from a provided ReaderInfo
@@ -201,7 +203,8 @@ Timeline::Timeline(const std::string& projectPath, bool convert_absolute_paths) 
 
 	// Init cache
 	final_cache = new CacheMemory();
-	final_cache->SetMaxBytesFromInfo(24, info.width, info.height, info.sample_rate, info.channels);
+	const int cache_frames = std::max(Settings::Instance()->CACHE_MIN_FRAMES, OPEN_MP_NUM_PROCESSORS * 4);
+	final_cache->SetMaxBytesFromInfo(cache_frames, info.width, info.height, info.sample_rate, info.channels);
 }
 
 Timeline::~Timeline() {
@@ -1458,6 +1461,11 @@ void Timeline::apply_json_to_clips(Json::Value change) {
 		// Add clip to timeline
 		AddClip(clip);
 
+		// Calculate start and end frames that this impacts, and remove those frames from the cache
+		int64_t new_starting_frame = (clip->Position() * info.fps.ToDouble()) + 1;
+		int64_t new_ending_frame = ((clip->Position() + clip->Duration()) * info.fps.ToDouble()) + 1;
+		final_cache->Remove(new_starting_frame - 8, new_ending_frame + 8);
+
 	} else if (change_type == "update") {
 
 		// Update existing clip
@@ -1744,6 +1752,8 @@ void Timeline::apply_json_to_timeline(Json::Value change) {
 
 // Clear all caches
 void Timeline::ClearAllCache(bool deep) {
+	// Get lock (prevent getting frames while this happens)
+	const std::lock_guard<std::recursive_mutex> guard(getFrameMutex);
 
 	// Clear primary cache
 	if (final_cache) {

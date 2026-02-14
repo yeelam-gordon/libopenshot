@@ -74,13 +74,13 @@ namespace openshot {
 	/// the Clip with the highest end-frame number using std::max_element
 	struct CompareClipEndFrames {
 		bool operator()(const openshot::Clip* lhs, const openshot::Clip* rhs) {
-			return (lhs->Position() + lhs->Duration()) <= (rhs->Position() + rhs->Duration());
+			return (lhs->Position() + lhs->Duration()) < (rhs->Position() + rhs->Duration());
 	}};
 
 	/// Like CompareClipEndFrames, but for effects
 	struct CompareEffectEndFrames {
 		bool operator()(const openshot::EffectBase* lhs, const openshot::EffectBase* rhs) {
-			return (lhs->Position() + lhs->Duration()) <= (rhs->Position() + rhs->Duration());
+			return (lhs->Position() + lhs->Duration()) < (rhs->Position() + rhs->Duration());
 	}};
 
 	/**

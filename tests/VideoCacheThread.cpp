@@ -33,11 +33,15 @@ public:
     using VideoCacheThread::clearCacheIfPaused;
     using VideoCacheThread::prefetchWindow;
     using VideoCacheThread::handleUserSeek;
+    using VideoCacheThread::handleUserSeekWithPreroll;
+    using VideoCacheThread::computePrerollFrames;
 
-    int64_t getLastCachedIndex() const { return last_cached_index; }
-    void    setLastCachedIndex(int64_t v) { last_cached_index = v; }
-    void    setLastDir(int d) { last_dir = d; }
-    void    forceUserSeekFlag() { userSeeked = true; }
+    int64_t getLastCachedIndex() const { return last_cached_index.load(); }
+    void    setLastCachedIndex(int64_t v) { last_cached_index.store(v); }
+    void    setPlayhead(int64_t v) { requested_display_frame.store(v); }
+    void    setMinFramesAhead(int64_t v) { min_frames_ahead.store(v); }
+    void    setLastDir(int d) { last_dir.store(d); }
+    void    forceUserSeekFlag() { userSeeked.store(true); }
 };
 
 // ----------------------------------------------------------------------------
@@ -95,6 +99,66 @@ TEST_CASE("computeWindowBounds: forward and backward bounds, clamped", "[VideoCa
     CHECK(we == 3);
 }
 
+TEST_CASE("isReady: requires cached frames ahead of playhead", "[VideoCacheThread]") {
+    TestableVideoCacheThread thread;
+
+    Timeline timeline(/*width=*/1280, /*height=*/720, /*fps=*/Fraction(60,1),
+                      /*sample_rate=*/48000, /*channels=*/2, ChannelLayout::LAYOUT_STEREO);
+    thread.Reader(&timeline);
+
+    thread.setMinFramesAhead(30);
+    thread.setPlayhead(200);
+    thread.setSpeed(1);
+
+    thread.setLastCachedIndex(200);
+    CHECK(!thread.isReady());
+
+    thread.setLastCachedIndex(229);
+    CHECK(!thread.isReady());
+
+    thread.setLastCachedIndex(230);
+    CHECK(thread.isReady());
+
+    thread.setSpeed(-1);
+    thread.setLastCachedIndex(200);
+    CHECK(!thread.isReady());
+
+    thread.setLastCachedIndex(171);
+    CHECK(!thread.isReady());
+
+    thread.setLastCachedIndex(170);
+    CHECK(thread.isReady());
+}
+
+TEST_CASE("isReady: clamps preroll requirement at timeline boundaries", "[VideoCacheThread]") {
+    TestableVideoCacheThread thread;
+
+    Timeline timeline(/*width=*/1280, /*height=*/720, /*fps=*/Fraction(30,1),
+                      /*sample_rate=*/48000, /*channels=*/2, ChannelLayout::LAYOUT_STEREO);
+    thread.Reader(&timeline);
+
+    const int64_t end = timeline.info.video_length;
+    REQUIRE(end > 10);
+
+    // Forward near end: only a few frames remain, so don't require full preroll.
+    thread.setMinFramesAhead(30);
+    thread.setSpeed(1);
+    thread.setPlayhead(end - 5);
+    thread.setLastCachedIndex(end - 4);
+    CHECK(!thread.isReady());
+    thread.setLastCachedIndex(end);
+    CHECK(thread.isReady());
+
+    // Backward near start: only a few frames exist behind playhead.
+    thread.setMinFramesAhead(30);
+    thread.setSpeed(-1);
+    thread.setPlayhead(3);
+    thread.setLastCachedIndex(2);
+    CHECK(!thread.isReady());
+    thread.setLastCachedIndex(1);
+    CHECK(thread.isReady());
+}
+
 TEST_CASE("clearCacheIfPaused: clears only when paused and not in cache", "[VideoCacheThread]") {
     TestableVideoCacheThread thread;
     CacheMemory cache(/*max_bytes=*/100000000);
@@ -137,6 +201,22 @@ TEST_CASE("handleUserSeek: sets last_cached_index to playhead - dir", "[VideoCac
 
     thread.handleUserSeek(/*playhead=*/50, /*dir=*/-1);
     CHECK(thread.getLastCachedIndex() == 51);
+}
+
+TEST_CASE("handleUserSeekWithPreroll: offsets start by preroll frames", "[VideoCacheThread]") {
+    TestableVideoCacheThread thread;
+
+    thread.handleUserSeekWithPreroll(/*playhead=*/60, /*dir=*/1, /*timeline_end=*/200, /*preroll_frames=*/30);
+    CHECK(thread.getLastCachedIndex() == 29);
+
+    thread.handleUserSeekWithPreroll(/*playhead=*/10, /*dir=*/1, /*timeline_end=*/200, /*preroll_frames=*/30);
+    CHECK(thread.getLastCachedIndex() == 0);
+
+    thread.handleUserSeekWithPreroll(/*playhead=*/1, /*dir=*/1, /*timeline_end=*/200, /*preroll_frames=*/30);
+    CHECK(thread.getLastCachedIndex() == 0);
+
+    thread.handleUserSeekWithPreroll(/*playhead=*/60, /*dir=*/-1, /*timeline_end=*/200, /*preroll_frames=*/30);
+    CHECK(thread.getLastCachedIndex() == 91);
 }
 
 TEST_CASE("prefetchWindow: forward caching with FFmpegReader & CacheMemory", "[VideoCacheThread]") {

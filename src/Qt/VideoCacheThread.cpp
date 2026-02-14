@@ -29,6 +29,7 @@ namespace openshot
         , last_speed(1)
         , last_dir(1)                   // assume forward (+1) on first launch
         , userSeeked(false)
+        , preroll_on_next_fill(false)
         , requested_display_frame(1)
         , current_display_frame(1)
         , cached_frame_count(0)
@@ -52,21 +53,47 @@ namespace openshot
             return false;
         }
 
-        if (min_frames_ahead < 0) {
+        const int64_t ready_min = min_frames_ahead.load();
+        if (ready_min < 0) {
             return true;
         }
 
-        return (cached_frame_count > min_frames_ahead);
+        const int64_t cached_index = last_cached_index.load();
+        const int64_t playhead = requested_display_frame.load();
+        int dir = computeDirection();
+
+        // Near timeline boundaries, don't require more pre-roll than can exist.
+        int64_t max_frame = reader->info.video_length;
+        if (auto* timeline = dynamic_cast<Timeline*>(reader)) {
+            const int64_t timeline_max = timeline->GetMaxFrame();
+            if (timeline_max > 0) {
+                max_frame = timeline_max;
+            }
+        }
+        if (max_frame < 1) {
+            return false;
+        }
+
+        int64_t required_ahead = ready_min;
+        int64_t available_ahead = (dir > 0)
+            ? std::max<int64_t>(0, max_frame - playhead)
+            : std::max<int64_t>(0, playhead - 1);
+        required_ahead = std::min(required_ahead, available_ahead);
+
+        if (dir > 0) {
+            return (cached_index >= playhead + required_ahead);
+        }
+        return (cached_index <= playhead - required_ahead);
     }
 
     void VideoCacheThread::setSpeed(int new_speed)
     {
         // Only update last_speed and last_dir when new_speed != 0
         if (new_speed != 0) {
-            last_speed = new_speed;
-            last_dir   = (new_speed > 0 ? 1 : -1);
+            last_speed.store(new_speed);
+            last_dir.store(new_speed > 0 ? 1 : -1);
         }
-        speed = new_speed;
+        speed.store(new_speed);
     }
 
     // Get the size in bytes of a frame (rough estimate)
@@ -101,24 +128,38 @@ namespace openshot
 
     void VideoCacheThread::Seek(int64_t new_position, bool start_preroll)
     {
-        if (start_preroll) {
-            userSeeked = true;
+        bool should_mark_seek = false;
+        bool should_preroll = false;
+        int64_t new_cached_count = cached_frame_count.load();
 
+        if (start_preroll) {
+            should_mark_seek = true;
             CacheBase* cache = reader ? reader->GetCache() : nullptr;
 
             if (cache && !cache->Contains(new_position))
             {
                 // If user initiated seek, and current frame not found (
-                Timeline* timeline = static_cast<Timeline*>(reader);
-                timeline->ClearAllCache();
-                cached_frame_count = 0;
+                if (Timeline* timeline = dynamic_cast<Timeline*>(reader)) {
+                    timeline->ClearAllCache();
+                }
+                new_cached_count = 0;
+                should_preroll = true;
             }
             else if (cache)
             {
-                cached_frame_count = cache->Count();
+                new_cached_count = cache->Count();
             }
         }
-        requested_display_frame = new_position;
+
+        {
+            std::lock_guard<std::mutex> guard(seek_state_mutex);
+            requested_display_frame.store(new_position);
+            cached_frame_count.store(new_cached_count);
+            if (start_preroll) {
+                preroll_on_next_fill.store(should_preroll);
+                userSeeked.store(should_mark_seek);
+            }
+        }
     }
 
     void VideoCacheThread::Seek(int64_t new_position)
@@ -129,13 +170,50 @@ namespace openshot
     int VideoCacheThread::computeDirection() const
     {
         // If speed ≠ 0, use its sign; if speed==0, keep last_dir
-        return (speed != 0 ? (speed > 0 ? 1 : -1) : last_dir);
+        const int current_speed = speed.load();
+        if (current_speed != 0) {
+            return (current_speed > 0 ? 1 : -1);
+        }
+        return last_dir.load();
     }
 
     void VideoCacheThread::handleUserSeek(int64_t playhead, int dir)
     {
         // Place last_cached_index just “behind” playhead in the given dir
-        last_cached_index = playhead - dir;
+        last_cached_index.store(playhead - dir);
+    }
+
+    void VideoCacheThread::handleUserSeekWithPreroll(int64_t playhead,
+                                                     int dir,
+                                                     int64_t timeline_end,
+                                                     int64_t preroll_frames)
+    {
+        int64_t preroll_start = playhead;
+        if (preroll_frames > 0) {
+            if (dir > 0) {
+                preroll_start = std::max<int64_t>(1, playhead - preroll_frames);
+            }
+            else {
+                preroll_start = std::min<int64_t>(timeline_end, playhead + preroll_frames);
+            }
+        }
+        last_cached_index.store(preroll_start - dir);
+    }
+
+    int64_t VideoCacheThread::computePrerollFrames(const Settings* settings) const
+    {
+        if (!settings) {
+            return 0;
+        }
+        int64_t min_frames = settings->VIDEO_CACHE_MIN_PREROLL_FRAMES;
+        int64_t max_frames = settings->VIDEO_CACHE_MAX_PREROLL_FRAMES;
+        if (min_frames < 0) {
+            return 0;
+        }
+        if (max_frames > 0 && min_frames > max_frames) {
+            min_frames = max_frames;
+        }
+        return min_frames;
     }
 
     bool VideoCacheThread::clearCacheIfPaused(int64_t playhead,
@@ -144,9 +222,10 @@ namespace openshot
     {
         if (paused && !cache->Contains(playhead)) {
             // If paused and playhead not in cache, clear everything
-            Timeline* timeline = static_cast<Timeline*>(reader);
-            timeline->ClearAllCache();
-            cached_frame_count = 0;
+            if (Timeline* timeline = dynamic_cast<Timeline*>(reader)) {
+                timeline->ClearAllCache();
+            }
+            cached_frame_count.store(0);
             return true;
         }
         return false;
@@ -181,7 +260,7 @@ namespace openshot
                                           ReaderBase* reader)
     {
         bool window_full = true;
-        int64_t next_frame = last_cached_index + dir;
+        int64_t next_frame = last_cached_index.load() + dir;
 
         // Advance from last_cached_index toward window boundary
         while ((dir > 0 && next_frame <= window_end) ||
@@ -191,7 +270,7 @@ namespace openshot
                 break;
             }
             // If a Seek was requested mid-caching, bail out immediately
-            if (userSeeked) {
+            if (userSeeked.load()) {
                 break;
             }
 
@@ -200,7 +279,7 @@ namespace openshot
                 try {
                     auto framePtr = reader->GetFrame(next_frame);
                     cache->Add(framePtr);
-                    cached_frame_count = cache->Count();
+                    cached_frame_count.store(cache->Count());
                 }
                 catch (const OutOfBoundsFrame&) {
                     break;
@@ -211,7 +290,7 @@ namespace openshot
                 cache->Touch(next_frame);
             }
 
-            last_cached_index = next_frame;
+            last_cached_index.store(next_frame);
             next_frame       += dir;
         }
 
@@ -229,26 +308,31 @@ namespace openshot
 
             // If caching disabled or no reader, mark cache as ready and sleep briefly
             if (!settings->ENABLE_PLAYBACK_CACHING || !cache) {
-                cached_frame_count = (cache ? cache->Count() : 0);
-                min_frames_ahead   = -1;
+                cached_frame_count.store(cache ? cache->Count() : 0);
+                min_frames_ahead.store(-1);
                 std::this_thread::sleep_for(double_micro_sec(50000));
                 continue;
             }
 
             // init local vars
-            min_frames_ahead = settings->VIDEO_CACHE_MIN_PREROLL_FRAMES;
+            min_frames_ahead.store(settings->VIDEO_CACHE_MIN_PREROLL_FRAMES);
 
-            Timeline* timeline    = static_cast<Timeline*>(reader);
+            Timeline* timeline    = dynamic_cast<Timeline*>(reader);
+            if (!timeline) {
+                std::this_thread::sleep_for(double_micro_sec(50000));
+                continue;
+            }
             int64_t  timeline_end = timeline->GetMaxFrame();
-            int64_t  playhead     = requested_display_frame;
-            bool     paused       = (speed == 0);
+            int64_t  playhead     = requested_display_frame.load();
+            bool     paused       = (speed.load() == 0);
+            int64_t  preroll_frames = computePrerollFrames(settings);
 
-            cached_frame_count = cache->Count();
+            cached_frame_count.store(cache->Count());
 
             // Compute effective direction (±1)
             int dir = computeDirection();
-            if (speed != 0) {
-                last_dir = dir;
+            if (speed.load() != 0) {
+                last_dir.store(dir);
             }
 
             // Compute bytes_per_frame, max_bytes, and capacity once
@@ -269,9 +353,25 @@ namespace openshot
             }
 
             // Handle a user-initiated seek
-            if (userSeeked) {
-                handleUserSeek(playhead, dir);
-                userSeeked = false;
+            bool did_user_seek = false;
+            bool use_preroll = false;
+            {
+                std::lock_guard<std::mutex> guard(seek_state_mutex);
+                playhead = requested_display_frame.load();
+                did_user_seek = userSeeked.load();
+                use_preroll = preroll_on_next_fill.load();
+                if (did_user_seek) {
+                    userSeeked.store(false);
+                    preroll_on_next_fill.store(false);
+                }
+            }
+            if (did_user_seek) {
+                if (use_preroll) {
+                    handleUserSeekWithPreroll(playhead, dir, timeline_end, preroll_frames);
+                }
+                else {
+                    handleUserSeek(playhead, dir);
+                }
             }
             else if (!paused && capacity >= 1) {
                 // In playback mode, check if last_cached_index drifted outside the new window
@@ -288,8 +388,8 @@ namespace openshot
                 );
 
                 bool outside_window =
-                    (dir > 0 && last_cached_index > window_end) ||
-                    (dir < 0 && last_cached_index < window_begin);
+                    (dir > 0 && last_cached_index.load() > window_end) ||
+                    (dir < 0 && last_cached_index.load() < window_begin);
                 if (outside_window) {
                     handleUserSeek(playhead, dir);
                 }
@@ -311,12 +411,12 @@ namespace openshot
                 ready_target = 0;
             }
             int64_t configured_min = settings->VIDEO_CACHE_MIN_PREROLL_FRAMES;
-            min_frames_ahead = std::min<int64_t>(configured_min, ready_target);
+            min_frames_ahead.store(std::min<int64_t>(configured_min, ready_target));
 
             // If paused and playhead is no longer in cache, clear everything
             bool did_clear = clearCacheIfPaused(playhead, paused, cache);
             if (did_clear) {
-                handleUserSeek(playhead, dir);
+                handleUserSeekWithPreroll(playhead, dir, timeline_end, preroll_frames);
             }
 
             // Compute the current caching window
