@@ -2263,7 +2263,7 @@ void FFmpegReader::UpdatePTSOffset() {
 		// Video packet
 		if (!has_video_pts && packet->stream_index == videoStream) {
 			// Get the video packet start time (in seconds)
-			video_pts_offset_seconds = 0.0 - (video_pts * info.video_timebase.ToDouble());
+			video_pts_offset_seconds = 0.0 - (pts * info.video_timebase.ToDouble());
 
 			// Is timestamp close to zero (within X seconds)
 			// Ignore wildly invalid timestamps (i.e. -234923423423)
@@ -2283,20 +2283,17 @@ void FFmpegReader::UpdatePTSOffset() {
 		}
 	}
 
-	// Do we have all valid timestamps to determine PTS offset?
-	if (has_video_pts && has_audio_pts) {
-		// Set PTS Offset to the smallest offset
-		//	 [  video timestamp  ]
-		//		   [  audio timestamp  ]
-		//
-		//	 ** SHIFT TIMESTAMPS TO ZERO **
-		//
-		//[  video timestamp  ]
-		//	  [  audio timestamp  ]
-		//
-		// Since all offsets are negative at this point, we want the max value, which
-		// represents the closest to zero
-		pts_offset_seconds = std::max(video_pts_offset_seconds, audio_pts_offset_seconds);
+	// Choose timestamp origin:
+	// - If video exists, anchor timeline frame mapping to video start.
+	//   This avoids AAC priming / audio preroll shifting video frame 1 to frame 2.
+	// - If no video exists (audio-only readers), use audio start.
+	if (info.has_video && has_video_pts) {
+		pts_offset_seconds = video_pts_offset_seconds;
+	} else if (!info.has_video && has_audio_pts) {
+		pts_offset_seconds = audio_pts_offset_seconds;
+	} else if (has_video_pts && has_audio_pts) {
+		// Fallback when stream flags are unusual but both timestamps exist.
+		pts_offset_seconds = video_pts_offset_seconds;
 	}
 }
 
