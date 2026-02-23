@@ -13,12 +13,31 @@
 #include "openshot_catch.h"
 #include <sstream>
 #include <fstream>
-#include <filesystem>
 #include <cstdio>
+#include <cstdlib>
 
 
 #include "Exceptions.h"
 #include "Profiles.h"
+
+static std::string get_temp_test_path(const std::string& file_name) {
+#ifdef _WIN32
+    const char* base = std::getenv("TEMP");
+    if (!base || !*base) {
+        base = std::getenv("TMP");
+    }
+    if (!base || !*base) {
+        base = ".";
+    }
+    return std::string(base) + "\\" + file_name;
+#else
+    const char* base = std::getenv("TMPDIR");
+    if (!base || !*base) {
+        base = "/tmp";
+    }
+    return std::string(base) + "/" + file_name;
+#endif
+}
 
 TEST_CASE( "empty constructor", "[libopenshot][profile]" )
 {
@@ -96,8 +115,7 @@ TEST_CASE( "constructor with example profiles", "[libopenshot][profile]" )
 
 TEST_CASE( "invalid profile path message", "[libopenshot][profile]" )
 {
-    const std::string invalid_path =
-        (std::filesystem::temp_directory_path() / "__openshot_missing_test_profile__").string();
+    const std::string invalid_path = get_temp_test_path("__openshot_missing_test_profile__");
     std::remove(invalid_path.c_str());
     try {
         openshot::Profile p(invalid_path);
@@ -111,8 +129,7 @@ TEST_CASE( "invalid profile path message", "[libopenshot][profile]" )
 
 TEST_CASE( "invalid profile parse message", "[libopenshot][profile]" )
 {
-    const std::string invalid_profile =
-        (std::filesystem::temp_directory_path() / "openshot_invalid_profile_for_test.profile").string();
+    const std::string invalid_profile = get_temp_test_path("openshot_invalid_profile_for_test.profile");
     {
         std::ofstream f(invalid_profile);
         f << "width=abc\n";
