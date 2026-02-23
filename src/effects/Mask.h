@@ -36,12 +36,13 @@ namespace openshot
 	class Mask : public EffectBase
 	{
 	private:
-		ReaderBase *reader;
-		std::shared_ptr<QImage> original_mask;
-		bool needs_refresh;
-
 		/// Init effect settings
 		void init_effect_details();
+
+	protected:
+		bool UseCustomMaskBlend(int64_t frame_number) const override;
+		void ApplyCustomMaskBlend(std::shared_ptr<QImage> original_image, std::shared_ptr<QImage> effected_image,
+							  std::shared_ptr<QImage> mask_image, int64_t frame_number) const override;
 
 	public:
 		bool replace_image;		///< Replace the frame image with a grayscale image representing the mask. Great for debugging a mask.
@@ -90,10 +91,10 @@ namespace openshot
 		std::string PropertiesJSON(int64_t requested_frame) const override;
 
 		/// Get the reader object of the mask grayscale image
-		ReaderBase* Reader() { return reader; };
+		ReaderBase* Reader() { return MaskReader(); };
 
 		/// Set a new reader to be used by the mask effect (grayscale image)
-		void Reader(ReaderBase *new_reader) { reader = new_reader; };
+		void Reader(ReaderBase *new_reader);
 	};
 
 }

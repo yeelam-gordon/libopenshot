@@ -1284,9 +1284,9 @@ void Clip::apply_effects(std::shared_ptr<Frame> frame, int64_t timeline_frame_nu
 	{
 		// Apply the effect to this frame
 		if (effect->info.apply_before_clip && before_keyframes) {
-			effect->GetFrame(frame, frame->number);
+			effect->ProcessFrame(frame, frame->number);
 		} else if (!effect->info.apply_before_clip && !before_keyframes) {
-			effect->GetFrame(frame, frame->number);
+			effect->ProcessFrame(frame, frame->number);
 		}
 	}
 

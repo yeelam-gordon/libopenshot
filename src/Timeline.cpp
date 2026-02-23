@@ -585,7 +585,7 @@ std::shared_ptr<Frame> Timeline::apply_effects(std::shared_ptr<Frame> frame, int
 				"does_effect_intersect", does_effect_intersect);
 
 			// Apply the effect to this frame
-			frame = effect->GetFrame(frame, effect_frame_number);
+			frame = effect->ProcessFrame(frame, effect_frame_number);
 		}
 
 	} // end effect loop

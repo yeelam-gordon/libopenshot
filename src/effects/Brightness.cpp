@@ -16,13 +16,14 @@
 using namespace openshot;
 
 /// Blank constructor, useful when using Json to load the effect properties
-Brightness::Brightness() : brightness(0.0), contrast(3.0) {
+Brightness::Brightness() : brightness(0.0), contrast(3.0), mask_mode(BRIGHTNESS_MASK_LIMIT_TO_AREA) {
 	// Init effect properties
 	init_effect_details();
 }
 
 // Default constructor
-Brightness::Brightness(Keyframe new_brightness, Keyframe new_contrast) : brightness(new_brightness), contrast(new_contrast)
+Brightness::Brightness(Keyframe new_brightness, Keyframe new_contrast) :
+	brightness(new_brightness), contrast(new_contrast), mask_mode(BRIGHTNESS_MASK_LIMIT_TO_AREA)
 {
 	// Init effect properties
 	init_effect_details();
@@ -92,6 +93,43 @@ std::shared_ptr<openshot::Frame> Brightness::GetFrame(std::shared_ptr<openshot::
 	return frame;
 }
 
+bool Brightness::UseCustomMaskBlend(int64_t frame_number) const {
+	(void) frame_number;
+	return mask_mode == BRIGHTNESS_MASK_VARY_STRENGTH;
+}
+
+void Brightness::ApplyCustomMaskBlend(std::shared_ptr<QImage> original_image, std::shared_ptr<QImage> effected_image,
+									  std::shared_ptr<QImage> mask_image, int64_t frame_number) const {
+	(void) frame_number;
+	if (!original_image || !effected_image || !mask_image)
+		return;
+	if (original_image->size() != effected_image->size() || effected_image->size() != mask_image->size())
+		return;
+
+	unsigned char* original_pixels = reinterpret_cast<unsigned char*>(original_image->bits());
+	unsigned char* effected_pixels = reinterpret_cast<unsigned char*>(effected_image->bits());
+	unsigned char* mask_pixels = reinterpret_cast<unsigned char*>(mask_image->bits());
+	const int pixel_count = effected_image->width() * effected_image->height();
+
+	#pragma omp parallel for schedule(static)
+	for (int i = 0; i < pixel_count; ++i) {
+		const int idx = i * 4;
+		float factor = static_cast<float>(qGray(mask_pixels[idx], mask_pixels[idx + 1], mask_pixels[idx + 2])) / 255.0f;
+		if (mask_invert)
+			factor = 1.0f - factor;
+		factor = factor * factor;
+		const float inverse = 1.0f - factor;
+
+		effected_pixels[idx] = static_cast<unsigned char>(
+			(original_pixels[idx] * inverse) + (effected_pixels[idx] * factor));
+		effected_pixels[idx + 1] = static_cast<unsigned char>(
+			(original_pixels[idx + 1] * inverse) + (effected_pixels[idx + 1] * factor));
+		effected_pixels[idx + 2] = static_cast<unsigned char>(
+			(original_pixels[idx + 2] * inverse) + (effected_pixels[idx + 2] * factor));
+		effected_pixels[idx + 3] = original_pixels[idx + 3];
+	}
+}
+
 // Generate JSON string of this object
 std::string Brightness::Json() const {
 
@@ -107,6 +145,7 @@ Json::Value Brightness::JsonValue() const {
 	root["type"] = info.class_name;
 	root["brightness"] = brightness.JsonValue();
 	root["contrast"] = contrast.JsonValue();
+	root["mask_mode"] = mask_mode;
 
 	// return JsonValue
 	return root;
@@ -140,6 +179,8 @@ void Brightness::SetJsonValue(const Json::Value root) {
 		brightness.SetJsonValue(root["brightness"]);
 	if (!root["contrast"].isNull())
 		contrast.SetJsonValue(root["contrast"]);
+	if (!root["mask_mode"].isNull())
+		mask_mode = root["mask_mode"].asInt();
 }
 
 // Get all properties for a specific frame
@@ -151,6 +192,9 @@ std::string Brightness::PropertiesJSON(int64_t requested_frame) const {
 	// Keyframes
 	root["brightness"] = add_property_json("Brightness", brightness.GetValue(requested_frame), "float", "", &brightness, -1.0, 1.0, false, requested_frame);
 	root["contrast"] = add_property_json("Contrast", contrast.GetValue(requested_frame), "float", "", &contrast, -128, 128.0, false, requested_frame);
+	root["mask_mode"] = add_property_json("Mask Mode", mask_mode, "int", "", NULL, 0, 1, false, requested_frame);
+	root["mask_mode"]["choices"].append(add_property_choice_json("Limit to Mask", BRIGHTNESS_MASK_LIMIT_TO_AREA, mask_mode));
+	root["mask_mode"]["choices"].append(add_property_choice_json("Vary Strength", BRIGHTNESS_MASK_VARY_STRENGTH, mask_mode));
 
 	// Return formatted string
 	return root.toStyledString();

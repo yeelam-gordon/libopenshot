@@ -24,6 +24,10 @@
 
 namespace openshot
 {
+	enum BlurMaskMode {
+		BLUR_MASK_POST_BLEND = 0,
+		BLUR_MASK_DRIVE_AMOUNT = 1
+	};
 
 	/**
 	 * @brief This class adjusts the blur of an image, and can be animated
@@ -43,12 +47,17 @@ namespace openshot
 		void boxBlurH(unsigned char *scl, unsigned char *tcl, int w, int h, int r);
 		void boxBlurT(unsigned char *scl, unsigned char *tcl, int w, int h, int r);
 
+	protected:
+		bool UseCustomMaskBlend(int64_t frame_number) const override;
+		void ApplyCustomMaskBlend(std::shared_ptr<QImage> original_image, std::shared_ptr<QImage> effected_image,
+							  std::shared_ptr<QImage> mask_image, int64_t frame_number) const override;
 
 	public:
 		Keyframe horizontal_radius;	///< Horizontal blur radius keyframe. The size of the horizontal blur operation in pixels.
 		Keyframe vertical_radius;	///< Vertical blur radius keyframe. The size of the vertical blur operation in pixels.
 		Keyframe sigma;				///< Sigma keyframe. The amount of spread in the blur operation. Should be larger than radius.
 		Keyframe iterations;		///< Iterations keyframe. The # of blur iterations per pixel. 3 iterations = Gaussian.
+		int mask_mode;			///< How to apply common masks to blur (post-blend or drive-amount).
 
 		/// Blank constructor, useful when using Json to load the effect properties
 		Blur();

@@ -16,17 +16,58 @@
 using namespace openshot;
 
 /// Blank constructor, useful when using Json to load the effect properties
-Saturation::Saturation() : saturation(1.0), saturation_R(1.0), saturation_G(1.0), saturation_B(1.0) {
+Saturation::Saturation() : saturation(1.0), saturation_R(1.0), saturation_G(1.0), saturation_B(1.0),
+	mask_mode(SATURATION_MASK_POST_BLEND) {
 	// Init effect properties
 	init_effect_details();
 }
 
 // Default constructor
 Saturation::Saturation(Keyframe saturation, Keyframe saturation_R, Keyframe saturation_G, Keyframe saturation_B) :
-		saturation(saturation), saturation_R(saturation_R), saturation_G(saturation_G), saturation_B(saturation_B)
+		saturation(saturation), saturation_R(saturation_R), saturation_G(saturation_G), saturation_B(saturation_B),
+		mask_mode(SATURATION_MASK_POST_BLEND)
 {
 	// Init effect properties
 	init_effect_details();
+}
+
+bool Saturation::UseCustomMaskBlend(int64_t frame_number) const {
+	(void) frame_number;
+	return mask_mode == SATURATION_MASK_DRIVE_AMOUNT;
+}
+
+void Saturation::ApplyCustomMaskBlend(std::shared_ptr<QImage> original_image, std::shared_ptr<QImage> effected_image,
+									  std::shared_ptr<QImage> mask_image, int64_t frame_number) const {
+	(void) frame_number;
+	if (!original_image || !effected_image || !mask_image)
+		return;
+	if (original_image->size() != effected_image->size() || effected_image->size() != mask_image->size())
+		return;
+
+	unsigned char* original_pixels = reinterpret_cast<unsigned char*>(original_image->bits());
+	unsigned char* effected_pixels = reinterpret_cast<unsigned char*>(effected_image->bits());
+	unsigned char* mask_pixels = reinterpret_cast<unsigned char*>(mask_image->bits());
+	const int pixel_count = effected_image->width() * effected_image->height();
+
+	#pragma omp parallel for schedule(static)
+	for (int i = 0; i < pixel_count; ++i) {
+		const int idx = i * 4;
+		float factor = static_cast<float>(qGray(mask_pixels[idx], mask_pixels[idx + 1], mask_pixels[idx + 2])) / 255.0f;
+		if (mask_invert)
+			factor = 1.0f - factor;
+		// Use a non-linear response curve for custom saturation drive mode.
+		factor = factor * factor;
+		const float inverse = 1.0f - factor;
+
+		// Drive saturation strength with mask while preserving source alpha.
+		effected_pixels[idx] = static_cast<unsigned char>(
+			(original_pixels[idx] * inverse) + (effected_pixels[idx] * factor));
+		effected_pixels[idx + 1] = static_cast<unsigned char>(
+			(original_pixels[idx + 1] * inverse) + (effected_pixels[idx + 1] * factor));
+		effected_pixels[idx + 2] = static_cast<unsigned char>(
+			(original_pixels[idx + 2] * inverse) + (effected_pixels[idx + 2] * factor));
+		effected_pixels[idx + 3] = original_pixels[idx + 3];
+	}
 }
 
 // Init effect settings
@@ -164,6 +205,7 @@ Json::Value Saturation::JsonValue() const {
 	root["saturation_R"] = saturation_R.JsonValue();
 	root["saturation_G"] = saturation_G.JsonValue();
 	root["saturation_B"] = saturation_B.JsonValue();
+	root["mask_mode"] = mask_mode;
 
 	// return JsonValue
 	return root;
@@ -201,6 +243,8 @@ void Saturation::SetJsonValue(const Json::Value root) {
 		saturation_G.SetJsonValue(root["saturation_G"]);
 	if (!root["saturation_B"].isNull())
 		saturation_B.SetJsonValue(root["saturation_B"]);
+	if (!root["mask_mode"].isNull())
+		mask_mode = root["mask_mode"].asInt();
 }
 
 // Get all properties for a specific frame
@@ -214,6 +258,9 @@ std::string Saturation::PropertiesJSON(int64_t requested_frame) const {
 	root["saturation_R"] = add_property_json("Saturation (Red)", saturation_R.GetValue(requested_frame), "float", "", &saturation_R, 0.0, 4.0, false, requested_frame);
 	root["saturation_G"] = add_property_json("Saturation (Green)", saturation_G.GetValue(requested_frame), "float", "", &saturation_G, 0.0, 4.0, false, requested_frame);
 	root["saturation_B"] = add_property_json("Saturation (Blue)", saturation_B.GetValue(requested_frame), "float", "", &saturation_B, 0.0, 4.0, false, requested_frame);
+	root["mask_mode"] = add_property_json("Mask Mode", mask_mode, "int", "", NULL, 0, 1, false, requested_frame);
+	root["mask_mode"]["choices"].append(add_property_choice_json("Limit to Mask", SATURATION_MASK_POST_BLEND, mask_mode));
+	root["mask_mode"]["choices"].append(add_property_choice_json("Vary Strength", SATURATION_MASK_DRIVE_AMOUNT, mask_mode));
 
 	// Return formatted string
 	return root.toStyledString();

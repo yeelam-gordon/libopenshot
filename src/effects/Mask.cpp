@@ -15,29 +15,26 @@
 #include "Exceptions.h"
 
 #include "ReaderBase.h"
-#include "ChunkReader.h"
-#include "FFmpegReader.h"
-#include "QtImageReader.h"
 #include <omp.h>
-
-#ifdef USE_IMAGEMAGICK
-	#include "ImageReader.h"
-#endif
 
 using namespace openshot;
 
 /// Blank constructor, useful when using Json to load the effect properties
-Mask::Mask() : reader(NULL), replace_image(false), needs_refresh(true) {
+Mask::Mask() : replace_image(false) {
 	// Init effect properties
 	init_effect_details();
 }
 
 // Default constructor
 Mask::Mask(ReaderBase *mask_reader, Keyframe mask_brightness, Keyframe mask_contrast) :
-		reader(mask_reader), brightness(mask_brightness), contrast(mask_contrast), replace_image(false), needs_refresh(true)
+		brightness(mask_brightness), contrast(mask_contrast), replace_image(false)
 {
 	// Init effect properties
 	init_effect_details();
+
+	// Keep ownership local by cloning externally-provided readers.
+	if (mask_reader)
+		MaskReader(CreateReaderFromJson(mask_reader->JsonValue()));
 }
 
 // Init effect settings
@@ -57,40 +54,15 @@ void Mask::init_effect_details()
 // This method is required for all derived classes of EffectBase, and returns a
 // modified openshot::Frame object
 std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number) {
-	// Get the mask image (from the mask reader)
+	// Get frame image first
 	std::shared_ptr<QImage> frame_image = frame->GetImage();
-
-	// Check if mask reader is open
-	#pragma omp critical (open_mask_reader)
-	{
-		if (reader && !reader->IsOpen())
-			reader->Open();
-	}
-
-	// No reader (bail on applying the mask)
-	if (!reader)
+	if (!frame_image || frame_image->isNull())
 		return frame;
 
-	// Get mask image (if missing or different size than frame image)
-	#pragma omp critical (open_mask_reader)
-	{
-		if (!original_mask || !reader->info.has_single_image || needs_refresh ||
-			(original_mask && original_mask->size() != frame_image->size())) {
-
-			// Only get mask if needed
-			auto mask_without_sizing = std::make_shared<QImage>(
-				*reader->GetFrame(frame_number)->GetImage());
-
-			// Resize mask image to match frame size
-			original_mask = std::make_shared<QImage>(
-				mask_without_sizing->scaled(
-					frame_image->width(), frame_image->height(),
-					Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
-		}
-	}
-
-	// Once we've done the necessary resizing, we no longer need to refresh again
-	needs_refresh = false;
+	// No reader (bail on applying the mask)
+	auto original_mask = ResolveMaskImage(frame_image, frame_number);
+	if (!original_mask || original_mask->isNull())
+		return frame;
 
 	// Grab raw pointers and dimensions one time
 	unsigned char* pixels      = reinterpret_cast<unsigned char*>(frame_image->bits());
@@ -152,6 +124,21 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 	return frame;
 }
 
+bool Mask::UseCustomMaskBlend(int64_t frame_number) const {
+	(void) frame_number;
+	// Mask effect already applies its own mask operation in GetFrame().
+	return true;
+}
+
+void Mask::ApplyCustomMaskBlend(std::shared_ptr<QImage> original_image, std::shared_ptr<QImage> effected_image,
+								std::shared_ptr<QImage> mask_image, int64_t frame_number) const {
+	(void) original_image;
+	(void) effected_image;
+	(void) mask_image;
+	(void) frame_number;
+	// Intentionally no-op to skip base post-blend for Mask effects.
+}
+
 // Generate JSON string of this object
 std::string Mask::Json() const {
 
@@ -167,10 +154,6 @@ Json::Value Mask::JsonValue() const {
 	root["type"] = info.class_name;
 	root["brightness"] = brightness.JsonValue();
 	root["contrast"] = contrast.JsonValue();
-	if (reader)
-		root["reader"] = reader->JsonValue();
-	else
-		root["reader"] = Json::objectValue;
 	root["replace_image"] = replace_image;
 
 	// return JsonValue
@@ -196,68 +179,21 @@ void Mask::SetJson(const std::string value) {
 
 // Load Json::Value into this object
 void Mask::SetJsonValue(const Json::Value root) {
+	Json::Value normalized_root = root;
+	// Legacy compatibility: keep accepting "reader" on Mask effects.
+	if (!normalized_root["reader"].isNull() && normalized_root["mask_reader"].isNull())
+		normalized_root["mask_reader"] = normalized_root["reader"];
 
 	// Set parent data
-	EffectBase::SetJsonValue(root);
+	EffectBase::SetJsonValue(normalized_root);
 
 	// Set data from Json (if key is found)
-	if (!root["replace_image"].isNull())
-		replace_image = root["replace_image"].asBool();
-	if (!root["brightness"].isNull())
-		brightness.SetJsonValue(root["brightness"]);
-	if (!root["contrast"].isNull())
-		contrast.SetJsonValue(root["contrast"]);
-	if (!root["reader"].isNull()) // does Json contain a reader?
-	{
-		#pragma omp critical (open_mask_reader)
-		{
-			// This reader has changed, so refresh cached assets
-			needs_refresh = true;
-
-			if (!root["reader"]["type"].isNull()) // does the reader Json contain a 'type'?
-			{
-				// Close previous reader (if any)
-				if (reader) {
-					// Close and delete existing reader (if any)
-					reader->Close();
-					delete reader;
-					reader = NULL;
-				}
-
-				// Create new reader (and load properties)
-				std::string type = root["reader"]["type"].asString();
-
-				if (type == "FFmpegReader") {
-
-					// Create new reader
-					reader = new FFmpegReader(root["reader"]["path"].asString());
-					reader->SetJsonValue(root["reader"]);
-
-	#ifdef USE_IMAGEMAGICK
-				} else if (type == "ImageReader") {
-
-					// Create new reader
-					reader = new ImageReader(root["reader"]["path"].asString());
-					reader->SetJsonValue(root["reader"]);
-	#endif
-
-				} else if (type == "QtImageReader") {
-
-					// Create new reader
-					reader = new QtImageReader(root["reader"]["path"].asString());
-					reader->SetJsonValue(root["reader"]);
-
-				} else if (type == "ChunkReader") {
-
-					// Create new reader
-					reader = new ChunkReader(root["reader"]["path"].asString(), (ChunkVersion) root["reader"]["chunk_version"].asInt());
-					reader->SetJsonValue(root["reader"]);
-
-				}
-			}
-
-		}
-	}
+	if (!normalized_root["replace_image"].isNull())
+		replace_image = normalized_root["replace_image"].asBool();
+	if (!normalized_root["brightness"].isNull())
+		brightness.SetJsonValue(normalized_root["brightness"]);
+	if (!normalized_root["contrast"].isNull())
+		contrast.SetJsonValue(normalized_root["contrast"]);
 
 }
 
@@ -276,11 +212,16 @@ std::string Mask::PropertiesJSON(int64_t requested_frame) const {
 	root["brightness"] = add_property_json("Brightness", brightness.GetValue(requested_frame), "float", "", &brightness, -1.0, 1.0, false, requested_frame);
 	root["contrast"] = add_property_json("Contrast", contrast.GetValue(requested_frame), "float", "", &contrast, 0, 20, false, requested_frame);
 
-	if (reader)
-		root["reader"] = add_property_json("Source", 0.0, "reader", reader->Json(), NULL, 0, 1, false, requested_frame);
-	else
-		root["reader"] = add_property_json("Source", 0.0, "reader", "{}", NULL, 0, 1, false, requested_frame);
-
 	// Return formatted string
 	return root.toStyledString();
+}
+
+void Mask::Reader(ReaderBase *new_reader) {
+	if (!new_reader) {
+		MaskReader(NULL);
+		return;
+	}
+
+	// Keep ownership local by cloning externally-provided readers.
+	MaskReader(CreateReaderFromJson(new_reader->JsonValue()));
 }

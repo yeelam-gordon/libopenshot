@@ -24,6 +24,10 @@
 
 namespace openshot
 {
+	enum BrightnessMaskMode {
+		BRIGHTNESS_MASK_LIMIT_TO_AREA = 0,
+		BRIGHTNESS_MASK_VARY_STRENGTH = 1
+	};
 
 	/**
 	 * @brief This class adjusts the brightness and contrast of an image, and can be animated
@@ -37,9 +41,15 @@ namespace openshot
 		/// Init effect settings
 		void init_effect_details();
 
+	protected:
+		bool UseCustomMaskBlend(int64_t frame_number) const override;
+		void ApplyCustomMaskBlend(std::shared_ptr<QImage> original_image, std::shared_ptr<QImage> effected_image,
+							  std::shared_ptr<QImage> mask_image, int64_t frame_number) const override;
+
 	public:
 		Keyframe brightness;	///< Brightness keyframe. A constant value here will prevent animation.
 		Keyframe contrast;		///< Contrast keyframe.
+		int mask_mode;			///< Mask behavior mode for this effect.
 
 		/// Blank constructor, useful when using Json to load the effect properties
 		Brightness();

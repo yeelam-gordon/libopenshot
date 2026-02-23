@@ -27,6 +27,7 @@ Sharpen::Sharpen()
   , threshold(0.0)
   , mode(0)
   , channel(1)
+  , mask_mode(SHARPEN_MASK_LIMIT_TO_AREA)
 {
   init_effect_details();
 }
@@ -38,6 +39,7 @@ Sharpen::Sharpen(Keyframe a, Keyframe r, Keyframe t)
   , threshold(t)
   , mode(0)
   , channel(1)
+  , mask_mode(SHARPEN_MASK_LIMIT_TO_AREA)
 {
   init_effect_details();
 }
@@ -51,6 +53,45 @@ void Sharpen::init_effect_details()
   info.description = "Boost edge contrast to make video details look crisper.";
   info.has_audio   = false;
   info.has_video   = true;
+}
+
+bool Sharpen::UseCustomMaskBlend(int64_t frame_number) const
+{
+  (void) frame_number;
+  return mask_mode == SHARPEN_MASK_VARY_STRENGTH;
+}
+
+void Sharpen::ApplyCustomMaskBlend(std::shared_ptr<QImage> original_image, std::shared_ptr<QImage> effected_image,
+                                   std::shared_ptr<QImage> mask_image, int64_t frame_number) const
+{
+  (void) frame_number;
+  if (!original_image || !effected_image || !mask_image)
+    return;
+  if (original_image->size() != effected_image->size() || effected_image->size() != mask_image->size())
+    return;
+
+  unsigned char* original_pixels = reinterpret_cast<unsigned char*>(original_image->bits());
+  unsigned char* effected_pixels = reinterpret_cast<unsigned char*>(effected_image->bits());
+  unsigned char* mask_pixels = reinterpret_cast<unsigned char*>(mask_image->bits());
+  const int pixel_count = effected_image->width() * effected_image->height();
+
+  #pragma omp parallel for schedule(static)
+  for (int i = 0; i < pixel_count; ++i) {
+    const int idx = i * 4;
+    float factor = static_cast<float>(qGray(mask_pixels[idx], mask_pixels[idx + 1], mask_pixels[idx + 2])) / 255.0f;
+    if (mask_invert)
+      factor = 1.0f - factor;
+    factor = factor * factor;
+    const float inverse = 1.0f - factor;
+
+    effected_pixels[idx] = static_cast<unsigned char>(
+      (original_pixels[idx] * inverse) + (effected_pixels[idx] * factor));
+    effected_pixels[idx + 1] = static_cast<unsigned char>(
+      (original_pixels[idx + 1] * inverse) + (effected_pixels[idx + 1] * factor));
+    effected_pixels[idx + 2] = static_cast<unsigned char>(
+      (original_pixels[idx + 2] * inverse) + (effected_pixels[idx + 2] * factor));
+    effected_pixels[idx + 3] = original_pixels[idx + 3];
+  }
 }
 
 // Compute three box sizes to approximate a Gaussian of sigma
@@ -346,6 +387,7 @@ Json::Value Sharpen::JsonValue() const
   root["threshold"] = threshold.JsonValue();
   root["mode"]      = mode;
   root["channel"]   = channel;
+  root["mask_mode"] = mask_mode;
   return root;
 }
 
@@ -369,6 +411,8 @@ void Sharpen::SetJsonValue(Json::Value root)
     mode    = root["mode"].asInt();
   if (!root["channel"].isNull())
     channel = root["channel"].asInt();
+  if (!root["mask_mode"].isNull())
+    mask_mode = root["mask_mode"].asInt();
 }
 
 // UI property definitions
@@ -390,5 +434,9 @@ std::string Sharpen::PropertiesJSON(int64_t t) const
   root["channel"]["choices"].append(add_property_choice_json("All",    0, channel));
   root["channel"]["choices"].append(add_property_choice_json("Luma",   1, channel));
   root["channel"]["choices"].append(add_property_choice_json("Chroma", 2, channel));
+  root["mask_mode"] = add_property_json(
+    "Mask Mode", mask_mode, "int", "", nullptr, 0, 1, false, t);
+  root["mask_mode"]["choices"].append(add_property_choice_json("Limit to Mask", SHARPEN_MASK_LIMIT_TO_AREA, mask_mode));
+  root["mask_mode"]["choices"].append(add_property_choice_json("Vary Strength", SHARPEN_MASK_VARY_STRENGTH, mask_mode));
   return root.toStyledString();
 }
