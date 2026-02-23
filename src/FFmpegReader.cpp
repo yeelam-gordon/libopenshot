@@ -248,7 +248,7 @@ void FFmpegReader::Open() {
 
 		// Open video file
 		if (avformat_open_input(&pFormatCtx, path.c_str(), NULL, NULL) != 0)
-			throw InvalidFile("File could not be opened.", path);
+			throw InvalidFile("FFmpegReader could not open media file.", path);
 
 		// Retrieve stream information
 		if (avformat_find_stream_info(pFormatCtx, NULL) < 0)

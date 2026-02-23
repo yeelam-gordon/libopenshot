@@ -12,8 +12,10 @@
 
 #include "openshot_catch.h"
 #include <sstream>
+#include <fstream>
 
 
+#include "Exceptions.h"
 #include "Profiles.h"
 
 TEST_CASE( "empty constructor", "[libopenshot][profile]" )
@@ -88,6 +90,37 @@ TEST_CASE( "constructor with example profiles", "[libopenshot][profile]" )
     CHECK(p2.info.pixel_ratio.den == 1);
     CHECK(p2.info.interlaced_frame == true);
     CHECK(p2.info.spherical == false);
+}
+
+TEST_CASE( "invalid profile path message", "[libopenshot][profile]" )
+{
+    const std::string invalid_path = "/tmp/__openshot_missing_test_profile__";
+    try {
+        openshot::Profile p(invalid_path);
+        FAIL("Expected InvalidFile for missing profile path");
+    } catch (const openshot::InvalidFile& e) {
+        const std::string message = e.what();
+        CHECK(message.find("Profile file could not be found or opened.") != std::string::npos);
+        CHECK(message.find(invalid_path) != std::string::npos);
+    }
+}
+
+TEST_CASE( "invalid profile parse message", "[libopenshot][profile]" )
+{
+    const std::string invalid_profile = "/tmp/openshot_invalid_profile_for_test";
+    {
+        std::ofstream f(invalid_profile);
+        f << "width=abc\n";
+    }
+
+    try {
+        openshot::Profile p(invalid_profile);
+        FAIL("Expected InvalidFile for malformed profile contents");
+    } catch (const openshot::InvalidFile& e) {
+        const std::string message = e.what();
+        CHECK(message.find("Profile file could not be parsed (invalid format or values).") != std::string::npos);
+        CHECK(message.find(invalid_profile) != std::string::npos);
+    }
 }
 
 TEST_CASE( "24 fps names", "[libopenshot][profile]" )

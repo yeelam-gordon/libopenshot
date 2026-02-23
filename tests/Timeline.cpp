@@ -23,6 +23,7 @@
 #include "Clip.h"
 #include "Frame.h"
 #include "Fraction.h"
+#include "Exceptions.h"
 #include "effects/Blur.h"
 #include "effects/Negate.h"
 
@@ -42,6 +43,19 @@ TEST_CASE( "constructor", "[libopenshot][timeline]" )
 	// Check values
 	CHECK(t2.info.width == 300);
 	CHECK(t2.info.height == 240);
+}
+
+TEST_CASE( "project constructor invalid path message", "[libopenshot][timeline]" )
+{
+	const std::string invalid_path = "/tmp/__openshot_missing_test_project__.osp";
+	try {
+		Timeline t(invalid_path, true);
+		FAIL("Expected InvalidFile for missing timeline project path");
+	} catch (const InvalidFile& e) {
+		const std::string message = e.what();
+		CHECK(message.find("Timeline project file could not be opened.") != std::string::npos);
+		CHECK(message.find(invalid_path) != std::string::npos);
+	}
 }
 
 TEST_CASE( "Set Json and clear clips", "[libopenshot][timeline]" )

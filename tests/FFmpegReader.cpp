@@ -26,8 +26,16 @@ using namespace openshot;
 
 TEST_CASE( "Invalid_Path", "[libopenshot][ffmpegreader]" )
 {
-	// Check invalid path
-	CHECK_THROWS_AS(FFmpegReader(""), InvalidFile);
+	// Check invalid path and error details
+	const std::string invalid_path = "/tmp/__openshot_missing_test_file__.mp4";
+	try {
+		FFmpegReader r(invalid_path);
+		FAIL("Expected InvalidFile for missing media path");
+	} catch (const InvalidFile& e) {
+		const std::string message = e.what();
+		CHECK(message.find("FFmpegReader could not open media file.") != std::string::npos);
+		CHECK(message.find(invalid_path) != std::string::npos);
+	}
 }
 
 TEST_CASE( "GetFrame_Before_Opening", "[libopenshot][ffmpegreader]" )

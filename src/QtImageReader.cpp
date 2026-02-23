@@ -77,7 +77,7 @@ void QtImageReader::Open()
 
         if (!loaded) {
             // raise exception
-            throw InvalidFile("File could not be opened.", path.toStdString());
+            throw InvalidFile("QtImageReader could not open image file.", path.toStdString());
         }
 
         // Update image properties
