@@ -13,6 +13,8 @@
 #include "openshot_catch.h"
 #include <sstream>
 #include <fstream>
+#include <filesystem>
+#include <cstdio>
 
 
 #include "Exceptions.h"
@@ -94,7 +96,9 @@ TEST_CASE( "constructor with example profiles", "[libopenshot][profile]" )
 
 TEST_CASE( "invalid profile path message", "[libopenshot][profile]" )
 {
-    const std::string invalid_path = "/tmp/__openshot_missing_test_profile__";
+    const std::string invalid_path =
+        (std::filesystem::temp_directory_path() / "__openshot_missing_test_profile__").string();
+    std::remove(invalid_path.c_str());
     try {
         openshot::Profile p(invalid_path);
         FAIL("Expected InvalidFile for missing profile path");
@@ -107,7 +111,8 @@ TEST_CASE( "invalid profile path message", "[libopenshot][profile]" )
 
 TEST_CASE( "invalid profile parse message", "[libopenshot][profile]" )
 {
-    const std::string invalid_profile = "/tmp/openshot_invalid_profile_for_test";
+    const std::string invalid_profile =
+        (std::filesystem::temp_directory_path() / "openshot_invalid_profile_for_test.profile").string();
     {
         std::ofstream f(invalid_profile);
         f << "width=abc\n";
