@@ -18,6 +18,7 @@
 #include "ChunkReader.h"
 #include "FFmpegReader.h"
 #include "QtImageReader.h"
+#include "ZmqLogger.h"
 #include <omp.h>
 
 #ifdef USE_IMAGEMAGICK
@@ -59,16 +60,28 @@ void Mask::init_effect_details()
 std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number) {
 	// Get the mask image (from the mask reader)
 	std::shared_ptr<QImage> frame_image = frame->GetImage();
+	bool mask_reader_failed = false;
 
 	// Check if mask reader is open
 	#pragma omp critical (open_mask_reader)
 	{
-		if (reader && !reader->IsOpen())
-			reader->Open();
+		if (reader && !reader->IsOpen()) {
+			try {
+				reader->Open();
+			} catch (const std::exception& e) {
+				// Invalid/missing mask source should never crash frame rendering.
+				ZmqLogger::Instance()->Log(
+					std::string("Mask::GetFrame unable to open mask reader: ") + e.what());
+				delete reader;
+				reader = NULL;
+				needs_refresh = true;
+				mask_reader_failed = true;
+			}
+		}
 	}
 
 	// No reader (bail on applying the mask)
-	if (!reader)
+	if (!reader || mask_reader_failed)
 		return frame;
 
 	// Get mask image (if missing or different size than frame image)
@@ -78,16 +91,29 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 			(original_mask && original_mask->size() != frame_image->size())) {
 
 			// Only get mask if needed
-			auto mask_without_sizing = std::make_shared<QImage>(
-				*reader->GetFrame(frame_number)->GetImage());
-
-			// Resize mask image to match frame size
-			original_mask = std::make_shared<QImage>(
-				mask_without_sizing->scaled(
-					frame_image->width(), frame_image->height(),
-					Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+			std::shared_ptr<QImage> mask_without_sizing;
+			try {
+				mask_without_sizing = std::make_shared<QImage>(
+					*reader->GetFrame(frame_number)->GetImage());
+			} catch (const std::exception& e) {
+				ZmqLogger::Instance()->Log(
+					std::string("Mask::GetFrame unable to read mask frame: ") + e.what());
+				delete reader;
+				reader = NULL;
+				needs_refresh = true;
+				mask_reader_failed = true;
+			}
+			if (!mask_reader_failed && mask_without_sizing) {
+				// Resize mask image to match frame size
+				original_mask = std::make_shared<QImage>(
+					mask_without_sizing->scaled(
+						frame_image->width(), frame_image->height(),
+						Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+			}
 		}
 	}
+	if (mask_reader_failed || !reader || !original_mask)
+		return frame;
 
 	// Once we've done the necessary resizing, we no longer need to refresh again
 	needs_refresh = false;
@@ -230,21 +256,21 @@ void Mask::SetJsonValue(const Json::Value root) {
 				if (type == "FFmpegReader") {
 
 					// Create new reader
-					reader = new FFmpegReader(root["reader"]["path"].asString());
+					reader = new FFmpegReader(root["reader"]["path"].asString(), false);
 					reader->SetJsonValue(root["reader"]);
 
 	#ifdef USE_IMAGEMAGICK
 				} else if (type == "ImageReader") {
 
 					// Create new reader
-					reader = new ImageReader(root["reader"]["path"].asString());
+					reader = new ImageReader(root["reader"]["path"].asString(), false);
 					reader->SetJsonValue(root["reader"]);
 	#endif
 
 				} else if (type == "QtImageReader") {
 
 					// Create new reader
-					reader = new QtImageReader(root["reader"]["path"].asString());
+					reader = new QtImageReader(root["reader"]["path"].asString(), false);
 					reader->SetJsonValue(root["reader"]);
 
 				} else if (type == "ChunkReader") {
