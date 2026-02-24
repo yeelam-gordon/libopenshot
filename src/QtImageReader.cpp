@@ -367,11 +367,4 @@ void QtImageReader::SetJsonValue(const Json::Value root) {
     // Set data from Json (if key is found)
     if (!root["path"].isNull())
         path = QString::fromStdString(root["path"].asString());
-
-    // Re-Open path, and re-init everything (if needed)
-    if (is_open)
-    {
-        Close();
-        Open();
-    }
 }

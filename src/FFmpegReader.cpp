@@ -2769,10 +2769,4 @@ void FFmpegReader::SetJsonValue(const Json::Value root) {
 			duration_strategy = DurationStrategy::LongestStream;
 		}
 	}
-
-	// Re-Open path, and re-init everything (if needed)
-	if (is_open) {
-		Close();
-		Open();
-	}
 }
