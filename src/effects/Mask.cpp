@@ -101,6 +101,8 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 
 		// Calculate the % change in alpha
 		float alpha_percent = static_cast<float>(diff) / 255.0f;
+		if (mask_invert)
+			alpha_percent = 1.0f - alpha_percent;
 
 		// Set the alpha channel to the gray value
 		if (replace_image) {

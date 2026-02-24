@@ -61,6 +61,25 @@ TEST_CASE("Mask applies alpha from reader source", "[effect][mask_effect]") {
 	CHECK(out->GetImage()->pixelColor(1, 0).alpha() == 255);
 }
 
+TEST_CASE("Mask invert flips reader mask alpha mapping", "[effect][mask_effect][invert]") {
+	auto frame = std::make_shared<Frame>(1, 2, 1, "#000000");
+	auto image = frame->GetImage();
+	image->setPixelColor(0, 0, QColor(255, 0, 0, 255));
+	image->setPixelColor(1, 0, QColor(255, 0, 0, 255));
+
+	const std::string mask_path = create_mask_png({255, 0});
+	Mask mask;
+	mask.Reader(new QtImageReader(mask_path));
+	mask.mask_invert = true;
+	mask.brightness = Keyframe(0.0);
+	mask.contrast = Keyframe(0.0);
+
+	auto out = mask.GetFrame(frame, 1);
+
+	CHECK(out->GetImage()->pixelColor(0, 0).alpha() == 255);
+	CHECK(out->GetImage()->pixelColor(1, 0).alpha() == 0);
+}
+
 TEST_CASE("Mask replace_image emits grayscale values", "[effect][mask_effect][replace]") {
 	auto frame = std::make_shared<Frame>(1, 2, 1, "#000000");
 	frame->GetImage()->fill(QColor(10, 20, 30, 255));
@@ -115,6 +134,24 @@ TEST_CASE("Mask ProcessFrame brightness 1.0 fully clears output", "[effect][mask
 
 	auto out = mask.ProcessFrame(frame, 1);
 	CHECK(out->GetImage()->pixelColor(0, 0).alpha() == 0);
+	CHECK(out->GetImage()->pixelColor(1, 0).alpha() == 0);
+}
+
+TEST_CASE("Mask ProcessFrame honors invert mask property", "[effect][mask_effect][process][invert]") {
+	auto frame = std::make_shared<Frame>(1, 2, 1, "#000000");
+	auto image = frame->GetImage();
+	image->setPixelColor(0, 0, QColor(80, 40, 20, 255));
+	image->setPixelColor(1, 0, QColor(80, 40, 20, 255));
+
+	const std::string mask_path = create_mask_png({255, 0});
+	Mask mask;
+	mask.Reader(new QtImageReader(mask_path));
+	mask.mask_invert = true;
+	mask.brightness = Keyframe(0.0);
+	mask.contrast = Keyframe(0.0);
+
+	auto out = mask.ProcessFrame(frame, 1);
+	CHECK(out->GetImage()->pixelColor(0, 0).alpha() == 255);
 	CHECK(out->GetImage()->pixelColor(1, 0).alpha() == 0);
 }
 
