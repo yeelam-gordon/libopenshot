@@ -14,7 +14,9 @@
 #include <memory>
 #include <set>
 #include <algorithm>
-#include <filesystem>
+#include <cstdio>
+#include <cstdlib>
+#include <ctime>
 
 #include "openshot_catch.h"
 
@@ -25,7 +27,6 @@
 #include "Json.h"
 
 using namespace openshot;
-namespace fs = std::filesystem;
 
 TEST_CASE( "Invalid_Path", "[libopenshot][ffmpegreader]" )
 {
@@ -393,11 +394,13 @@ TEST_CASE( "Static_Image_JPG_Reports_Single_Image", "[libopenshot][ffmpegreader]
 	png_reader.Open();
 
 	auto png_frame = png_reader.GetFrame(1);
-	const fs::path jpg_path = fs::temp_directory_path() / "libopenshot-static-image-test.jpg";
-	REQUIRE(png_frame->GetImage()->save(jpg_path.string().c_str(), "JPG"));
+	std::srand(static_cast<unsigned int>(std::time(nullptr)));
+	std::stringstream jpg_path;
+	jpg_path << "libopenshot-static-image-test-" << std::rand() << ".jpg";
+	REQUIRE(png_frame->GetImage()->save(jpg_path.str().c_str(), "JPG"));
 	png_reader.Close();
 
-	FFmpegReader jpg_reader(jpg_path.string(), DurationStrategy::VideoPreferred);
+	FFmpegReader jpg_reader(jpg_path.str(), DurationStrategy::VideoPreferred);
 	jpg_reader.Open();
 
 	CHECK(jpg_reader.info.has_video);
@@ -416,7 +419,7 @@ TEST_CASE( "Static_Image_JPG_Reports_Single_Image", "[libopenshot][ffmpegreader]
 		2));
 
 	jpg_reader.Close();
-	fs::remove(jpg_path);
+	std::remove(jpg_path.str().c_str());
 }
 
 TEST_CASE( "verify parent Timeline", "[libopenshot][ffmpegreader]" )
