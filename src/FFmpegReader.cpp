@@ -73,6 +73,32 @@ int hw_de_on = 0;
 	AVHWDeviceType hw_de_av_device_type_global = AV_HWDEVICE_TYPE_NONE;
 #endif
 
+// Normalize deprecated JPEG-range YUVJ formats before creating swscale contexts.
+// swscale expects non-YUVJ formats plus explicit color-range metadata.
+static AVPixelFormat NormalizeDeprecatedPixFmt(AVPixelFormat pix_fmt, bool& is_full_range) {
+	switch (pix_fmt) {
+		case AV_PIX_FMT_YUVJ420P:
+			is_full_range = true;
+			return AV_PIX_FMT_YUV420P;
+		case AV_PIX_FMT_YUVJ422P:
+			is_full_range = true;
+			return AV_PIX_FMT_YUV422P;
+		case AV_PIX_FMT_YUVJ444P:
+			is_full_range = true;
+			return AV_PIX_FMT_YUV444P;
+		case AV_PIX_FMT_YUVJ440P:
+			is_full_range = true;
+			return AV_PIX_FMT_YUV440P;
+#ifdef AV_PIX_FMT_YUVJ411P
+		case AV_PIX_FMT_YUVJ411P:
+			is_full_range = true;
+			return AV_PIX_FMT_YUV411P;
+#endif
+		default:
+			return pix_fmt;
+	}
+}
+
 FFmpegReader::FFmpegReader(const std::string &path, bool inspect_reader)
 		: FFmpegReader(path, DurationStrategy::VideoPreferred, inspect_reader) {}
 
@@ -1538,11 +1564,14 @@ bool FFmpegReader::GetAVFrame() {
 			packet_status.video_decoded++;
 
 			// Allocate image (align 32 for simd)
-			if (AV_ALLOCATE_IMAGE(pFrame, (AVPixelFormat)(pStream->codecpar->format), info.width, info.height) <= 0) {
+			AVPixelFormat decoded_pix_fmt = (AVPixelFormat)(next_frame->format);
+			if (decoded_pix_fmt == AV_PIX_FMT_NONE)
+				decoded_pix_fmt = (AVPixelFormat)(pStream->codecpar->format);
+			if (AV_ALLOCATE_IMAGE(pFrame, decoded_pix_fmt, info.width, info.height) <= 0) {
 				throw OutOfMemory("Failed to allocate image buffer", path);
 			}
 			av_image_copy(pFrame->data, pFrame->linesize, (const uint8_t**)next_frame->data, next_frame->linesize,
-										(AVPixelFormat)(pStream->codecpar->format), info.width, info.height);
+										decoded_pix_fmt, info.width, info.height);
 
 			// Get display PTS from video frame, often different than packet->pts.
 			// Sending packets to the decoder (i.e. packet->pts) is async,
@@ -1691,9 +1720,15 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
 	ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ProcessVideoPacket (Before)", "requested_frame", requested_frame, "current_frame", current_frame);
 
 	// Init some things local (for OpenMP)
-	PixelFormat pix_fmt = AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx);
-	int height = info.height;
-	int width = info.width;
+	AVPixelFormat decoded_pix_fmt = (pFrame && pFrame->format != AV_PIX_FMT_NONE)
+		? static_cast<AVPixelFormat>(pFrame->format)
+		: AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx);
+	bool src_full_range = (pFrame && pFrame->color_range == AVCOL_RANGE_JPEG);
+	AVPixelFormat src_pix_fmt = NormalizeDeprecatedPixFmt(decoded_pix_fmt, src_full_range);
+	int src_width = (pFrame && pFrame->width > 0) ? pFrame->width : info.width;
+	int src_height = (pFrame && pFrame->height > 0) ? pFrame->height : info.height;
+	int height = src_height;
+	int width = src_width;
 	int64_t video_length = info.video_length;
 
 	// Create or reuse a RGB Frame (since most videos are not in RGB, we must convert it)
@@ -1766,7 +1801,7 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
 	}
 
 	// Determine if image needs to be scaled (for performance reasons)
-	int original_height = height;
+	int original_height = src_height;
 	if (max_width != 0 && max_height != 0 && max_width < width && max_height < height) {
 		// Override width and height (but maintain aspect ratio)
 		float ratio = float(width) / float(height);
@@ -1800,9 +1835,14 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
 	if (openshot::Settings::Instance()->HIGH_QUALITY_SCALING) {
 		scale_mode = SWS_BICUBIC;
 	}
-	img_convert_ctx = sws_getCachedContext(img_convert_ctx, info.width, info.height, AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx), width, height, PIX_FMT_RGBA, scale_mode, NULL, NULL, NULL);
+	img_convert_ctx = sws_getCachedContext(img_convert_ctx, src_width, src_height, src_pix_fmt, width, height, PIX_FMT_RGBA, scale_mode, NULL, NULL, NULL);
 	if (!img_convert_ctx)
 		throw OutOfMemory("Failed to initialize sws context", path);
+	const int *src_coeff = sws_getCoefficients(SWS_CS_DEFAULT);
+	const int *dst_coeff = sws_getCoefficients(SWS_CS_DEFAULT);
+	const int dst_full_range = 1; // RGB outputs are full-range
+	sws_setColorspaceDetails(img_convert_ctx, src_coeff, src_full_range ? 1 : 0,
+							 dst_coeff, dst_full_range, 0, 1 << 16, 1 << 16);
 
 	// Resize / Convert to RGB
 	sws_scale(img_convert_ctx, pFrame->data, pFrame->linesize, 0,
@@ -1812,7 +1852,7 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
 	std::shared_ptr<Frame> f = CreateFrame(current_frame);
 
 	// Add Image data to frame
-	if (!ffmpeg_has_alpha(AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx))) {
+	if (!ffmpeg_has_alpha(src_pix_fmt)) {
 		// Add image with no alpha channel, Speed optimization
 		f->AddImage(width, height, bytes_per_pixel, QImage::Format_RGBA8888_Premultiplied, buffer);
 	} else {
