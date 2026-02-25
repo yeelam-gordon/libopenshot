@@ -43,8 +43,6 @@ void EffectBase::InitEffectInfo()
 	parentEffect = NULL;
 	mask_invert = false;
 	mask_reader = NULL;
-	cached_mask.reset();
-	mask_needs_refresh = true;
 
 	info.has_video = false;
 	info.has_audio = false;
@@ -251,6 +249,10 @@ ReaderBase* EffectBase::CreateReaderFromJson(const Json::Value& reader_json) con
 	if (type == "FFmpegReader") {
 		reader = new FFmpegReader(reader_json["path"].asString());
 		reader->SetJsonValue(reader_json);
+		// Mask readers are video-only sources. Disabling audio avoids FFmpeg
+		// A/V readiness fallbacks that can repeat stale video frames.
+		reader->info.has_audio = false;
+		reader->info.audio_stream_index = -1;
 	} else if (type == "QtImageReader") {
 		reader = new QtImageReader(reader_json["path"].asString());
 		reader->SetJsonValue(reader_json);
@@ -280,38 +282,29 @@ void EffectBase::MaskReader(ReaderBase* new_reader) {
 	mask_reader = new_reader;
 	if (mask_reader)
 		mask_reader->ParentClip(clip);
-	cached_mask.reset();
-	mask_needs_refresh = true;
 }
 
 std::shared_ptr<QImage> EffectBase::GetMaskImage(std::shared_ptr<QImage> target_image, int64_t frame_number) {
 	if (!mask_reader || !target_image || target_image->isNull())
 		return {};
 
+	std::shared_ptr<QImage> source_mask;
 	#pragma omp critical (open_effect_mask_reader)
 	{
 		if (!mask_reader->IsOpen())
 			mask_reader->Open();
+		auto source_frame = mask_reader->GetFrame(frame_number);
+		if (source_frame && source_frame->GetImage() && !source_frame->GetImage()->isNull())
+			source_mask = std::make_shared<QImage>(*source_frame->GetImage());
 	}
 
-	const bool needs_new_image = !cached_mask || mask_needs_refresh ||
-		(!mask_reader->info.has_single_image) ||
-		(cached_mask && cached_mask->size() != target_image->size());
+	if (!source_mask || source_mask->isNull())
+		return {};
 
-	if (needs_new_image) {
-		#pragma omp critical (open_effect_mask_reader)
-		{
-			auto source_mask = std::make_shared<QImage>(
-				*mask_reader->GetFrame(frame_number)->GetImage());
-			cached_mask = std::make_shared<QImage>(
-				source_mask->scaled(
-					target_image->width(), target_image->height(),
-					Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
-			mask_needs_refresh = false;
-		}
-	}
-
-	return cached_mask;
+	return std::make_shared<QImage>(
+		source_mask->scaled(
+			target_image->width(), target_image->height(),
+			Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
 }
 
 void EffectBase::BlendWithMask(std::shared_ptr<QImage> original_image, std::shared_ptr<QImage> effected_image,

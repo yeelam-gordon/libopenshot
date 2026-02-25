@@ -58,8 +58,6 @@ namespace openshot
 	private:
 		int order; ///< The order to evaluate this effect. Effects are processed in this order (when more than one overlap).
 		ReaderBase* mask_reader = nullptr; ///< Optional common reader-based mask source.
-		std::shared_ptr<QImage> cached_mask; ///< Cached (resized) mask image for single-image readers.
-		bool mask_needs_refresh = true; ///< Force refreshing cached mask image.
 
 		/// Build or refresh a mask image that matches target_image dimensions.
 		std::shared_ptr<QImage> GetMaskImage(std::shared_ptr<QImage> target_image, int64_t frame_number);

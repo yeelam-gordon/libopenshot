@@ -2513,7 +2513,8 @@ void FFmpegReader::CheckWorkingFrames(int64_t requested_frame) {
 										"frame_pts_seconds", frame_pts_seconds,
 										"video_pts_seconds", video_pts_seconds,
 										"recent_pts_diff", recent_pts_diff);
-			if (info.has_video && !f->has_image_data) {
+			if (info.has_video && !f->has_image_data &&
+				(packet_status.video_eof || packet_status.end_of_file)) {
 				// Frame has no image data. Prefer timeline-previous frames to preserve
 				// visual order, especially when decode/prefetch is out-of-order.
 				std::shared_ptr<Frame> previous_frame_instance = final_cache.GetFrame(f->number - 1);
@@ -2578,6 +2579,12 @@ void FFmpegReader::CheckWorkingFrames(int64_t requested_frame) {
 										   "end_of_file", packet_status.end_of_file);
 
 		// Check if working frame is final
+		if (info.has_video && !f->has_image_data
+			&& !packet_status.end_of_file && !is_seek_trash) {
+			// Do not finalize non-EOF video frames without decoded image data.
+			// This prevents repeated previous-frame fallbacks being cached as real frames.
+			continue;
+		}
 		if ((!packet_status.end_of_file && is_video_ready && is_audio_ready) || packet_status.end_of_file || is_seek_trash) {
 			// Debug output
 			ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::CheckWorkingFrames (mark frame as final)", 
