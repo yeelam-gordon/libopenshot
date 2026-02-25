@@ -14,6 +14,7 @@
 #include <sstream>
 #include <memory>
 #include <list>
+#include <vector>
 #include <omp.h>
 
 #include "openshot_catch.h"
@@ -21,12 +22,62 @@
 #include "FrameMapper.h"
 #include "Timeline.h"
 #include "Clip.h"
+#include "CacheMemory.h"
+#include "DummyReader.h"
 #include "Frame.h"
 #include "Fraction.h"
+#include "effects/Brightness.h"
 #include "effects/Blur.h"
 #include "effects/Negate.h"
 
 using namespace openshot;
+
+class TimelineTrackingMaskReader : public ReaderBase {
+private:
+	bool is_open = false;
+	CacheMemory cache;
+	int width = 2;
+	int height = 1;
+
+public:
+	std::vector<int64_t> requests;
+
+	TimelineTrackingMaskReader(int fps_num, int fps_den, int64_t length_frames) {
+		info.has_video = true;
+		info.has_audio = false;
+		info.width = width;
+		info.height = height;
+		info.fps = Fraction(fps_num, fps_den);
+		info.video_length = length_frames;
+		info.duration = static_cast<float>(length_frames / info.fps.ToDouble());
+		info.sample_rate = 48000;
+		info.channels = 2;
+		info.audio_stream_index = -1;
+	}
+
+	openshot::CacheBase* GetCache() override { return &cache; }
+	bool IsOpen() override { return is_open; }
+	std::string Name() override { return "TimelineTrackingMaskReader"; }
+	void Open() override { is_open = true; }
+	void Close() override { is_open = false; }
+
+	std::shared_ptr<openshot::Frame> GetFrame(int64_t number) override {
+		requests.push_back(number);
+		auto frame = std::make_shared<Frame>(number, width, height, "#00000000");
+		frame->GetImage()->fill(QColor(128, 128, 128, 255));
+		return frame;
+	}
+
+	std::string Json() const override { return JsonValue().toStyledString(); }
+	Json::Value JsonValue() const override {
+		Json::Value root = ReaderBase::JsonValue();
+		root["type"] = "TimelineTrackingMaskReader";
+		root["path"] = "";
+		return root;
+	}
+	void SetJson(const std::string value) override { (void) value; }
+	void SetJsonValue(const Json::Value root) override { ReaderBase::SetJsonValue(root); }
+};
 
 TEST_CASE( "constructor", "[libopenshot][timeline]" )
 {
@@ -597,6 +648,47 @@ TEST_CASE( "Effect: Blur", "[libopenshot][timeline]" )
 	CHECK(f->number == 1);
 
 	// Close reader
+	t.Close();
+}
+
+TEST_CASE("Global mask effect source FPS mode follows timeline FPS mapping", "[libopenshot][timeline][effect][mask][timing]") {
+	Timeline t(320, 240, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+
+	DummyReader clip_reader(Fraction(30, 1), 320, 240, 44100, 2, 2.0f);
+	Clip clip(&clip_reader);
+	clip.Layer(0);
+	clip.Position(0.0);
+	clip.Start(0.0);
+	clip.End(1.0);
+	t.AddClip(&clip);
+
+	Brightness effect(Keyframe(0.0), Keyframe(0.0));
+	effect.Layer(0);
+	effect.Position(0.0);
+	effect.Start(0.0);
+	effect.End(1.0);
+
+	auto* tracking = new TimelineTrackingMaskReader(15, 1, 120);
+	effect.MaskReader(tracking);
+
+	Json::Value timing;
+	timing["mask_time_mode"] = 1; // Source FPS
+	timing["mask_loop_mode"] = 0; // Play Once
+	timing["mask_start"] = 0.0;
+	timing["mask_end"] = 0;
+	effect.SetJsonValue(timing);
+
+	t.AddEffect(&effect);
+	t.Open();
+
+	for (int64_t frame = 1; frame <= 5; ++frame) {
+		auto out = t.GetFrame(frame);
+		REQUIRE(out != nullptr);
+	}
+
+	const std::vector<int64_t> expected = {1, 2, 2, 3, 3};
+	CHECK(tracking->requests == expected);
+
 	t.Close();
 }
 

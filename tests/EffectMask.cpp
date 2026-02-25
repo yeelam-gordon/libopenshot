@@ -18,6 +18,9 @@
 #include <QDir>
 #include <QImage>
 
+#include "CacheMemory.h"
+#include "Clip.h"
+#include "DummyReader.h"
 #include "effects/Blur.h"
 #include "effects/Brightness.h"
 #include "effects/Hue.h"
@@ -61,6 +64,69 @@ static std::string create_uniform_mask_png(int width, int height, int gray_value
 	mask.fill(QColor(gray_value, gray_value, gray_value, 255));
 	REQUIRE(mask.save(QString::fromStdString(path)));
 	return path;
+}
+
+class TrackingMaskReader : public ReaderBase {
+private:
+	bool is_open = false;
+	CacheMemory cache;
+	int width = 2;
+	int height = 1;
+
+public:
+	std::vector<int64_t> requests;
+
+	TrackingMaskReader(int fps_num, int fps_den, int64_t length_frames) {
+		info.has_video = true;
+		info.has_audio = false;
+		info.has_single_image = false;
+		info.width = width;
+		info.height = height;
+		info.fps = Fraction(fps_num, fps_den);
+		info.video_length = length_frames;
+		info.duration = static_cast<float>(length_frames / info.fps.ToDouble());
+		info.sample_rate = 48000;
+		info.channels = 2;
+		info.audio_stream_index = -1;
+	}
+
+	openshot::CacheBase* GetCache() override { return &cache; }
+	bool IsOpen() override { return is_open; }
+	std::string Name() override { return "TrackingMaskReader"; }
+	void Open() override { is_open = true; }
+	void Close() override { is_open = false; }
+
+	std::shared_ptr<openshot::Frame> GetFrame(int64_t number) override {
+		requests.push_back(number);
+		auto frame = std::make_shared<Frame>(number, width, height, "#00000000");
+		frame->GetImage()->fill(QColor(128, 128, 128, 255));
+		return frame;
+	}
+
+	std::string Json() const override {
+		return JsonValue().toStyledString();
+	}
+
+	Json::Value JsonValue() const override {
+		Json::Value root = ReaderBase::JsonValue();
+		root["type"] = "TrackingMaskReader";
+		root["path"] = "";
+		return root;
+	}
+
+	void SetJson(const std::string value) override {
+		(void) value;
+	}
+
+	void SetJsonValue(const Json::Value root) override {
+		ReaderBase::SetJsonValue(root);
+	}
+};
+
+static std::shared_ptr<Frame> make_input_frame(int64_t number, int width = 2, int height = 1) {
+	auto frame = std::make_shared<Frame>(number, width, height, "#00000000");
+	frame->GetImage()->fill(QColor(64, 64, 64, 255));
+	return frame;
 }
 
 TEST_CASE("EffectBase common mask blend applies to ProcessFrame", "[effect][mask][base]") {
@@ -356,4 +422,133 @@ TEST_CASE("EffectBase accepts legacy reader key for mask source", "[effect][mask
 
 	REQUIRE(effect.MaskReader() != nullptr);
 	CHECK(effect.JsonValue()["mask_reader"]["type"].asString() == "QtImageReader");
+}
+
+TEST_CASE("EffectBase mask timing fields roundtrip and clamp", "[effect][mask][timing][json]") {
+	Brightness effect(Keyframe(0.0), Keyframe(0.0));
+
+	Json::Value update;
+	update["mask_start"] = -10;
+	update["mask_end"] = -20;
+	update["mask_time_mode"] = 99;
+	update["mask_loop_mode"] = 99;
+	effect.SetJsonValue(update);
+
+	const Json::Value clamped = effect.JsonValue();
+	CHECK(clamped["mask_start"].asDouble() == Approx(0.0).margin(0.00001));
+	CHECK(clamped["mask_end"].asDouble() == Approx(0.0).margin(0.00001));
+	CHECK(clamped["mask_time_mode"].asInt() == 0);
+	CHECK(clamped["mask_loop_mode"].asInt() == 0);
+
+	update["mask_start"] = 0.5;
+	update["mask_end"] = 1.2;
+	update["mask_time_mode"] = 1;
+	update["mask_loop_mode"] = 2;
+	effect.SetJsonValue(update);
+	const Json::Value roundtrip = effect.JsonValue();
+	CHECK(roundtrip["mask_start"].asDouble() == Approx(0.5).margin(0.00001));
+	CHECK(roundtrip["mask_end"].asDouble() == Approx(1.2).margin(0.00001));
+	CHECK(roundtrip["mask_time_mode"].asInt() == 1);
+	CHECK(roundtrip["mask_loop_mode"].asInt() == 2);
+}
+
+TEST_CASE("EffectBase mask properties expose timing and loop controls", "[effect][mask][timing][properties]") {
+	Brightness effect(Keyframe(0.0), Keyframe(0.0));
+	Json::Value update;
+	update["mask_start"] = 0.2;
+	update["mask_end"] = 0.9;
+	update["mask_time_mode"] = 1;
+	update["mask_loop_mode"] = 2;
+	effect.SetJsonValue(update);
+
+	const Json::Value properties = openshot::stringToJson(effect.PropertiesJSON(1));
+	REQUIRE(properties.isObject());
+	CHECK(properties["mask_reader"]["name"].asString() == "Mask: Source");
+	CHECK(properties["mask_start"]["name"].asString() == "Mask: Start");
+	CHECK(properties["mask_end"]["name"].asString() == "Mask: End");
+	CHECK(properties["mask_time_mode"]["name"].asString() == "Mask: Time Mode");
+	CHECK(properties["mask_loop_mode"]["name"].asString() == "Mask: Loop");
+	CHECK(properties["mask_time_mode"]["choices"].size() == 2);
+	CHECK(properties["mask_loop_mode"]["choices"].size() == 3);
+}
+
+TEST_CASE("EffectBase timeline mode maps one-to-one with repeat loop", "[effect][mask][timing][timeline][repeat]") {
+	auto* tracking = new TrackingMaskReader(24, 1, 100);
+	Brightness effect(Keyframe(0.0), Keyframe(0.0));
+	effect.MaskReader(tracking);
+
+	Json::Value update;
+	update["mask_start"] = 1.0 / 24.0;
+	update["mask_end"] = 3.0 / 24.0;
+	update["mask_time_mode"] = 0; // Timeline
+	update["mask_loop_mode"] = 1; // Repeat
+	effect.SetJsonValue(update);
+
+	for (int64_t n = 1; n <= 7; ++n)
+		effect.ProcessFrame(make_input_frame(n), n);
+
+	const std::vector<int64_t> expected = {2, 3, 4, 2, 3, 4, 2};
+	CHECK(tracking->requests == expected);
+}
+
+TEST_CASE("EffectBase timeline mode supports ping-pong loop", "[effect][mask][timing][timeline][pingpong]") {
+	auto* tracking = new TrackingMaskReader(24, 1, 100);
+	Brightness effect(Keyframe(0.0), Keyframe(0.0));
+	effect.MaskReader(tracking);
+
+	Json::Value update;
+	update["mask_start"] = 1.0 / 24.0;
+	update["mask_end"] = 3.0 / 24.0;
+	update["mask_time_mode"] = 0; // Timeline
+	update["mask_loop_mode"] = 2; // Ping-Pong
+	effect.SetJsonValue(update);
+
+	for (int64_t n = 1; n <= 7; ++n)
+		effect.ProcessFrame(make_input_frame(n), n);
+
+	const std::vector<int64_t> expected = {2, 3, 4, 3, 2, 3, 4};
+	CHECK(tracking->requests == expected);
+}
+
+TEST_CASE("EffectBase timeline mode play-once clamps at end", "[effect][mask][timing][timeline][once]") {
+	auto* tracking = new TrackingMaskReader(24, 1, 100);
+	Brightness effect(Keyframe(0.0), Keyframe(0.0));
+	effect.MaskReader(tracking);
+
+	Json::Value update;
+	update["mask_start"] = 1.0 / 24.0;
+	update["mask_end"] = 3.0 / 24.0;
+	update["mask_time_mode"] = 0; // Timeline
+	update["mask_loop_mode"] = 0; // Play Once
+	effect.SetJsonValue(update);
+
+	for (int64_t n = 1; n <= 6; ++n)
+		effect.ProcessFrame(make_input_frame(n), n);
+
+	const std::vector<int64_t> expected = {2, 3, 4, 4, 4, 4};
+	CHECK(tracking->requests == expected);
+}
+
+TEST_CASE("EffectBase source FPS mode maps using parent clip FPS", "[effect][mask][timing][source_fps]") {
+	DummyReader clip_reader(Fraction(30, 1), 320, 240, 48000, 2, 4.0f);
+	Clip parent_clip;
+	parent_clip.Reader(&clip_reader);
+
+	auto* tracking = new TrackingMaskReader(15, 1, 100);
+	Brightness effect(Keyframe(0.0), Keyframe(0.0));
+	effect.ParentClip(&parent_clip);
+	effect.MaskReader(tracking);
+
+	Json::Value update;
+	update["mask_start"] = 0.0;
+	update["mask_end"] = 0;
+	update["mask_time_mode"] = 1; // Source FPS
+	update["mask_loop_mode"] = 0; // Play Once
+	effect.SetJsonValue(update);
+
+	for (int64_t n = 1; n <= 5; ++n)
+		effect.ProcessFrame(make_input_frame(n), n);
+
+	const std::vector<int64_t> expected = {1, 2, 2, 3, 3};
+	CHECK(tracking->requests == expected);
 }

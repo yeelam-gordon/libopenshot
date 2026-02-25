@@ -72,6 +72,15 @@ namespace openshot
 		/// Create a reader instance from reader JSON.
 		ReaderBase* CreateReaderFromJson(const Json::Value& reader_json) const;
 
+		/// Convert an effect frame number to a mask source frame number.
+		int64_t MapMaskFrameNumber(int64_t frame_number);
+
+		/// Determine host FPS used to convert timeline frames to mask source FPS.
+		double ResolveMaskHostFps();
+
+		/// Determine mask source duration in seconds.
+		double ResolveMaskSourceDuration() const;
+
 		/// Resolve a cached/scaled mask image for the target frame dimensions.
 		std::shared_ptr<QImage> ResolveMaskImage(std::shared_ptr<QImage> target_image, int64_t frame_number) {
 			return GetMaskImage(target_image, frame_number);
@@ -94,6 +103,22 @@ namespace openshot
 		/// Information about the current effect
 		EffectInfoStruct info;
 		bool mask_invert = false; ///< Invert grayscale mask values before blending.
+
+		enum MaskTimeMode {
+			MASK_TIME_TIMELINE = 0,
+			MASK_TIME_SOURCE_FPS = 1
+		};
+
+		enum MaskLoopMode {
+			MASK_LOOP_PLAY_ONCE = 0,
+			MASK_LOOP_REPEAT = 1,
+			MASK_LOOP_PING_PONG = 2
+		};
+
+		float mask_start = 0.0f; ///< Start time (seconds) in mask source.
+		float mask_end = 0.0f; ///< End time (seconds), 0 means source end.
+		int mask_time_mode = MASK_TIME_TIMELINE; ///< How effect frames map to mask source frames.
+		int mask_loop_mode = MASK_LOOP_PLAY_ONCE; ///< Behavior when mask range reaches the end.
 
 		/// Display effect information in the standard output stream (stdout)
 		void DisplayInfo(std::ostream* out=&std::cout);

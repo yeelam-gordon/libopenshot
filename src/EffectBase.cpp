@@ -13,10 +13,12 @@
 #include <iostream>
 #include <iomanip>
 #include <algorithm>
+#include <cmath>
 
 #include "EffectBase.h"
 
 #include "Exceptions.h"
+#include "Clip.h"
 #include "Timeline.h"
 #include "ReaderBase.h"
 #include "ChunkReader.h"
@@ -43,6 +45,10 @@ void EffectBase::InitEffectInfo()
 	parentEffect = NULL;
 	mask_invert = false;
 	mask_reader = NULL;
+	mask_start = 0.0f;
+	mask_end = 0.0f;
+	mask_time_mode = MASK_TIME_TIMELINE;
+	mask_loop_mode = MASK_LOOP_PLAY_ONCE;
 
 	info.has_video = false;
 	info.has_audio = false;
@@ -102,6 +108,10 @@ Json::Value EffectBase::JsonValue() const {
 	root["apply_before_clip"] = info.apply_before_clip;
 	root["order"] = Order();
 	root["mask_invert"] = mask_invert;
+	root["mask_start"] = static_cast<double>(mask_start);
+	root["mask_end"] = static_cast<double>(mask_end);
+	root["mask_time_mode"] = mask_time_mode;
+	root["mask_loop_mode"] = mask_loop_mode;
 	if (mask_reader)
 		root["mask_reader"] = mask_reader->JsonValue();
 	else
@@ -170,6 +180,21 @@ void EffectBase::SetJsonValue(const Json::Value root) {
 
 	if (!my_root["mask_invert"].isNull())
 		mask_invert = my_root["mask_invert"].asBool();
+	if (!my_root["mask_start"].isNull())
+		mask_start = std::max(0.0f, my_root["mask_start"].asFloat());
+	if (!my_root["mask_end"].isNull())
+		mask_end = std::max(0.0f, my_root["mask_end"].asFloat());
+	if (!my_root["mask_time_mode"].isNull()) {
+		const int time_mode = my_root["mask_time_mode"].asInt();
+		mask_time_mode = (time_mode == MASK_TIME_SOURCE_FPS) ? time_mode : MASK_TIME_TIMELINE;
+	}
+	if (!my_root["mask_loop_mode"].isNull()) {
+		const int loop_mode = my_root["mask_loop_mode"].asInt();
+		if (loop_mode >= MASK_LOOP_PLAY_ONCE && loop_mode <= MASK_LOOP_PING_PONG)
+			mask_loop_mode = loop_mode;
+		else
+			mask_loop_mode = MASK_LOOP_PLAY_ONCE;
+	}
 
 	const Json::Value mask_reader_json =
 		!my_root["mask_reader"].isNull() ? my_root["mask_reader"] : my_root["reader"];
@@ -180,6 +205,12 @@ void EffectBase::SetJsonValue(const Json::Value root) {
 		} else if (mask_reader_json.isObject() && mask_reader_json.empty()) {
 			MaskReader(NULL);
 		}
+	}
+
+	const double source_duration = ResolveMaskSourceDuration();
+	if (source_duration > 0.0) {
+		mask_start = static_cast<float>(std::min<double>(mask_start, source_duration));
+		mask_end = static_cast<float>(std::min<double>(mask_end, source_duration));
 	}
 
 	if (!my_root["parent_effect_id"].isNull()){
@@ -226,14 +257,30 @@ Json::Value EffectBase::BasePropertiesJSON(int64_t requested_frame) const {
 	root["parent_effect_id"] = add_property_json("Parent", 0.0, "string", info.parent_effect_id, NULL, -1, -1, false, requested_frame);
 
 	if (info.has_video) {
-		root["mask_invert"] = add_property_json("Invert Mask", mask_invert, "int", "", NULL, 0, 1, false, requested_frame);
+		const double source_duration = ResolveMaskSourceDuration();
+		const float clamped_start = static_cast<float>(std::min<double>(std::max(0.0f, mask_start), source_duration));
+		const float clamped_end = static_cast<float>(std::min<double>(std::max(0.0f, mask_end), source_duration));
+
+		root["mask_invert"] = add_property_json("Mask: Invert", mask_invert, "int", "", NULL, 0, 1, false, requested_frame);
 		root["mask_invert"]["choices"].append(add_property_choice_json("Yes", true, mask_invert));
 		root["mask_invert"]["choices"].append(add_property_choice_json("No", false, mask_invert));
 
+		root["mask_start"] = add_property_json("Mask: Start", clamped_start, "float", "", NULL, 0.0, source_duration, false, requested_frame);
+		root["mask_end"] = add_property_json("Mask: End", clamped_end, "float", "", NULL, 0.0, source_duration, false, requested_frame);
+
+		root["mask_time_mode"] = add_property_json("Mask: Time Mode", mask_time_mode, "int", "", NULL, 0, 1, false, requested_frame);
+		root["mask_time_mode"]["choices"].append(add_property_choice_json("Timeline", MASK_TIME_TIMELINE, mask_time_mode));
+		root["mask_time_mode"]["choices"].append(add_property_choice_json("Source FPS", MASK_TIME_SOURCE_FPS, mask_time_mode));
+
+		root["mask_loop_mode"] = add_property_json("Mask: Loop", mask_loop_mode, "int", "", NULL, 0, 2, false, requested_frame);
+		root["mask_loop_mode"]["choices"].append(add_property_choice_json("Play Once", MASK_LOOP_PLAY_ONCE, mask_loop_mode));
+		root["mask_loop_mode"]["choices"].append(add_property_choice_json("Repeat", MASK_LOOP_REPEAT, mask_loop_mode));
+		root["mask_loop_mode"]["choices"].append(add_property_choice_json("Ping-Pong", MASK_LOOP_PING_PONG, mask_loop_mode));
+
 		if (mask_reader)
-			root["mask_reader"] = add_property_json("Mask Source", 0.0, "reader", mask_reader->Json(), NULL, 0, 1, false, requested_frame);
+			root["mask_reader"] = add_property_json("Mask: Source", 0.0, "reader", mask_reader->Json(), NULL, 0, 1, false, requested_frame);
 		else
-			root["mask_reader"] = add_property_json("Mask Source", 0.0, "reader", "{}", NULL, 0, 1, false, requested_frame);
+			root["mask_reader"] = add_property_json("Mask: Source", 0.0, "reader", "{}", NULL, 0, 1, false, requested_frame);
 	}
 
 	return root;
@@ -284,6 +331,106 @@ void EffectBase::MaskReader(ReaderBase* new_reader) {
 		mask_reader->ParentClip(clip);
 }
 
+double EffectBase::ResolveMaskHostFps() {
+	if (clip) {
+		Clip* parent_clip = dynamic_cast<Clip*>(clip);
+		if (parent_clip && parent_clip->info.fps.num > 0 && parent_clip->info.fps.den > 0)
+			return parent_clip->info.fps.ToDouble();
+	}
+
+	Timeline* parent_timeline = dynamic_cast<Timeline*>(ParentTimeline());
+	if (parent_timeline && parent_timeline->info.fps.num > 0 && parent_timeline->info.fps.den > 0)
+		return parent_timeline->info.fps.ToDouble();
+
+	if (mask_reader && mask_reader->info.fps.num > 0 && mask_reader->info.fps.den > 0)
+		return mask_reader->info.fps.ToDouble();
+
+	return 30.0;
+}
+
+double EffectBase::ResolveMaskSourceDuration() const {
+	if (!mask_reader)
+		return 0.0;
+
+	if (mask_reader->info.duration > 0.0f)
+		return static_cast<double>(mask_reader->info.duration);
+
+	if (mask_reader->info.video_length > 0 &&
+		mask_reader->info.fps.num > 0 && mask_reader->info.fps.den > 0) {
+		return static_cast<double>(mask_reader->info.video_length) / mask_reader->info.fps.ToDouble();
+	}
+
+	return 0.0;
+}
+
+int64_t EffectBase::MapMaskFrameNumber(int64_t frame_number) {
+	if (!mask_reader)
+		return frame_number;
+
+	const int64_t requested_index = std::max(int64_t(0), frame_number - 1);
+	int64_t mapped_index = requested_index;
+
+	if (mask_time_mode == MASK_TIME_SOURCE_FPS &&
+		mask_reader->info.fps.num > 0 && mask_reader->info.fps.den > 0) {
+		const double host_fps = ResolveMaskHostFps();
+		const double source_fps = mask_reader->info.fps.ToDouble();
+		if (host_fps > 0.0 && source_fps > 0.0) {
+			const double seconds = static_cast<double>(requested_index) / host_fps;
+			mapped_index = static_cast<int64_t>(std::llround(seconds * source_fps));
+		}
+	}
+
+	const int64_t source_len = mask_reader->info.video_length;
+	const double source_fps = (mask_reader->info.fps.num > 0 && mask_reader->info.fps.den > 0)
+		? mask_reader->info.fps.ToDouble() : 30.0;
+	const double source_duration = ResolveMaskSourceDuration();
+	const double start_sec = std::min<double>(std::max(0.0f, mask_start), source_duration);
+	const double end_sec = std::min<double>(std::max(0.0f, mask_end), source_duration);
+
+	const int64_t range_start = std::max(int64_t(1), static_cast<int64_t>(std::llround(start_sec * source_fps)) + 1);
+	int64_t range_end = (end_sec > 0.0)
+		? static_cast<int64_t>(std::llround(end_sec * source_fps)) + 1
+		: source_len;
+	if (source_len > 0)
+		range_end = std::min(range_end, source_len);
+	if (range_end < range_start)
+		range_end = range_start;
+
+	const int64_t range_len = std::max(int64_t(1), range_end - range_start + 1);
+	int64_t range_index = mapped_index;
+
+	switch (mask_loop_mode) {
+	case MASK_LOOP_REPEAT:
+		range_index = mapped_index % range_len;
+		break;
+	case MASK_LOOP_PING_PONG:
+		if (range_len > 1) {
+			const int64_t cycle_len = (range_len * 2) - 2;
+			int64_t phase = mapped_index % cycle_len;
+			if (phase >= range_len)
+				phase = cycle_len - phase;
+			range_index = phase;
+		} else {
+			range_index = 0;
+		}
+		break;
+	case MASK_LOOP_PLAY_ONCE:
+	default:
+		if (mapped_index < 0)
+			range_index = 0;
+		else if (mapped_index >= range_len)
+			range_index = range_len - 1;
+		else
+			range_index = mapped_index;
+		break;
+	}
+
+	int64_t mapped_frame = range_start + range_index;
+	if (source_len > 0)
+		mapped_frame = std::min(std::max(int64_t(1), mapped_frame), source_len);
+	return std::max(int64_t(1), mapped_frame);
+}
+
 std::shared_ptr<QImage> EffectBase::GetMaskImage(std::shared_ptr<QImage> target_image, int64_t frame_number) {
 	if (!mask_reader || !target_image || target_image->isNull())
 		return {};
@@ -293,7 +440,8 @@ std::shared_ptr<QImage> EffectBase::GetMaskImage(std::shared_ptr<QImage> target_
 	{
 		if (!mask_reader->IsOpen())
 			mask_reader->Open();
-		auto source_frame = mask_reader->GetFrame(frame_number);
+		const int64_t mapped_frame = MapMaskFrameNumber(frame_number);
+		auto source_frame = mask_reader->GetFrame(mapped_frame);
 		if (source_frame && source_frame->GetImage() && !source_frame->GetImage()->isNull())
 			source_mask = std::make_shared<QImage>(*source_frame->GetImage());
 	}
