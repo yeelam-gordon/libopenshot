@@ -248,7 +248,7 @@ void FFmpegReader::Open() {
 
 		// Open video file
 		if (avformat_open_input(&pFormatCtx, path.c_str(), NULL, NULL) != 0)
-			throw InvalidFile("File could not be opened.", path);
+			throw InvalidFile("FFmpegReader could not open media file.", path);
 
 		// Retrieve stream information
 		if (avformat_find_stream_info(pFormatCtx, NULL) < 0)
@@ -1116,6 +1116,29 @@ void FFmpegReader::UpdateVideoInfo() {
 	}
 
 	ApplyDurationStrategy();
+
+	// Normalize FFmpeg-decoded still images (e.g. JPG/JPEG) to match image-reader behavior.
+	// This keeps timing/flags consistent regardless of which reader path was used.
+	if (!info.has_single_image && audioStream < 0) {
+		const AVCodecID codec_id = AV_FIND_DECODER_CODEC_ID(pStream);
+		const bool likely_still_codec =
+			codec_id == AV_CODEC_ID_MJPEG ||
+			codec_id == AV_CODEC_ID_PNG ||
+			codec_id == AV_CODEC_ID_BMP ||
+			codec_id == AV_CODEC_ID_TIFF ||
+			codec_id == AV_CODEC_ID_WEBP ||
+			codec_id == AV_CODEC_ID_JPEG2000;
+		const bool likely_image_demuxer =
+			pFormatCtx && pFormatCtx->iformat && pFormatCtx->iformat->name &&
+			strstr(pFormatCtx->iformat->name, "image2");
+		const bool single_frame_clip = info.video_length <= 1;
+
+		if (single_frame_clip && (likely_still_codec || likely_image_demuxer)) {
+			info.has_single_image = true;
+			record_duration(video_stream_duration_seconds, 60 * 60 * 1);  // 1 hour duration
+			ApplyDurationStrategy();
+		}
+	}
 
 	// Add video metadata (if any)
 	AVDictionaryEntry *tag = NULL;
@@ -2768,11 +2791,5 @@ void FFmpegReader::SetJsonValue(const Json::Value root) {
 		} else {
 			duration_strategy = DurationStrategy::LongestStream;
 		}
-	}
-
-	// Re-Open path, and re-init everything (if needed)
-	if (is_open) {
-		Close();
-		Open();
 	}
 }

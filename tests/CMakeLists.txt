@@ -62,6 +62,7 @@ set(OPENSHOT_TESTS
 # ImageMagick related test files
 if($CACHE{HAVE_IMAGEMAGICK})
   list(APPEND OPENSHOT_TESTS
+    ImageReader
     ImageWriter
   )
 endif()

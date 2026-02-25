@@ -13,6 +13,10 @@
 #include <sstream>
 #include <memory>
 #include <set>
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <ctime>
 
 #include "openshot_catch.h"
 
@@ -26,8 +30,16 @@ using namespace openshot;
 
 TEST_CASE( "Invalid_Path", "[libopenshot][ffmpegreader]" )
 {
-	// Check invalid path
-	CHECK_THROWS_AS(FFmpegReader(""), InvalidFile);
+	// Check invalid path and error details
+	const std::string invalid_path = "/tmp/__openshot_missing_test_file__.mp4";
+	try {
+		FFmpegReader r(invalid_path);
+		FAIL("Expected InvalidFile for missing media path");
+	} catch (const InvalidFile& e) {
+		const std::string message = e.what();
+		CHECK(message.find("FFmpegReader could not open media file.") != std::string::npos);
+		CHECK(message.find(invalid_path) != std::string::npos);
+	}
 }
 
 TEST_CASE( "GetFrame_Before_Opening", "[libopenshot][ffmpegreader]" )
@@ -346,6 +358,68 @@ TEST_CASE( "Multiple_Open_and_Close", "[libopenshot][ffmpegreader]" )
 
 	// Close reader
 	r.Close();
+}
+
+TEST_CASE( "Static_Image_PNG_Reports_Single_Image", "[libopenshot][ffmpegreader]" )
+{
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "front.png";
+	FFmpegReader r(path.str(), DurationStrategy::VideoPreferred);
+	r.Open();
+
+	CHECK(r.info.has_video);
+	CHECK_FALSE(r.info.has_audio);
+	CHECK(r.info.has_single_image);
+	CHECK(r.info.video_length > 1);
+	CHECK(r.info.duration > 1000.0f);
+
+	auto f1 = r.GetFrame(1);
+	auto f2 = r.GetFrame(std::min(2, static_cast<int>(r.info.video_length)));
+	CHECK(f1->CheckPixel(50, 50,
+		f2->GetPixels(50)[50 * 4 + 0],
+		f2->GetPixels(50)[50 * 4 + 1],
+		f2->GetPixels(50)[50 * 4 + 2],
+		f2->GetPixels(50)[50 * 4 + 3],
+		0));
+
+	r.Close();
+}
+
+TEST_CASE( "Static_Image_JPG_Reports_Single_Image", "[libopenshot][ffmpegreader]" )
+{
+	// Generate a JPG fixture at runtime from a known PNG frame.
+	std::stringstream png_path;
+	png_path << TEST_MEDIA_PATH << "front.png";
+	FFmpegReader png_reader(png_path.str());
+	png_reader.Open();
+
+	auto png_frame = png_reader.GetFrame(1);
+	std::srand(static_cast<unsigned int>(std::time(nullptr)));
+	std::stringstream jpg_path;
+	jpg_path << "libopenshot-static-image-test-" << std::rand() << ".jpg";
+	REQUIRE(png_frame->GetImage()->save(jpg_path.str().c_str(), "JPG"));
+	png_reader.Close();
+
+	FFmpegReader jpg_reader(jpg_path.str(), DurationStrategy::VideoPreferred);
+	jpg_reader.Open();
+
+	CHECK(jpg_reader.info.has_video);
+	CHECK_FALSE(jpg_reader.info.has_audio);
+	CHECK(jpg_reader.info.has_single_image);
+	CHECK(jpg_reader.info.video_length > 1);
+	CHECK(jpg_reader.info.duration > 1000.0f);
+
+	auto f1 = jpg_reader.GetFrame(1);
+	auto f2 = jpg_reader.GetFrame(std::min(2, static_cast<int>(jpg_reader.info.video_length)));
+	CHECK(f1->CheckPixel(50, 50,
+		f2->GetPixels(50)[50 * 4 + 0],
+		f2->GetPixels(50)[50 * 4 + 1],
+		f2->GetPixels(50)[50 * 4 + 2],
+		f2->GetPixels(50)[50 * 4 + 3],
+		2));
+
+	jpg_reader.Close();
+	std::remove(jpg_path.str().c_str());
 }
 
 TEST_CASE( "verify parent Timeline", "[libopenshot][ffmpegreader]" )
