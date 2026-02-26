@@ -61,7 +61,7 @@ namespace openshot
         /// @return The current speed (1=normal, 2=fast, –1=rewind, etc.)
         int getSpeed() const { return speed.load(); }
 
-        /// Seek to a specific frame (no preroll).
+        /// Backward-compatible alias for playback position updates (no seek side effects).
         void Seek(int64_t new_position);
 
         /**
@@ -70,6 +70,9 @@ namespace openshot
          * @param start_preroll If true, forces cache to rebuild around new_position.
          */
         void Seek(int64_t new_position, bool start_preroll);
+
+        /// Update playback position without triggering seek behavior or cache invalidation.
+        void NotifyPlaybackPosition(int64_t new_position);
 
         /// Start the cache thread at high priority. Returns true if it’s actually running.
         bool StartThread();
@@ -171,7 +174,8 @@ namespace openshot
                             int64_t window_begin,
                             int64_t window_end,
                             int dir,
-                            ReaderBase* reader);
+                            ReaderBase* reader,
+                            int64_t max_frames_to_fetch = -1);
 
         //---------- Internal state ----------
 
@@ -182,6 +186,8 @@ namespace openshot
         std::atomic<int> last_dir;         ///< Last direction sign (+1 forward, –1 backward).
         std::atomic<bool> userSeeked;      ///< True if Seek(..., true) was called (forces a cache reset).
         std::atomic<bool> preroll_on_next_fill; ///< True if next cache rebuild should include preroll offset.
+        std::atomic<bool> clear_cache_on_next_fill; ///< True if next cache loop should clear existing cache ranges.
+        std::atomic<bool> scrub_active;    ///< True while user is dragging/scrubbing the playhead.
 
         std::atomic<int64_t> requested_display_frame; ///< Frame index the user requested.
         int64_t current_display_frame;   ///< Currently displayed frame (unused here, reserved).

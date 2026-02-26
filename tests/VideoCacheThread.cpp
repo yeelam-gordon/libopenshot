@@ -42,6 +42,10 @@ public:
     void    setMinFramesAhead(int64_t v) { min_frames_ahead.store(v); }
     void    setLastDir(int d) { last_dir.store(d); }
     void    forceUserSeekFlag() { userSeeked.store(true); }
+    bool    isScrubbing() const { return scrub_active.load(); }
+    bool    getUserSeekedFlag() const { return userSeeked.load(); }
+    bool    getPrerollOnNextFill() const { return preroll_on_next_fill.load(); }
+    int64_t getRequestedDisplayFrame() const { return requested_display_frame.load(); }
 };
 
 // ----------------------------------------------------------------------------
@@ -312,4 +316,85 @@ TEST_CASE("prefetchWindow: interrupt on userSeeked flag", "[VideoCacheThread]") 
     // Should stop at 23
     CHECK(thread.getLastCachedIndex() == 23);
     CHECK(!wasFull);
+}
+
+TEST_CASE("Seek preview: inside cache is cheap and does not invalidate", "[VideoCacheThread]") {
+    TestableVideoCacheThread thread;
+    CacheMemory cache(/*max_bytes=*/100000000);
+    Timeline timeline(/*width=*/1280, /*height=*/720, /*fps=*/Fraction(24,1),
+                      /*sample_rate=*/48000, /*channels=*/2, ChannelLayout::LAYOUT_STEREO);
+    timeline.SetCache(&cache);
+    thread.Reader(&timeline);
+
+    cache.Add(std::make_shared<Frame>(100, 0, 0));
+    cache.Add(std::make_shared<Frame>(101, 0, 0));
+    REQUIRE(cache.Count() >= 2);
+
+    thread.Seek(/*new_position=*/100, /*start_preroll=*/false);
+
+    CHECK(thread.isScrubbing());
+    CHECK(thread.getUserSeekedFlag());
+    CHECK(!thread.getPrerollOnNextFill());
+    CHECK(cache.Contains(100));
+    CHECK(cache.Count() >= 2);
+}
+
+TEST_CASE("Seek preview: outside cache marks uncached without preroll", "[VideoCacheThread]") {
+    TestableVideoCacheThread thread;
+    CacheMemory cache(/*max_bytes=*/100000000);
+    Timeline timeline(/*width=*/1280, /*height=*/720, /*fps=*/Fraction(24,1),
+                      /*sample_rate=*/48000, /*channels=*/2, ChannelLayout::LAYOUT_STEREO);
+    timeline.SetCache(&cache);
+    thread.Reader(&timeline);
+
+    cache.Add(std::make_shared<Frame>(10, 0, 0));
+    cache.Add(std::make_shared<Frame>(11, 0, 0));
+    REQUIRE(cache.Count() >= 2);
+
+    thread.Seek(/*new_position=*/300, /*start_preroll=*/false);
+
+    CHECK(thread.isScrubbing());
+    CHECK(thread.getUserSeekedFlag());
+    CHECK(!thread.getPrerollOnNextFill());
+    CHECK(cache.Count() >= 2);
+}
+
+TEST_CASE("Seek commit: exits scrub mode and enables preroll when uncached", "[VideoCacheThread]") {
+    TestableVideoCacheThread thread;
+    CacheMemory cache(/*max_bytes=*/100000000);
+    Timeline timeline(/*width=*/1280, /*height=*/720, /*fps=*/Fraction(24,1),
+                      /*sample_rate=*/48000, /*channels=*/2, ChannelLayout::LAYOUT_STEREO);
+    timeline.SetCache(&cache);
+    thread.Reader(&timeline);
+
+    thread.Seek(/*new_position=*/200, /*start_preroll=*/false);
+    CHECK(thread.isScrubbing());
+
+    thread.Seek(/*new_position=*/200, /*start_preroll=*/true);
+
+    CHECK(!thread.isScrubbing());
+    CHECK(thread.getUserSeekedFlag());
+    CHECK(thread.getPrerollOnNextFill());
+}
+
+TEST_CASE("NotifyPlaybackPosition: ignored while scrubbing, applied after commit", "[VideoCacheThread]") {
+    TestableVideoCacheThread thread;
+    CacheMemory cache(/*max_bytes=*/100000000);
+    Timeline timeline(/*width=*/1280, /*height=*/720, /*fps=*/Fraction(24,1),
+                      /*sample_rate=*/48000, /*channels=*/2, ChannelLayout::LAYOUT_STEREO);
+    timeline.SetCache(&cache);
+    thread.Reader(&timeline);
+
+    thread.Seek(/*new_position=*/120, /*start_preroll=*/false);
+    REQUIRE(thread.isScrubbing());
+    CHECK(thread.getRequestedDisplayFrame() == 120);
+
+    thread.NotifyPlaybackPosition(/*new_position=*/25);
+    CHECK(thread.getRequestedDisplayFrame() == 120);
+
+    thread.Seek(/*new_position=*/120, /*start_preroll=*/true);
+    REQUIRE(!thread.isScrubbing());
+
+    thread.NotifyPlaybackPosition(/*new_position=*/25);
+    CHECK(thread.getRequestedDisplayFrame() == 25);
 }
