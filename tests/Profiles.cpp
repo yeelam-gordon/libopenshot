@@ -13,18 +13,30 @@
 #include "openshot_catch.h"
 #include <cstdlib>
 #include <sstream>
-#include <unistd.h>
+#include <fstream>
+#include <cstdio>
 
-#include <QDir>
 
-
+#include "Exceptions.h"
 #include "Profiles.h"
 
-static std::string test_output_profile_path(const std::string& base_name) {
-    std::stringstream path;
-    path << QDir::currentPath().toStdString() << "/" << base_name
-         << "_" << getpid() << "_" << rand();
-    return path.str();
+static std::string get_temp_test_path(const std::string& file_name) {
+#ifdef _WIN32
+    const char* base = std::getenv("TEMP");
+    if (!base || !*base) {
+        base = std::getenv("TMP");
+    }
+    if (!base || !*base) {
+        base = ".";
+    }
+    return std::string(base) + "\\" + file_name;
+#else
+    const char* base = std::getenv("TMPDIR");
+    if (!base || !*base) {
+        base = "/tmp";
+    }
+    return std::string(base) + "/" + file_name;
+#endif
 }
 
 TEST_CASE( "empty constructor", "[libopenshot][profile]" )
@@ -99,6 +111,38 @@ TEST_CASE( "constructor with example profiles", "[libopenshot][profile]" )
     CHECK(p2.info.pixel_ratio.den == 1);
     CHECK(p2.info.interlaced_frame == true);
     CHECK(p2.info.spherical == false);
+}
+
+TEST_CASE( "invalid profile path message", "[libopenshot][profile]" )
+{
+    const std::string invalid_path = get_temp_test_path("__openshot_missing_test_profile__");
+    std::remove(invalid_path.c_str());
+    try {
+        openshot::Profile p(invalid_path);
+        FAIL("Expected InvalidFile for missing profile path");
+    } catch (const openshot::InvalidFile& e) {
+        const std::string message = e.what();
+        CHECK(message.find("Profile file could not be found or opened.") != std::string::npos);
+        CHECK(message.find(invalid_path) != std::string::npos);
+    }
+}
+
+TEST_CASE( "invalid profile parse message", "[libopenshot][profile]" )
+{
+    const std::string invalid_profile = get_temp_test_path("openshot_invalid_profile_for_test.profile");
+    {
+        std::ofstream f(invalid_profile);
+        f << "width=abc\n";
+    }
+
+    try {
+        openshot::Profile p(invalid_profile);
+        FAIL("Expected InvalidFile for malformed profile contents");
+    } catch (const openshot::InvalidFile& e) {
+        const std::string message = e.what();
+        CHECK(message.find("Profile file could not be parsed (invalid format or values).") != std::string::npos);
+        CHECK(message.find(invalid_profile) != std::string::npos);
+    }
 }
 
 TEST_CASE( "24 fps names", "[libopenshot][profile]" )

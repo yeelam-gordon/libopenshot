@@ -25,8 +25,16 @@ using namespace openshot;
 
 TEST_CASE( "Default_Constructor", "[libopenshot][qtimagereader]" )
 {
-	// Check invalid path
-	CHECK_THROWS_AS(QtImageReader(""), InvalidFile);
+	// Check invalid path and error details
+	const std::string invalid_path = "/tmp/__openshot_missing_test_file__.png";
+	try {
+		QtImageReader r(invalid_path);
+		FAIL("Expected InvalidFile for missing image path");
+	} catch (const InvalidFile& e) {
+		const std::string message = e.what();
+		CHECK(message.find("QtImageReader could not open image file.") != std::string::npos);
+		CHECK(message.find(invalid_path) != std::string::npos);
+	}
 }
 
 TEST_CASE( "GetFrame_Before_Opening", "[libopenshot][qtimagereader]" )

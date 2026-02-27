@@ -19,6 +19,20 @@
 
 using namespace openshot;
 
+TEST_CASE( "Invalid_Path_ImageReader", "[libopenshot][imagereader]" )
+{
+	// Check invalid path and error details
+	const std::string invalid_path = "/tmp/__openshot_missing_test_file__.png";
+	try {
+		ImageReader r(invalid_path);
+		FAIL("Expected InvalidFile for missing image path");
+	} catch (const InvalidFile& e) {
+		const std::string message = e.what();
+		CHECK(message.find("ImageReader could not open image file.") != std::string::npos);
+		CHECK(message.find(invalid_path) != std::string::npos);
+	}
+}
+
 TEST_CASE( "Duration_And_Length_ImageReader", "[libopenshot][imagereader]" )
 {
 	// Create a reader

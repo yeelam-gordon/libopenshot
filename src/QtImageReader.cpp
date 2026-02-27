@@ -77,7 +77,7 @@ void QtImageReader::Open()
 
         if (!loaded) {
             // raise exception
-            throw InvalidFile("File could not be opened.", path.toStdString());
+            throw InvalidFile("QtImageReader could not open image file.", path.toStdString());
         }
 
         // Update image properties
@@ -367,11 +367,4 @@ void QtImageReader::SetJsonValue(const Json::Value root) {
     // Set data from Json (if key is found)
     if (!root["path"].isNull())
         path = QString::fromStdString(root["path"].asString());
-
-    // Re-Open path, and re-init everything (if needed)
-    if (is_open)
-    {
-        Close();
-        Open();
-    }
 }

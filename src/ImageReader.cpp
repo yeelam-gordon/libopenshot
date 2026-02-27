@@ -49,7 +49,7 @@ void ImageReader::Open()
 		}
 		catch (const Magick::Exception& e) {
 			// raise exception
-			throw InvalidFile("File could not be opened.", path);
+			throw InvalidFile("ImageReader could not open image file.", path);
 		}
 
 		// Update image properties

@@ -102,7 +102,7 @@ Timeline::Timeline(const std::string& projectPath, bool convert_absolute_paths) 
 	// Check if path exists
 	QFileInfo filePath(QString::fromStdString(path));
 	if (!filePath.exists()) {
-		throw InvalidFile("File could not be opened.", path);
+		throw InvalidFile("Timeline project file could not be opened.", path);
 	}
 
 	// Check OpenShot Install Path exists
