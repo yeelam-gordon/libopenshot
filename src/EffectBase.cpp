@@ -24,6 +24,7 @@
 #include "ChunkReader.h"
 #include "FFmpegReader.h"
 #include "QtImageReader.h"
+#include "ZmqLogger.h"
 #include <omp.h>
 
 #ifdef USE_IMAGEMAGICK
@@ -438,12 +439,18 @@ std::shared_ptr<QImage> EffectBase::GetMaskImage(std::shared_ptr<QImage> target_
 	std::shared_ptr<QImage> source_mask;
 	#pragma omp critical (open_effect_mask_reader)
 	{
-		if (!mask_reader->IsOpen())
-			mask_reader->Open();
-		const int64_t mapped_frame = MapMaskFrameNumber(frame_number);
-		auto source_frame = mask_reader->GetFrame(mapped_frame);
-		if (source_frame && source_frame->GetImage() && !source_frame->GetImage()->isNull())
-			source_mask = std::make_shared<QImage>(*source_frame->GetImage());
+		try {
+			if (!mask_reader->IsOpen())
+				mask_reader->Open();
+			const int64_t mapped_frame = MapMaskFrameNumber(frame_number);
+			auto source_frame = mask_reader->GetFrame(mapped_frame);
+			if (source_frame && source_frame->GetImage() && !source_frame->GetImage()->isNull())
+				source_mask = std::make_shared<QImage>(*source_frame->GetImage());
+		} catch (const std::exception& e) {
+			ZmqLogger::Instance()->Log(
+				std::string("EffectBase::GetMaskImage unable to read mask frame: ") + e.what());
+			source_mask.reset();
+		}
 	}
 
 	if (!source_mask || source_mask->isNull())
