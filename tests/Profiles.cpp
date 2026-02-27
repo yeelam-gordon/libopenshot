@@ -39,6 +39,12 @@ static std::string get_temp_test_path(const std::string& file_name) {
 #endif
 }
 
+static std::string test_output_profile_path(const std::string& base_name) {
+    std::stringstream file_name;
+    file_name << base_name << "_" << std::rand() << ".profile";
+    return get_temp_test_path(file_name.str());
+}
+
 TEST_CASE( "empty constructor", "[libopenshot][profile]" )
 {
     openshot::Profile p1;
