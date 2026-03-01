@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <QDir>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <unordered_map>
 #include <cmath>
 #include <cstdint>
@@ -30,7 +31,7 @@ using namespace openshot;
 
 // Default Constructor for the timeline (which sets the canvas width and height)
 Timeline::Timeline(int width, int height, Fraction fps, int sample_rate, int channels, ChannelLayout channel_layout) :
-		is_open(false), auto_map_clips(true), managed_cache(true), path(""), max_time(0.0)
+		is_open(false), auto_map_clips(true), managed_cache(true), path(""), max_time(0.0), cache_epoch(0)
 {
 	// Create CrashHandler and Attach (incase of errors)
 	CrashHandler::Instance();
@@ -81,7 +82,7 @@ Timeline::Timeline(const ReaderInfo info) : Timeline::Timeline(
 
 // Constructor for the timeline (which loads a JSON structure from a file path, and initializes a timeline)
 Timeline::Timeline(const std::string& projectPath, bool convert_absolute_paths) :
-		is_open(false), auto_map_clips(true), managed_cache(true), path(projectPath), max_time(0.0) {
+		is_open(false), auto_map_clips(true), managed_cache(true), path(projectPath), max_time(0.0), cache_epoch(0) {
 
 	// Create CrashHandler and Attach (incase of errors)
 	CrashHandler::Instance();
@@ -1344,6 +1345,9 @@ void Timeline::SetJsonValue(const Json::Value root) {
 	// Re-open if needed
 	if (was_open)
 		Open();
+
+	// Timeline content changed: notify cache clients to rescan active window.
+	BumpCacheEpoch();
 }
 
 // Apply a special formatted JSON object, which represents a change to the timeline (insert, update, delete)
@@ -1374,12 +1378,21 @@ void Timeline::ApplyJsonDiff(std::string value) {
 				apply_json_to_timeline(change);
 
 		}
+
+		// Timeline content changed: notify cache clients to rescan active window.
+		if (!root.empty()) {
+			BumpCacheEpoch();
+		}
 	}
 	catch (const std::exception& e)
 	{
 		// Error parsing JSON (or missing keys)
 		throw InvalidJSON("JSON is invalid (missing keys or invalid data types)");
 	}
+}
+
+void Timeline::BumpCacheEpoch() {
+	cache_epoch.fetch_add(1, std::memory_order_relaxed);
 }
 
 // Apply JSON diff to clips
@@ -1791,6 +1804,9 @@ void Timeline::ClearAllCache(bool deep) {
 	} catch (const ReaderClosed & e) {
 		// ...
 	}
+
+	// Cache content changed: notify cache clients to rebuild their window baseline.
+	BumpCacheEpoch();
 }
 
 // Set Max Image Size (used for performance optimization). Convenience function for setting

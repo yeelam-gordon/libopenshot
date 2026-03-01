@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <cmath>
 #include <sstream>
+#include <QPainter>
 
 #ifdef USE_IMAGEMAGICK
 	#include "MagickUtilities.h"

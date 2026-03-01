@@ -40,6 +40,8 @@ namespace openshot
         , reader(nullptr)
         , force_directional_cache(false)
         , last_cached_index(0)
+        , seen_timeline_cache_epoch(0)
+        , timeline_cache_epoch_initialized(false)
     {
     }
 
@@ -128,6 +130,15 @@ namespace openshot
     {
         stopThread(timeoutMs);
         return !isThreadRunning();
+    }
+
+    void VideoCacheThread::Reader(ReaderBase* new_reader)
+    {
+        std::lock_guard<std::mutex> guard(seek_state_mutex);
+        reader = new_reader;
+        seen_timeline_cache_epoch = 0;
+        timeline_cache_epoch_initialized = false;
+        Play();
     }
 
     void VideoCacheThread::Seek(int64_t new_position, bool start_preroll)
@@ -469,6 +480,27 @@ namespace openshot
             int dir = computeDirection();
             if (speed.load() != 0) {
                 last_dir.store(dir);
+            }
+
+            // If timeline-side cache invalidation occurred (e.g. ApplyJsonDiff / SetJson),
+            // restart fill from the active playhead window so invalidated gaps self-heal.
+            if (timeline) {
+                bool epoch_changed = false;
+                {
+                    std::lock_guard<std::mutex> guard(seek_state_mutex);
+                    const uint64_t timeline_epoch = timeline->CacheEpoch();
+                    if (!timeline_cache_epoch_initialized) {
+                        seen_timeline_cache_epoch = timeline_epoch;
+                        timeline_cache_epoch_initialized = true;
+                    }
+                    else if (timeline_epoch != seen_timeline_cache_epoch) {
+                        seen_timeline_cache_epoch = timeline_epoch;
+                        epoch_changed = true;
+                    }
+                }
+                if (epoch_changed) {
+                    handleUserSeek(playhead, dir);
+                }
             }
 
             // Compute bytes_per_frame, max_bytes, and capacity once

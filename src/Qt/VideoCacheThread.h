@@ -18,6 +18,7 @@
 #include <AppConfig.h>
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <memory>
 
@@ -84,7 +85,7 @@ namespace openshot
          * @brief Attach a ReaderBase (e.g. Timeline, FFmpegReader) and begin caching.
          * @param new_reader
          */
-        void Reader(ReaderBase* new_reader) { reader = new_reader; Play(); }
+        void Reader(ReaderBase* new_reader);
 
     protected:
         /// Thread entry point: loops until threadShouldExit() is true.
@@ -198,6 +199,8 @@ namespace openshot
 
         ReaderBase* reader;              ///< The source reader (e.g., Timeline, FFmpegReader).
         bool force_directional_cache;    ///< (Reserved for future use).
+        uint64_t seen_timeline_cache_epoch; ///< Last observed Timeline cache invalidation epoch.
+        bool timeline_cache_epoch_initialized; ///< True once an initial epoch snapshot has been taken.
 
         std::atomic<int64_t> last_cached_index;       ///< Index of the most recently cached frame.
         mutable std::mutex seek_state_mutex;          ///< Protects coherent seek state updates/consumption.

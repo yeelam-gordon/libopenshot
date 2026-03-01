@@ -15,11 +15,9 @@
 
 #include <list>
 #include <memory>
-#include <mutex>
 #include <set>
-#include <QtGui/QImage>
-#include <QtGui/QPainter>
-#include <QtCore/QRegularExpression>
+#include <atomic>
+#include <cstdint>
 
 #include "TimelineBase.h"
 #include "ReaderBase.h"
@@ -167,6 +165,7 @@ namespace openshot {
 		std::string path; ///< Optional path of loaded UTF-8 OpenShot JSON project file
 		double max_time; ///> The max duration (in seconds) of the timeline, based on the furthest clip (right edge)
 		double min_time; ///> The min duration (in seconds) of the timeline, based on the position of the first clip (left edge)
+		std::atomic<uint64_t> cache_epoch; ///< Monotonic cache-invalidation epoch for playback cache reconciliation.
 
 		std::map<std::string, std::shared_ptr<openshot::TrackedObjectBase>> tracked_objects; ///< map of TrackedObjectBBoxes and their IDs
 
@@ -210,6 +209,9 @@ namespace openshot {
 
 		/// Update the list of 'opened' clips
 		void update_open_clips(openshot::Clip *clip, bool does_clip_intersect);
+
+		/// Increment the cache invalidation epoch.
+		void BumpCacheEpoch();
 
 	public:
 
@@ -312,6 +314,9 @@ namespace openshot {
 		/// Set the cache object used by this reader. You must now manage the lifecycle
 		/// of this cache object though (Timeline will not delete it for you).
 		void SetCache(openshot::CacheBase* new_cache);
+
+		/// Return the current cache invalidation epoch.
+		uint64_t CacheEpoch() const { return cache_epoch.load(std::memory_order_relaxed); };
 
 		/// Get an openshot::Frame object for a specific frame number of this timeline.
 		///
