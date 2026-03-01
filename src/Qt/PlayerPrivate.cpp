@@ -192,9 +192,8 @@ namespace openshot
         // Drop local frame reference so same-frame refreshes cannot reuse stale
         // content after timeline/clip property updates.
         frame.reset();
-        // If actively playing, require cache readiness before advancing after seek.
-        // If paused, keep dirty so the requested frame is rendered immediately.
-        is_dirty = (speed == 0);
+        // Always force immediate refresh after seek/update, even while playing.
+        is_dirty = true;
     }
 
     // Start video/audio playback

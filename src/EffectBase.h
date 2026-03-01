@@ -58,6 +58,9 @@ namespace openshot
 	private:
 		int order; ///< The order to evaluate this effect. Effects are processed in this order (when more than one overlap).
 		ReaderBase* mask_reader = nullptr; ///< Optional common reader-based mask source.
+		std::shared_ptr<QImage> cached_single_mask_image; ///< Cached scaled mask for still-image mask sources.
+		int cached_single_mask_width = 0; ///< Cached mask width.
+		int cached_single_mask_height = 0; ///< Cached mask height.
 
 		/// Build or refresh a mask image that matches target_image dimensions.
 		std::shared_ptr<QImage> GetMaskImage(std::shared_ptr<QImage> target_image, int64_t frame_number);
@@ -92,6 +95,9 @@ namespace openshot
 		/// Optional override for effects with custom mask implementation.
 		virtual void ApplyCustomMaskBlend(std::shared_ptr<QImage> original_image, std::shared_ptr<QImage> effected_image,
 								  std::shared_ptr<QImage> mask_image, int64_t frame_number) const {}
+
+		/// Optional override for effects that apply mask processing inside GetFrame().
+		virtual bool HandlesMaskInternally() const { return false; }
 
 	public:
 		/// Parent effect (which properties will set this effect properties)

@@ -130,9 +130,6 @@ namespace openshot {
 		/// Apply background image to the current clip image (i.e. flatten this image onto previous layer)
 		void apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_ptr<openshot::Frame> background_frame);
 
-		/// Composite clip image onto a destination frame without mutating clip frame image.
-		void compose_onto_background(std::shared_ptr<openshot::Frame> frame, std::shared_ptr<openshot::Frame> background_frame);
-
 		/// Apply effects to the source frame (if any)
 		void apply_effects(std::shared_ptr<openshot::Frame> frame, int64_t timeline_frame_number, TimelineInfoStruct* options, bool before_keyframes);
 

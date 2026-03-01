@@ -40,9 +40,7 @@ namespace openshot
 		void init_effect_details();
 
 	protected:
-		bool UseCustomMaskBlend(int64_t frame_number) const override;
-		void ApplyCustomMaskBlend(std::shared_ptr<QImage> original_image, std::shared_ptr<QImage> effected_image,
-							  std::shared_ptr<QImage> mask_image, int64_t frame_number) const override;
+		bool HandlesMaskInternally() const override { return true; }
 
 	public:
 		bool replace_image;		///< Replace the frame image with a grayscale image representing the mask. Great for debugging a mask.

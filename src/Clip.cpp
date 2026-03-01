@@ -512,24 +512,27 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
             final_cache.Add(frame);
         }
 
-        if (!background_frame) {
+		const bool has_external_background = (background_frame != nullptr);
+		if (!background_frame) {
             // Create missing background_frame w/ transparent color (if needed)
             background_frame = std::make_shared<Frame>(frame->number, frame->GetWidth(), frame->GetHeight(),
                                                        "#00000000",  frame->GetAudioSamplesCount(),
                                                        frame->GetAudioChannelsCount());
         }
 
-		const bool from_timeline = (options != nullptr);
-		if (from_timeline) {
-			// Timeline path composites into destination only, preserving cached clip pixels.
-			compose_onto_background(frame, background_frame);
-			return frame;
+		// Direct callers that pass their own background receive a copied frame
+		// to avoid mutating cached clip frames.
+		if (!options && has_external_background) {
+			auto output = std::make_shared<Frame>(*frame.get());
+			apply_background(output, background_frame);
+			return output;
 		}
 
-		// Direct clip callers expect the returned frame image to include compositing.
-		auto output = std::make_shared<Frame>(*frame.get());
-		apply_background(output, background_frame);
-		return output;
+		// Apply background canvas (i.e. flatten this image onto previous layer image)
+		apply_background(frame, background_frame);
+
+		// Return processed 'frame'
+		return frame;
 	}
 	else
 		// Throw error if reader not initialized
@@ -1281,16 +1284,6 @@ void Clip::apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_
 
 	// Add new QImage to frame
 	frame->AddImage(background_canvas);
-}
-
-void Clip::compose_onto_background(std::shared_ptr<openshot::Frame> frame, std::shared_ptr<openshot::Frame> background_frame) {
-	// Composite onto background without mutating source clip frame image.
-	auto canvas = background_frame->GetImage();
-	QPainter painter(canvas.get());
-	painter.setCompositionMode(static_cast<QPainter::CompositionMode>(composite));
-	painter.drawImage(0, 0, *frame->GetImage());
-	painter.end();
-	background_frame->AddImage(canvas);
 }
 
 // Apply effects to the source frame (if any)

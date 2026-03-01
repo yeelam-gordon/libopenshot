@@ -328,6 +328,9 @@ void EffectBase::MaskReader(ReaderBase* new_reader) {
 	}
 
 	mask_reader = new_reader;
+	cached_single_mask_image.reset();
+	cached_single_mask_width = 0;
+	cached_single_mask_height = 0;
 	if (mask_reader)
 		mask_reader->ParentClip(clip);
 }
@@ -437,15 +440,26 @@ std::shared_ptr<QImage> EffectBase::GetMaskImage(std::shared_ptr<QImage> target_
 		return {};
 
 	std::shared_ptr<QImage> source_mask;
+	bool used_cached_scaled = false;
 	#pragma omp critical (open_effect_mask_reader)
 	{
 		try {
 			if (!mask_reader->IsOpen())
 				mask_reader->Open();
-			const int64_t mapped_frame = MapMaskFrameNumber(frame_number);
-			auto source_frame = mask_reader->GetFrame(mapped_frame);
-			if (source_frame && source_frame->GetImage() && !source_frame->GetImage()->isNull())
-				source_mask = std::make_shared<QImage>(*source_frame->GetImage());
+
+			if (mask_reader->info.has_single_image &&
+				cached_single_mask_image &&
+				cached_single_mask_width == target_image->width() &&
+				cached_single_mask_height == target_image->height()) {
+				source_mask = cached_single_mask_image;
+				used_cached_scaled = true;
+			}
+			else {
+				const int64_t mapped_frame = MapMaskFrameNumber(frame_number);
+				auto source_frame = mask_reader->GetFrame(mapped_frame);
+				if (source_frame && source_frame->GetImage() && !source_frame->GetImage()->isNull())
+					source_mask = std::make_shared<QImage>(*source_frame->GetImage());
+			}
 		} catch (const std::exception& e) {
 			ZmqLogger::Instance()->Log(
 				std::string("EffectBase::GetMaskImage unable to read mask frame: ") + e.what());
@@ -456,10 +470,19 @@ std::shared_ptr<QImage> EffectBase::GetMaskImage(std::shared_ptr<QImage> target_
 	if (!source_mask || source_mask->isNull())
 		return {};
 
-	return std::make_shared<QImage>(
+	if (used_cached_scaled)
+		return source_mask;
+
+	auto scaled_mask = std::make_shared<QImage>(
 		source_mask->scaled(
 			target_image->width(), target_image->height(),
 			Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+	if (mask_reader->info.has_single_image) {
+		cached_single_mask_image = scaled_mask;
+		cached_single_mask_width = target_image->width();
+		cached_single_mask_height = target_image->height();
+	}
+	return scaled_mask;
 }
 
 void EffectBase::BlendWithMask(std::shared_ptr<QImage> original_image, std::shared_ptr<QImage> effected_image,
@@ -497,6 +520,10 @@ void EffectBase::BlendWithMask(std::shared_ptr<QImage> original_image, std::shar
 std::shared_ptr<openshot::Frame> EffectBase::ProcessFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number) {
 	// Audio-only effects skip common mask handling.
 	if (!info.has_video || !mask_reader)
+		return GetFrame(frame, frame_number);
+
+	// Effects that already apply masks inside GetFrame() should bypass common blend handling.
+	if (HandlesMaskInternally())
 		return GetFrame(frame, frame_number);
 
 	auto pre_image = frame->GetImage();

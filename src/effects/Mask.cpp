@@ -126,21 +126,6 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 	return frame;
 }
 
-bool Mask::UseCustomMaskBlend(int64_t frame_number) const {
-	(void) frame_number;
-	// Mask effect already applies its own mask operation in GetFrame().
-	return true;
-}
-
-void Mask::ApplyCustomMaskBlend(std::shared_ptr<QImage> original_image, std::shared_ptr<QImage> effected_image,
-								std::shared_ptr<QImage> mask_image, int64_t frame_number) const {
-	(void) original_image;
-	(void) effected_image;
-	(void) mask_image;
-	(void) frame_number;
-	// Intentionally no-op to skip base post-blend for Mask effects.
-}
-
 // Generate JSON string of this object
 std::string Mask::Json() const {
 

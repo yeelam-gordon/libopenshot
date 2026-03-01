@@ -140,42 +140,98 @@ namespace openshot
         bool cache_contains = false;
         bool should_clear_cache = false;
         CacheBase* cache = reader ? reader->GetCache() : nullptr;
+        const int64_t current_requested = requested_display_frame.load();
+        const bool same_frame_refresh = (new_position == current_requested);
         if (cache) {
             cache_contains = cache->Contains(new_position);
         }
 
         if (start_preroll) {
-            should_mark_seek = true;
+            if (same_frame_refresh) {
+                const bool is_paused = (speed.load() == 0);
+                if (is_paused) {
+                    // Paused same-frame edits (dragging keyframed properties)
+                    // must not reuse any stale composite/cache state.
+                    if (Timeline* timeline = dynamic_cast<Timeline*>(reader)) {
+                        timeline->ClearAllCache();
+                    }
+                    new_cached_count = 0;
+                    should_mark_seek = true;
+                    should_preroll = true;
+                    should_clear_cache = false;
+                } else {
+                    // Same-frame refresh during playback should stay lightweight.
+                    should_mark_seek = false;
+                    should_preroll = false;
+                    should_clear_cache = false;
+                    if (cache && cache_contains) {
+                        cache->Remove(new_position);
+                    }
+                    if (cache) {
+                        new_cached_count = cache->Count();
+                    }
+                }
+            } else {
+                should_mark_seek = true;
 
-            if (cache && !cache_contains) {
-                // Uncached commit seek: avoid blocking this call path with a
-                // synchronous ClearAllCache(). The cache thread will reconcile
-                // window contents on the next iteration around the new playhead.
-                new_cached_count = 0;
-                should_preroll = true;
-                should_clear_cache = true;
-            }
-            else if (cache)
-            {
-                new_cached_count = cache->Count();
+                if (cache && !cache_contains) {
+                    // Uncached commit seek: avoid blocking this call path with a
+                    // synchronous ClearAllCache(). The cache thread will reconcile
+                    // window contents on the next iteration around the new playhead.
+                    new_cached_count = 0;
+                    should_preroll = true;
+                    should_clear_cache = true;
+                }
+                else if (cache)
+                {
+                    new_cached_count = cache->Count();
+                }
             }
             leaving_scrub = true;
         }
         else {
-            // Scrub preview: keep preroll disabled and interrupt current fill.
-            // Do not synchronously clear cache here, as that can block seeks.
-            should_mark_seek = true;
-            if (cache && !cache_contains) {
-                new_cached_count = 0;
-                should_clear_cache = true;
-            }
-            else if (cache) {
-                if (cache_contains) {
+            // Non-preroll seeks are used for:
+            // 1) paused scrubbing (needs seek/scrub semantics), and
+            // 2) live refreshes while playing (must stay lightweight).
+            const bool is_paused = (speed.load() == 0);
+            if (is_paused && same_frame_refresh) {
+                // Property updates at the same paused playhead frame should
+                // refresh that frame only, without full seek/scrub churn.
+                should_mark_seek = false;
+                should_preroll = false;
+                should_clear_cache = false;
+                if (cache && cache_contains) {
                     cache->Remove(new_position);
                 }
-                new_cached_count = cache->Count();
+                if (cache) {
+                    new_cached_count = cache->Count();
+                }
+                leaving_scrub = true;
             }
-            entering_scrub = true;
+            else if (is_paused) {
+                should_mark_seek = true;
+                if (cache && !cache_contains) {
+                    new_cached_count = 0;
+                    should_clear_cache = true;
+                }
+                else if (cache) {
+                    if (cache_contains) {
+                        cache->Remove(new_position);
+                    }
+                    new_cached_count = cache->Count();
+                }
+                entering_scrub = true;
+            } else {
+                // During playback, avoid seek/scrub side effects that can
+                // churn cache state and cause visible flicker on updates.
+                should_mark_seek = false;
+                should_preroll = false;
+                should_clear_cache = false;
+                if (cache) {
+                    new_cached_count = cache->Count();
+                }
+                leaving_scrub = true;
+            }
         }
 
         {
