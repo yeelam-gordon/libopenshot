@@ -80,6 +80,55 @@ public:
 	void SetJsonValue(const Json::Value root) override { ReaderBase::SetJsonValue(root); }
 };
 
+class TimelineSolidColorReader : public ReaderBase {
+private:
+	bool is_open = false;
+	CacheMemory cache;
+	QColor color;
+
+public:
+	TimelineSolidColorReader(int width,
+	                         int height,
+	                         int fps_num,
+	                         int fps_den,
+	                         int64_t length_frames,
+	                         const QColor& fill_color)
+		: color(fill_color) {
+		info.has_video = true;
+		info.has_audio = false;
+		info.width = width;
+		info.height = height;
+		info.fps = Fraction(fps_num, fps_den);
+		info.video_length = length_frames;
+		info.duration = static_cast<float>(length_frames / info.fps.ToDouble());
+		info.sample_rate = 48000;
+		info.channels = 2;
+		info.audio_stream_index = -1;
+	}
+
+	openshot::CacheBase* GetCache() override { return &cache; }
+	bool IsOpen() override { return is_open; }
+	std::string Name() override { return "TimelineSolidColorReader"; }
+	void Open() override { is_open = true; }
+	void Close() override { is_open = false; }
+
+	std::shared_ptr<openshot::Frame> GetFrame(int64_t number) override {
+		auto frame = std::make_shared<Frame>(number, info.width, info.height, "#00000000");
+		frame->GetImage()->fill(color);
+		return frame;
+	}
+
+	std::string Json() const override { return JsonValue().toStyledString(); }
+	Json::Value JsonValue() const override {
+		Json::Value root = ReaderBase::JsonValue();
+		root["type"] = "TimelineSolidColorReader";
+		root["path"] = "";
+		return root;
+	}
+	void SetJson(const std::string value) override { (void) value; }
+	void SetJsonValue(const Json::Value root) override { ReaderBase::SetJsonValue(root); }
+};
+
 TEST_CASE( "constructor", "[libopenshot][timeline]" )
 {
 	Fraction fps(30000,1000);
@@ -1171,6 +1220,88 @@ TEST_CASE( "ApplyJSONDiff insert invalidates overlapping timeline cache", "[libo
 
 	// Overlapping cached frame should be invalidated
 	CHECK(!t.GetCache()->Contains(10));
+}
+
+TEST_CASE( "ApplyJSONDiff alpha updates refresh fixed-frame preview content", "[libopenshot][timeline]" )
+{
+	// Deterministic solid-color readers avoid any fixture/image ambiguity.
+	TimelineSolidColorReader base_reader(
+		/*width=*/64, /*height=*/64, /*fps_num=*/30, /*fps_den=*/1, /*length_frames=*/300,
+		QColor(10, 200, 20, 255)
+	);
+	TimelineSolidColorReader overlay_reader(
+		/*width=*/64, /*height=*/64, /*fps_num=*/30, /*fps_den=*/1, /*length_frames=*/300,
+		QColor(220, 30, 180, 255)
+	);
+
+	Clip base_clip(&base_reader);
+	base_clip.Id("BASE_ALPHA_TEST");
+	base_clip.Layer(0);
+	base_clip.Position(0.0);
+	base_clip.End(5.0);
+
+	Clip overlay_clip(&overlay_reader);
+	overlay_clip.Id("OVERLAY_ALPHA_TEST");
+	overlay_clip.Layer(1);
+	overlay_clip.Position(0.0);
+	overlay_clip.End(5.0);
+
+	Timeline t(64, 64, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	t.AddClip(&base_clip);
+	t.AddClip(&overlay_clip);
+	t.Open();
+
+	const int64_t frame_number = 1;
+
+	auto apply_alpha = [&](double alpha_value) {
+		Keyframe alpha_kf(alpha_value);
+		Json::Value root(Json::arrayValue);
+		Json::Value change(Json::objectValue);
+		change["type"] = "update";
+		change["partial"] = true;
+
+		Json::Value key(Json::arrayValue);
+		key.append("clips");
+		Json::Value key_id(Json::objectValue);
+		key_id["id"] = overlay_clip.Id();
+		key.append(key_id);
+		change["key"] = key;
+
+		Json::Value value(Json::objectValue);
+		value["alpha"] = alpha_kf.JsonValue();
+		change["value"] = value;
+
+		root.append(change);
+		t.ApplyJsonDiff(root.toStyledString());
+
+		Clip* updated = t.GetClip(overlay_clip.Id());
+		REQUIRE(updated != nullptr);
+		CHECK(updated->alpha.GetValue(frame_number) == Approx(alpha_value).margin(0.0001));
+	};
+
+	// Establish reference colors for alpha=1.0 (top) and alpha=0.0 (bottom).
+	// Prime cache at fixed frame.
+	std::shared_ptr<Frame> initial = t.GetFrame(frame_number);
+	REQUIRE(initial != nullptr);
+	REQUIRE(t.GetCache() != nullptr);
+	REQUIRE(overlay_clip.GetCache() != nullptr);
+	REQUIRE(t.GetCache()->Contains(frame_number));
+	REQUIRE(overlay_clip.GetCache()->Count() > 0);
+
+	// Repeated alpha updates at the same frame must invalidate both timeline and
+	// clip caches, preventing stale preview frames from being reused.
+	const std::vector<double> alpha_steps = {0.9, 0.8, 0.7, 0.6, 0.5};
+	for (double alpha_value : alpha_steps) {
+		apply_alpha(alpha_value);
+		CHECK(!t.GetCache()->Contains(frame_number));
+		CHECK(overlay_clip.GetCache()->Count() == 0);
+
+		// Re-request frame to repopulate caches before next update.
+		std::shared_ptr<Frame> refreshed = t.GetFrame(frame_number);
+		REQUIRE(refreshed != nullptr);
+		CHECK(t.GetCache()->Contains(frame_number));
+		CHECK(overlay_clip.GetCache()->Count() > 0);
+	}
 }
 
 TEST_CASE( "ApplyJSONDiff Update Reader Info", "[libopenshot][timeline]" )

@@ -519,11 +519,17 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
                                                        frame->GetAudioChannelsCount());
         }
 
-		// Apply background canvas (i.e. flatten this image onto previous layer image)
-		apply_background(frame, background_frame);
+		const bool from_timeline = (options != nullptr);
+		if (from_timeline) {
+			// Timeline path composites into destination only, preserving cached clip pixels.
+			compose_onto_background(frame, background_frame);
+			return frame;
+		}
 
-		// Return processed 'frame'
-		return frame;
+		// Direct clip callers expect the returned frame image to include compositing.
+		auto output = std::make_shared<Frame>(*frame.get());
+		apply_background(output, background_frame);
+		return output;
 	}
 	else
 		// Throw error if reader not initialized
@@ -1275,6 +1281,16 @@ void Clip::apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_
 
 	// Add new QImage to frame
 	frame->AddImage(background_canvas);
+}
+
+void Clip::compose_onto_background(std::shared_ptr<openshot::Frame> frame, std::shared_ptr<openshot::Frame> background_frame) {
+	// Composite onto background without mutating source clip frame image.
+	auto canvas = background_frame->GetImage();
+	QPainter painter(canvas.get());
+	painter.setCompositionMode(static_cast<QPainter::CompositionMode>(composite));
+	painter.drawImage(0, 0, *frame->GetImage());
+	painter.end();
+	background_frame->AddImage(canvas);
 }
 
 // Apply effects to the source frame (if any)

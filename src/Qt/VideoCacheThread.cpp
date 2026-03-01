@@ -94,6 +94,8 @@ namespace openshot
         if (new_speed != 0) {
             last_speed.store(new_speed);
             last_dir.store(new_speed > 0 ? 1 : -1);
+            // Leaving paused/scrub context: resume normal cache behavior.
+            scrub_active.store(false);
         }
         speed.store(new_speed);
     }
@@ -168,6 +170,9 @@ namespace openshot
                 should_clear_cache = true;
             }
             else if (cache) {
+                if (cache_contains) {
+                    cache->Remove(new_position);
+                }
                 new_cached_count = cache->Count();
             }
             entering_scrub = true;

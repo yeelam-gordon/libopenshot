@@ -1485,6 +1485,12 @@ void Timeline::apply_json_to_clips(Json::Value change) {
 			final_cache->Remove(old_starting_frame - 8, old_ending_frame + 8);
 			final_cache->Remove(new_starting_frame - 8, new_ending_frame + 8);
 
+			// Clear transformed/composited clip cache (keyed by clip frame number),
+			// since property updates (e.g. alpha) can change all rendered frames.
+			if (existing_clip->GetCache()) {
+				existing_clip->GetCache()->Clear();
+			}
+
 			// Remove cache on clip's Reader (if found)
 			if (existing_clip->Reader() && existing_clip->Reader()->GetCache()) {
 				existing_clip->Reader()->GetCache()->Remove(old_starting_frame - 8, old_ending_frame + 8);

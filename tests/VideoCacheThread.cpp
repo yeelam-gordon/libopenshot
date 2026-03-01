@@ -318,7 +318,7 @@ TEST_CASE("prefetchWindow: interrupt on userSeeked flag", "[VideoCacheThread]") 
     CHECK(!wasFull);
 }
 
-TEST_CASE("Seek preview: inside cache is cheap and does not invalidate", "[VideoCacheThread]") {
+TEST_CASE("Seek preview: evicts playhead frame to force fresh render", "[VideoCacheThread]") {
     TestableVideoCacheThread thread;
     CacheMemory cache(/*max_bytes=*/100000000);
     Timeline timeline(/*width=*/1280, /*height=*/720, /*fps=*/Fraction(24,1),
@@ -335,8 +335,8 @@ TEST_CASE("Seek preview: inside cache is cheap and does not invalidate", "[Video
     CHECK(thread.isScrubbing());
     CHECK(thread.getUserSeekedFlag());
     CHECK(!thread.getPrerollOnNextFill());
-    CHECK(cache.Contains(100));
-    CHECK(cache.Count() >= 2);
+    CHECK(!cache.Contains(100));
+    CHECK(cache.Count() >= 1);
 }
 
 TEST_CASE("Seek preview: outside cache marks uncached without preroll", "[VideoCacheThread]") {
