@@ -9,6 +9,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 #include <chrono>
+#include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <string>
@@ -35,6 +36,8 @@ using namespace openshot;
 using namespace std;
 
 using Clock = chrono::steady_clock;
+using TrialFunc = function<void()>;
+using Trial = pair<string, TrialFunc>;
 
 template <typename Func> double time_trial(const string &name, Func func) {
 	auto start = Clock::now();
@@ -53,22 +56,41 @@ void read_forward_backward(ReaderBase &reader) {
 		reader.GetFrame(i);
 }
 
-int main() {
-	cout << "Trial,Milliseconds\n";
-	double total = 0.0;
+int main(int argc, char* argv[]) {
 	const string base = TEST_MEDIA_PATH;
 	const string video = base + "sintel_trailer-720p.mp4";
 	const string mask_img = base + "mask.png";
 	const string overlay = base + "front3.png";
+	string filter_test;
+	bool list_only = false;
 
-	total += time_trial("FFmpegReader", [&]() {
+	for (int i = 1; i < argc; ++i) {
+		const string arg = argv[i];
+		if ((arg == "--test" || arg == "-t") && i + 1 < argc) {
+			filter_test = argv[++i];
+		} else if (arg == "--list" || arg == "-l") {
+			list_only = true;
+		} else if (arg == "--help" || arg == "-h") {
+			cout << "Usage: openshot-benchmark [--test <name>] [--list]\n";
+			return 0;
+		} else {
+			cerr << "Unknown argument: " << arg << "\n";
+			cerr << "Usage: openshot-benchmark [--test <name>] [--list]\n";
+			return 1;
+		}
+	}
+
+	vector<Trial> trials;
+	trials.reserve(10);
+
+	trials.emplace_back("FFmpegReader", [&]() {
 		FFmpegReader r(video);
 		r.Open();
 		read_forward_backward(r);
 		r.Close();
 	});
 
-	total += time_trial("FFmpegWriter", [&]() {
+	trials.emplace_back("FFmpegWriter", [&]() {
 		FFmpegReader r(video);
 		r.Open();
 		FFmpegWriter w("benchmark_output.mp4");
@@ -82,7 +104,7 @@ int main() {
 		r.Close();
 	});
 
-	total += time_trial("FrameMapper", [&]() {
+	trials.emplace_back("FrameMapper", [&]() {
 		vector<Fraction> rates = {Fraction(24, 1), Fraction(30, 1), Fraction(60, 1),
 															Fraction(30000, 1001), Fraction(60000, 1001)};
 		for (auto &fps : rates) {
@@ -98,14 +120,14 @@ int main() {
 		}
 	});
 
-	total += time_trial("Clip", [&]() {
+	trials.emplace_back("Clip", [&]() {
 		Clip c(video);
 		c.Open();
 		read_forward_backward(c);
 		c.Close();
 	});
 
-	total += time_trial("Timeline", [&]() {
+	trials.emplace_back("Timeline", [&]() {
 		Timeline t(1920, 1080, Fraction(24, 1), 44100, 2, LAYOUT_STEREO);
 		Clip video_clip(video);
 		video_clip.Layer(0);
@@ -131,7 +153,7 @@ int main() {
 		t.Close();
 	});
 
-	total += time_trial("Timeline (with transforms)", [&]() {
+	trials.emplace_back("Timeline (with transforms)", [&]() {
 		Timeline t(1920, 1080, Fraction(24, 1), 44100, 2, LAYOUT_STEREO);
 		Clip video_clip(video);
 		int64_t last = video_clip.Reader()->info.video_length;
@@ -165,26 +187,26 @@ int main() {
 		t.Close();
 	});
 
-        total += time_trial("Effect_Mask", [&]() {
-                FFmpegReader r(video);
-                r.Open();
+	trials.emplace_back("Effect_Mask", [&]() {
+		FFmpegReader r(video);
+		r.Open();
 #ifdef USE_IMAGEMAGICK
-                ImageReader mask_reader(mask_img);
+		ImageReader mask_reader(mask_img);
 #else
-                QtImageReader mask_reader(mask_img);
+		QtImageReader mask_reader(mask_img);
 #endif
-                mask_reader.Open();
-                Clip clip(&r);
-                clip.Open();
-                Mask m(&mask_reader, Keyframe(0.0), Keyframe(0.5));
-                clip.AddEffect(&m);
-                read_forward_backward(clip);
-                mask_reader.Close();
-                clip.Close();
-                r.Close();
-        });
+		mask_reader.Open();
+		Clip clip(&r);
+		clip.Open();
+		Mask m(&mask_reader, Keyframe(0.0), Keyframe(0.5));
+		clip.AddEffect(&m);
+		read_forward_backward(clip);
+		mask_reader.Close();
+		clip.Close();
+		r.Close();
+	});
 
-	total += time_trial("Effect_Brightness", [&]() {
+	trials.emplace_back("Effect_Brightness", [&]() {
 		FFmpegReader r(video);
 		r.Open();
 		Clip clip(&r);
@@ -196,7 +218,7 @@ int main() {
 		r.Close();
 	});
 
-	total += time_trial("Effect_Crop", [&]() {
+	trials.emplace_back("Effect_Crop", [&]() {
 		FFmpegReader r(video);
 		r.Open();
 		Clip clip(&r);
@@ -208,7 +230,7 @@ int main() {
 		r.Close();
 	});
 
-	total += time_trial("Effect_Saturation", [&]() {
+	trials.emplace_back("Effect_Saturation", [&]() {
 		FFmpegReader r(video);
 		r.Open();
 		Clip clip(&r);
@@ -220,6 +242,29 @@ int main() {
 		clip.Close();
 		r.Close();
 	});
+
+	if (list_only) {
+		for (const auto& trial : trials)
+			cout << trial.first << "\n";
+		return 0;
+	}
+
+	cout << "Trial,Milliseconds\n";
+	double total = 0.0;
+	int executed = 0;
+	for (const auto& trial : trials) {
+		if (!filter_test.empty() && trial.first != filter_test)
+			continue;
+		total += time_trial(trial.first, trial.second);
+		executed++;
+	}
+
+	if (!filter_test.empty() && executed == 0) {
+		cerr << "Unknown test: " << filter_test << "\nAvailable tests:\n";
+		for (const auto& trial : trials)
+			cerr << "  " << trial.first << "\n";
+		return 2;
+	}
 
 	cout << "Overall," << total << "\n";
 	return 0;
