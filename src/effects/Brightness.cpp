@@ -12,6 +12,7 @@
 
 #include "Brightness.h"
 #include "Exceptions.h"
+#include <array>
 
 using namespace openshot;
 
@@ -49,44 +50,68 @@ std::shared_ptr<openshot::Frame> Brightness::GetFrame(std::shared_ptr<openshot::
 {
 	// Get the frame's image
 	std::shared_ptr<QImage> frame_image = frame->GetImage();
+	if (!frame_image)
+		return frame;
 
 	// Get keyframe values for this frame
-	float brightness_value = brightness.GetValue(frame_number);
-	float contrast_value = contrast.GetValue(frame_number);
+	const float brightness_value = brightness.GetValue(frame_number);
+	const float contrast_value = contrast.GetValue(frame_number);
+	const float contrast_factor = (259.0f * (contrast_value + 255.0f)) / (255.0f * (259.0f - contrast_value));
+	const int brightness_offset_i = static_cast<int>(255.0f * brightness_value);
 
 	// Loop through pixels
-	unsigned char *pixels = (unsigned char *) frame_image->bits();
-	int pixel_count = frame_image->width() * frame_image->height();
+	unsigned char *pixels = reinterpret_cast<unsigned char *>(frame_image->bits());
+	const int pixel_count = frame_image->width() * frame_image->height();
+	// LUT for undoing premultiplication without a per-pixel divide.
+	static const std::array<float, 256> inv_alpha = [] {
+		std::array<float, 256> lut{};
+		lut[0] = 0.0f;
+		for (int i = 1; i < 256; ++i)
+			lut[i] = 255.0f / static_cast<float>(i);
+		return lut;
+	}();
+	const auto clamp_u8 = [](int value) -> unsigned char {
+		if (value < 0) return 0;
+		if (value > 255) return 255;
+		return static_cast<unsigned char>(value);
+	};
+	const auto clamp_i = [](int value) -> int {
+		if (value < 0) return 0;
+		if (value > 255) return 255;
+		return value;
+	};
 
-	#pragma omp parallel for
+	#pragma omp parallel for if(pixel_count >= 16384) schedule(static)
 	for (int pixel = 0; pixel < pixel_count; ++pixel)
 	{
-		// Compute contrast adjustment factor
-		float factor = (259 * (contrast_value + 255)) / (255 * (259 - contrast_value));
+		const int idx = pixel * 4;
 
 		// Calculate alpha % (to be used for removing pre-multiplied alpha value)
-		int A = pixels[pixel * 4 + 3];
-		float alpha_percent = A / 255.0;
+		const int A = pixels[idx + 3];
+		if (A <= 0)
+			continue;
+		const float alpha_percent = static_cast<float>(A) * (1.0f / 255.0f);
+		const float inv_alpha_percent = inv_alpha[A];
 
 		// Get RGB values, and remove pre-multiplied alpha
-		unsigned char R = pixels[pixel * 4 + 0] / alpha_percent;
-		unsigned char G = pixels[pixel * 4 + 1] / alpha_percent;
-		unsigned char B = pixels[pixel * 4 + 2] / alpha_percent;
+		int R = static_cast<int>(pixels[idx + 0] * inv_alpha_percent);
+		int G = static_cast<int>(pixels[idx + 1] * inv_alpha_percent);
+		int B = static_cast<int>(pixels[idx + 2] * inv_alpha_percent);
 
 		// Apply constrained contrast adjustment
-		R = constrain((factor * (R - 128)) + 128);
-		G = constrain((factor * (G - 128)) + 128);
-		B = constrain((factor * (B - 128)) + 128);
+		R = clamp_i(static_cast<int>((contrast_factor * (R - 128)) + 128.0f));
+		G = clamp_i(static_cast<int>((contrast_factor * (G - 128)) + 128.0f));
+		B = clamp_i(static_cast<int>((contrast_factor * (B - 128)) + 128.0f));
 
 		// Adjust brightness and write constrained values back to image
-		pixels[pixel * 4 + 0] = constrain(R + (255 * brightness_value));
-		pixels[pixel * 4 + 1] = constrain(G + (255 * brightness_value));
-		pixels[pixel * 4 + 2] = constrain(B + (255 * brightness_value));
+		pixels[idx + 0] = clamp_u8(R + brightness_offset_i);
+		pixels[idx + 1] = clamp_u8(G + brightness_offset_i);
+		pixels[idx + 2] = clamp_u8(B + brightness_offset_i);
 
 		// Pre-multiply the alpha back into the color channels
-		pixels[pixel * 4 + 0] *= alpha_percent;
-		pixels[pixel * 4 + 1] *= alpha_percent;
-		pixels[pixel * 4 + 2] *= alpha_percent;
+		pixels[idx + 0] = static_cast<unsigned char>(pixels[idx + 0] * alpha_percent);
+		pixels[idx + 1] = static_cast<unsigned char>(pixels[idx + 1] * alpha_percent);
+		pixels[idx + 2] = static_cast<unsigned char>(pixels[idx + 2] * alpha_percent);
 	}
 
 	// return the modified frame

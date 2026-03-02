@@ -12,6 +12,8 @@
 
 #include "Saturation.h"
 #include "Exceptions.h"
+#include <array>
+#include <cmath>
 
 using namespace openshot;
 
@@ -94,47 +96,68 @@ std::shared_ptr<openshot::Frame> Saturation::GetFrame(std::shared_ptr<openshot::
 	if (!frame_image)
 		return frame;
 
-	int pixel_count = frame_image->width() * frame_image->height();
+	const int pixel_count = frame_image->width() * frame_image->height();
 
 	// Get keyframe values for this frame
-	float saturation_value = saturation.GetValue(frame_number);
-	float saturation_value_R = saturation_R.GetValue(frame_number);
-	float saturation_value_G = saturation_G.GetValue(frame_number);
-	float saturation_value_B = saturation_B.GetValue(frame_number);
+	const float saturation_value = saturation.GetValue(frame_number);
+	const float saturation_value_R = saturation_R.GetValue(frame_number);
+	const float saturation_value_G = saturation_G.GetValue(frame_number);
+	const float saturation_value_B = saturation_B.GetValue(frame_number);
 
 	// Constants used for color saturation formula
-	const double pR = .299;
-	const double pG = .587;
-	const double pB = .114;
+	const float pR = 0.299f;
+	const float pG = 0.587f;
+	const float pB = 0.114f;
+	const float sqrt_pR = std::sqrt(pR);
+	const float sqrt_pG = std::sqrt(pG);
+	const float sqrt_pB = std::sqrt(pB);
 
 	// Loop through pixels
-	unsigned char *pixels = (unsigned char *) frame_image->bits();
+	unsigned char *pixels = reinterpret_cast<unsigned char *>(frame_image->bits());
+	// LUT for undoing premultiplication without a per-pixel divide.
+	static const std::array<float, 256> inv_alpha = [] {
+		std::array<float, 256> lut{};
+		lut[0] = 0.0f;
+		for (int i = 1; i < 256; ++i)
+			lut[i] = 255.0f / static_cast<float>(i);
+		return lut;
+	}();
+	const auto clamp_i = [](int value) -> int {
+		if (value < 0) return 0;
+		if (value > 255) return 255;
+		return value;
+	};
 
-	#pragma omp parallel for shared (pixels)
+	#pragma omp parallel for if(pixel_count >= 16384) schedule(static) shared (pixels)
 	for (int pixel = 0; pixel < pixel_count; ++pixel)
 	{
+		const int idx = pixel * 4;
+
 		// Calculate alpha % (to be used for removing pre-multiplied alpha value)
-		int A = pixels[pixel * 4 + 3];
-		float alpha_percent = A / 255.0;
+		const int A = pixels[idx + 3];
+		if (A <= 0)
+			continue;
+		const float alpha_percent = static_cast<float>(A) * (1.0f / 255.0f);
+		const float inv_alpha_percent = inv_alpha[A];
 
 		// Get RGB values, and remove pre-multiplied alpha
-		int R = pixels[pixel * 4 + 0] / alpha_percent;
-		int G = pixels[pixel * 4 + 1] / alpha_percent;
-		int B = pixels[pixel * 4 + 2] / alpha_percent;
+		int R = static_cast<int>(pixels[idx + 0] * inv_alpha_percent);
+		int G = static_cast<int>(pixels[idx + 1] * inv_alpha_percent);
+		int B = static_cast<int>(pixels[idx + 2] * inv_alpha_percent);
 
 		/*
 		 * Common saturation adjustment
 		 */
 
 		// Calculate the saturation multiplier
-		double p = sqrt( (R * R * pR) +
-						 (G * G * pG) +
-						 (B * B * pB) );
+		const float p = std::sqrt((R * R * pR) +
+								  (G * G * pG) +
+								  (B * B * pB));
 
 		// Adjust the saturation
-		R = constrain(p + (R - p) * saturation_value);
-		G = constrain(p + (G - p) * saturation_value);
-		B = constrain(p + (B - p) * saturation_value);
+		R = clamp_i(static_cast<int>(p + (R - p) * saturation_value));
+		G = clamp_i(static_cast<int>(p + (G - p) * saturation_value));
+		B = clamp_i(static_cast<int>(p + (B - p) * saturation_value));
 
 		/*
 		 * Color-separated saturation adjustment
@@ -146,22 +169,22 @@ std::shared_ptr<openshot::Frame> Saturation::GetFrame(std::shared_ptr<openshot::
 
 		// Compute the brightness ("saturation multiplier") of the replaced subpixels
 		// Actually mathematical no-ops mostly, verbosity is kept just for clarification
-		const double p_r = sqrt(R * R * pR);
-		const double p_g = sqrt(G * G * pG);
-		const double p_b = sqrt(B * B * pB);
+		const float p_r = R * sqrt_pR;
+		const float p_g = G * sqrt_pG;
+		const float p_b = B * sqrt_pB;
 
 		// Adjust the saturation
-		const int Rr = p_r + (R - p_r) * saturation_value_R;
-		const int Gr = p_r + (0 - p_r) * saturation_value_R;
-		const int Br = p_r + (0 - p_r) * saturation_value_R;
+		const int Rr = static_cast<int>(p_r + (R - p_r) * saturation_value_R);
+		const int Gr = static_cast<int>(p_r - p_r * saturation_value_R);
+		const int Br = static_cast<int>(p_r - p_r * saturation_value_R);
 
-		const int Rg = p_g + (0 - p_g) * saturation_value_G;
-		const int Gg = p_g + (G - p_g) * saturation_value_G;
-		const int Bg = p_g + (0 - p_g) * saturation_value_G;
+		const int Rg = static_cast<int>(p_g - p_g * saturation_value_G);
+		const int Gg = static_cast<int>(p_g + (G - p_g) * saturation_value_G);
+		const int Bg = static_cast<int>(p_g - p_g * saturation_value_G);
 
-		const int Rb = p_b + (0 - p_b) * saturation_value_B;
-		const int Gb = p_b + (0 - p_b) * saturation_value_B;
-		const int Bb = p_b + (B - p_b) * saturation_value_B;
+		const int Rb = static_cast<int>(p_b - p_b * saturation_value_B);
+		const int Gb = static_cast<int>(p_b - p_b * saturation_value_B);
+		const int Bb = static_cast<int>(p_b + (B - p_b) * saturation_value_B);
 
 		// Recombine brightness of sub-subpixels (Rx, Gx and Bx) into sub-pixels (R, G and B) again
 		R = Rr + Rg + Rb;
@@ -169,19 +192,19 @@ std::shared_ptr<openshot::Frame> Saturation::GetFrame(std::shared_ptr<openshot::
 		B = Br + Bg + Bb;
 
 		// Constrain the value from 0 to 255
-		R = constrain(R);
-		G = constrain(G);
-		B = constrain(B);
+		R = clamp_i(R);
+		G = clamp_i(G);
+		B = clamp_i(B);
 
 		// Set all pixels to new value
-		pixels[pixel * 4 + 0] = R;
-		pixels[pixel * 4 + 1] = G;
-		pixels[pixel * 4 + 2] = B;
+		pixels[idx + 0] = static_cast<unsigned char>(R);
+		pixels[idx + 1] = static_cast<unsigned char>(G);
+		pixels[idx + 2] = static_cast<unsigned char>(B);
 
 		// Pre-multiply the alpha back into the color channels
-		pixels[pixel * 4 + 0] *= alpha_percent;
-		pixels[pixel * 4 + 1] *= alpha_percent;
-		pixels[pixel * 4 + 2] *= alpha_percent;
+		pixels[idx + 0] = static_cast<unsigned char>(pixels[idx + 0] * alpha_percent);
+		pixels[idx + 1] = static_cast<unsigned char>(pixels[idx + 1] * alpha_percent);
+		pixels[idx + 2] = static_cast<unsigned char>(pixels[idx + 2] * alpha_percent);
 	}
 
 	// return the modified frame
