@@ -161,15 +161,23 @@ namespace openshot
             if (same_frame_refresh) {
                 const bool is_paused = (speed.load() == 0);
                 if (is_paused) {
-                    // Paused same-frame edits (dragging keyframed properties)
-                    // must not reuse any stale composite/cache state.
-                    if (Timeline* timeline = dynamic_cast<Timeline*>(reader)) {
-                        timeline->ClearAllCache();
+                    const bool was_scrubbing = scrub_active.load();
+                    if (was_scrubbing && cache && cache_contains) {
+                        // Preserve in-range cache for paused scrub preview -> same-frame commit.
+                        should_mark_seek = false;
+                        should_preroll = false;
+                        should_clear_cache = false;
+                        new_cached_count = cache->Count();
+                    } else {
+                        // Paused same-frame edit refresh: force full cache refresh.
+                        if (Timeline* timeline = dynamic_cast<Timeline*>(reader)) {
+                            timeline->ClearAllCache();
+                        }
+                        new_cached_count = 0;
+                        should_mark_seek = true;
+                        should_preroll = true;
+                        should_clear_cache = false;
                     }
-                    new_cached_count = 0;
-                    should_mark_seek = true;
-                    should_preroll = true;
-                    should_clear_cache = false;
                 } else {
                     // Same-frame refresh during playback should stay lightweight.
                     should_mark_seek = false;
@@ -183,31 +191,32 @@ namespace openshot
                     }
                 }
             } else {
-                should_mark_seek = true;
-
                 if (cache && !cache_contains) {
-                    // Uncached commit seek: avoid blocking this call path with a
-                    // synchronous ClearAllCache(). The cache thread will reconcile
-                    // window contents on the next iteration around the new playhead.
+                    should_mark_seek = true;
+                    // Uncached commit seek: defer cache clear to cache thread loop.
                     new_cached_count = 0;
                     should_preroll = true;
                     should_clear_cache = true;
                 }
                 else if (cache)
                 {
+                    // In-range commit seek preserves cache window/baseline.
+                    should_mark_seek = false;
+                    should_preroll = false;
+                    should_clear_cache = false;
                     new_cached_count = cache->Count();
+                } else {
+                    // No cache object to query: use normal seek behavior.
+                    should_mark_seek = true;
                 }
             }
             leaving_scrub = true;
         }
         else {
-            // Non-preroll seeks are used for:
-            // 1) paused scrubbing (needs seek/scrub semantics), and
-            // 2) live refreshes while playing (must stay lightweight).
+            // Non-preroll seeks cover paused scrubbing and live playback refresh.
             const bool is_paused = (speed.load() == 0);
             if (is_paused && same_frame_refresh) {
-                // Property updates at the same paused playhead frame should
-                // refresh that frame only, without full seek/scrub churn.
+                // Same-frame paused refresh updates only that frame.
                 should_mark_seek = false;
                 should_preroll = false;
                 should_clear_cache = false;
@@ -220,21 +229,21 @@ namespace openshot
                 leaving_scrub = true;
             }
             else if (is_paused) {
-                should_mark_seek = true;
                 if (cache && !cache_contains) {
+                    should_mark_seek = true;
                     new_cached_count = 0;
                     should_clear_cache = true;
                 }
                 else if (cache) {
-                    if (cache_contains) {
-                        cache->Remove(new_position);
-                    }
+                    // In-range paused seek preserves cache continuity.
+                    should_mark_seek = false;
                     new_cached_count = cache->Count();
+                } else {
+                    should_mark_seek = true;
                 }
                 entering_scrub = true;
             } else {
-                // During playback, avoid seek/scrub side effects that can
-                // churn cache state and cause visible flicker on updates.
+                // During playback, keep seek/scrub side effects minimal.
                 should_mark_seek = false;
                 should_preroll = false;
                 should_clear_cache = false;
@@ -247,10 +256,11 @@ namespace openshot
 
         {
             std::lock_guard<std::mutex> guard(seek_state_mutex);
-            // Invalidate ready-state baseline immediately on seek so isReady()
-            // cannot pass/fail against stale cached_index from a prior window.
+            // Reset readiness baseline only when rebuilding cache.
             const int dir = computeDirection();
-            last_cached_index.store(new_position - dir);
+            if (should_mark_seek || should_preroll || should_clear_cache) {
+                last_cached_index.store(new_position - dir);
+            }
             requested_display_frame.store(new_position);
             cached_frame_count.store(new_cached_count);
             preroll_on_next_fill.store(should_preroll);

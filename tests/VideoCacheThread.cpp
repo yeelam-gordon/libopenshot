@@ -318,7 +318,7 @@ TEST_CASE("prefetchWindow: interrupt on userSeeked flag", "[VideoCacheThread]") 
     CHECK(!wasFull);
 }
 
-TEST_CASE("Seek preview: evicts playhead frame to force fresh render", "[VideoCacheThread]") {
+TEST_CASE("Seek preview: preserves playhead frame when paused and inside cache", "[VideoCacheThread]") {
     TestableVideoCacheThread thread;
     CacheMemory cache(/*max_bytes=*/100000000);
     Timeline timeline(/*width=*/1280, /*height=*/720, /*fps=*/Fraction(24,1),
@@ -333,10 +333,10 @@ TEST_CASE("Seek preview: evicts playhead frame to force fresh render", "[VideoCa
     thread.Seek(/*new_position=*/100, /*start_preroll=*/false);
 
     CHECK(thread.isScrubbing());
-    CHECK(thread.getUserSeekedFlag());
+    CHECK(!thread.getUserSeekedFlag());
     CHECK(!thread.getPrerollOnNextFill());
-    CHECK(!cache.Contains(100));
-    CHECK(cache.Count() >= 1);
+    CHECK(cache.Contains(100));
+    CHECK(cache.Count() >= 2);
 }
 
 TEST_CASE("Seek preview: outside cache marks uncached without preroll", "[VideoCacheThread]") {
@@ -375,6 +375,59 @@ TEST_CASE("Seek commit: exits scrub mode and enables preroll when uncached", "[V
     CHECK(!thread.isScrubbing());
     CHECK(thread.getUserSeekedFlag());
     CHECK(thread.getPrerollOnNextFill());
+}
+
+TEST_CASE("Seek commit: paused in-range seek preserves cached window state", "[VideoCacheThread]") {
+    TestableVideoCacheThread thread;
+    CacheMemory cache(/*max_bytes=*/100000000);
+    Timeline timeline(/*width=*/1280, /*height=*/720, /*fps=*/Fraction(24,1),
+                      /*sample_rate=*/48000, /*channels=*/2, ChannelLayout::LAYOUT_STEREO);
+    timeline.SetCache(&cache);
+    thread.Reader(&timeline);
+
+    cache.Add(std::make_shared<Frame>(120, 0, 0));
+    cache.Add(std::make_shared<Frame>(121, 0, 0));
+    REQUIRE(cache.Count() >= 2);
+
+    // Simulate existing cache progress so we can verify no baseline reset.
+    thread.setLastCachedIndex(180);
+
+    thread.Seek(/*new_position=*/120, /*start_preroll=*/true);
+
+    CHECK(!thread.isScrubbing());
+    CHECK(!thread.getUserSeekedFlag());
+    CHECK(!thread.getPrerollOnNextFill());
+    CHECK(thread.getLastCachedIndex() == 180);
+    CHECK(cache.Contains(120));
+}
+
+TEST_CASE("Seek commit: paused scrub preview then same-frame commit preserves cache", "[VideoCacheThread]") {
+    TestableVideoCacheThread thread;
+    CacheMemory cache(/*max_bytes=*/100000000);
+    Timeline timeline(/*width=*/1280, /*height=*/720, /*fps=*/Fraction(24,1),
+                      /*sample_rate=*/48000, /*channels=*/2, ChannelLayout::LAYOUT_STEREO);
+    timeline.SetCache(&cache);
+    thread.Reader(&timeline);
+
+    cache.Add(std::make_shared<Frame>(140, 0, 0));
+    cache.Add(std::make_shared<Frame>(141, 0, 0));
+    REQUIRE(cache.Count() >= 2);
+
+    thread.setLastCachedIndex(210);
+
+    // Typical paused seek flow: preview move, then commit same frame.
+    thread.Seek(/*new_position=*/140, /*start_preroll=*/false);
+    REQUIRE(thread.isScrubbing());
+    REQUIRE(thread.getRequestedDisplayFrame() == 140);
+
+    thread.Seek(/*new_position=*/140, /*start_preroll=*/true);
+
+    CHECK(!thread.isScrubbing());
+    CHECK(!thread.getUserSeekedFlag());
+    CHECK(!thread.getPrerollOnNextFill());
+    CHECK(thread.getLastCachedIndex() == 210);
+    CHECK(cache.Contains(140));
+    CHECK(cache.Count() >= 2);
 }
 
 TEST_CASE("NotifyPlaybackPosition: ignored while scrubbing, applied after commit", "[VideoCacheThread]") {
