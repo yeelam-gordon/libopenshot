@@ -166,11 +166,12 @@ namespace openshot {
 		double max_time; ///> The max duration (in seconds) of the timeline, based on the furthest clip (right edge)
 		double min_time; ///> The min duration (in seconds) of the timeline, based on the position of the first clip (left edge)
 		std::atomic<uint64_t> cache_epoch; ///< Monotonic cache-invalidation epoch for playback cache reconciliation.
+		std::atomic<uint64_t> last_rendered_cache_epoch; ///< Last timeline cache epoch rendered through GetFrame().
 
 		std::map<std::string, std::shared_ptr<openshot::TrackedObjectBase>> tracked_objects; ///< map of TrackedObjectBBoxes and their IDs
 
 		/// Process a new layer of video or audio
-		void add_layer(std::shared_ptr<openshot::Frame> new_frame, openshot::Clip* source_clip, int64_t clip_frame_number, bool is_top_clip, float max_volume);
+		void add_layer(std::shared_ptr<openshot::Frame> new_frame, openshot::Clip* source_clip, int64_t clip_frame_number, bool is_top_clip, bool force_safe_composite, float max_volume);
 
 		/// Apply a FrameMapper to a clip which matches the settings of this timeline
 		void apply_mapper_to_clip(openshot::Clip* clip);

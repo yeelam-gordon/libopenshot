@@ -33,6 +33,7 @@ namespace openshot {
 	{
 		bool is_top_clip;				 ///< Is clip on top (if overlapping another clip)
 		bool is_before_clip_keyframes;	///< Is this before clip keyframes are applied
+		bool force_safe_composite;      ///< If true, avoid mutating cached clip images during composition
 	};
 
 	/**

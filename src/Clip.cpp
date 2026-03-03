@@ -529,8 +529,13 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 			return output;
 		}
 
-		// Apply background canvas (i.e. flatten this image onto previous layer image)
-		apply_background(frame, background_frame);
+			// Keep fast mutating path by default, but allow timeline edit/update
+			// renders to request safe (non-mutating) composition.
+			bool update_frame_image = (options == NULL);
+			if (options != NULL && !options->force_safe_composite) {
+				update_frame_image = true;
+			}
+			apply_background(frame, background_frame, update_frame_image);
 
 		// Return processed 'frame'
 		return frame;
@@ -1273,7 +1278,9 @@ void Clip::RemoveEffect(EffectBase* effect)
 }
 
 // Apply background image to the current clip image (i.e. flatten this image onto previous layer)
-void Clip::apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_ptr<openshot::Frame> background_frame) {
+void Clip::apply_background(std::shared_ptr<openshot::Frame> frame,
+                            std::shared_ptr<openshot::Frame> background_frame,
+                            bool update_frame_image) {
 	// Add background canvas
 	std::shared_ptr<QImage> background_canvas = background_frame->GetImage();
 	QPainter painter(background_canvas.get());
@@ -1283,8 +1290,10 @@ void Clip::apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_
 	painter.drawImage(0, 0, *frame->GetImage());
 	painter.end();
 
-	// Add new QImage to frame
-	frame->AddImage(background_canvas);
+	// Standalone clip requests update frame->image, but timeline composition
+	// draws onto the timeline-owned background frame only.
+	if (update_frame_image)
+		frame->AddImage(background_canvas);
 }
 
 // Apply effects to the source frame (if any)
