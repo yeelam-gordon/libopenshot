@@ -196,7 +196,7 @@ TEST_CASE("clearCacheIfPaused: clears only when paused and not in cache", "[Vide
     CHECK(cache.Contains(5));
 }
 
-TEST_CASE("clearCacheIfPaused: does not clear when paused slightly past timeline end", "[VideoCacheThread]") {
+TEST_CASE("clearCacheIfPaused: clears when paused past timeline end and playhead frame is missing", "[VideoCacheThread]") {
     TestableVideoCacheThread thread;
     CacheMemory cache(/*max_bytes=*/100000000);
 
@@ -208,13 +208,13 @@ TEST_CASE("clearCacheIfPaused: does not clear when paused slightly past timeline
     const int64_t end = timeline.info.video_length;
     REQUIRE(end > 1);
 
-    cache.Add(std::make_shared<Frame>(end, 0, 0));
+    cache.Add(std::make_shared<Frame>(end - 1, 0, 0));
     const int64_t initial_count = cache.Count();
+    REQUIRE(initial_count > 0);
 
     const bool didClear = thread.clearCacheIfPaused(/*playhead=*/end + 12, /*paused=*/true, &cache);
-    CHECK(!didClear);
-    CHECK(cache.Count() == initial_count);
-    CHECK(cache.Contains(end));
+    CHECK(didClear);
+    CHECK(cache.Count() == 0);
 }
 
 TEST_CASE("handleUserSeek: sets last_cached_index to playhead - dir", "[VideoCacheThread]") {
@@ -475,7 +475,7 @@ TEST_CASE("Seek preview: paused out-of-range seek clamps to end and preserves ca
     CHECK(cache.Contains(end));
 }
 
-TEST_CASE("Seek commit: paused out-of-range seek past end does not enable cache rebuild", "[VideoCacheThread]") {
+TEST_CASE("Seek commit: paused out-of-range seek past end enables cache rebuild when end is uncached", "[VideoCacheThread]") {
     TestableVideoCacheThread thread;
     CacheMemory cache(/*max_bytes=*/100000000);
     Timeline timeline(/*width=*/1280, /*height=*/720, /*fps=*/Fraction(24,1),
@@ -486,18 +486,18 @@ TEST_CASE("Seek commit: paused out-of-range seek past end does not enable cache 
     const int64_t end = timeline.info.video_length;
     REQUIRE(end > 1);
 
-    cache.Add(std::make_shared<Frame>(end, 0, 0));
-    cache.Add(std::make_shared<Frame>(end - 1, 0, 0));
-    thread.setLastCachedIndex(end - 1);
+    cache.Add(std::make_shared<Frame>(1, 0, 0));
+    cache.Add(std::make_shared<Frame>(2, 0, 0));
+    thread.setLastCachedIndex(2);
 
     thread.Seek(/*new_position=*/end + 24, /*start_preroll=*/true);
 
     CHECK(!thread.isScrubbing());
-    CHECK(!thread.getUserSeekedFlag());
-    CHECK(!thread.getPrerollOnNextFill());
+    CHECK(thread.getUserSeekedFlag());
+    CHECK(thread.getPrerollOnNextFill());
     CHECK(thread.getRequestedDisplayFrame() == end);
     CHECK(thread.getLastCachedIndex() == end - 1);
-    CHECK(cache.Contains(end));
+    CHECK(!cache.Contains(end));
 }
 
 TEST_CASE("NotifyPlaybackPosition: ignored while scrubbing, applied after commit", "[VideoCacheThread]") {

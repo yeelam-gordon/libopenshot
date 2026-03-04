@@ -145,32 +145,8 @@ namespace openshot
     {
         const int64_t timeline_end = resolveTimelineEnd();
         const int64_t clamped_new_position = clampToTimelineRange(new_position, timeline_end);
-        const bool past_timeline_end = (timeline_end > 0 && new_position > timeline_end);
         const int64_t current_requested = requested_display_frame.load();
         const int64_t clamped_requested = clampToTimelineRange(current_requested, timeline_end);
-
-        // Out-of-range seeks past timeline end should not churn cache.
-        if (past_timeline_end) {
-            int64_t new_cached_count = cached_frame_count.load();
-            if (CacheBase* cache = reader ? reader->GetCache() : nullptr) {
-                new_cached_count = cache->Count();
-            }
-            const bool is_paused = (speed.load() == 0);
-            std::lock_guard<std::mutex> guard(seek_state_mutex);
-            requested_display_frame.store(clamped_new_position);
-            cached_frame_count.store(new_cached_count);
-            preroll_on_next_fill.store(false);
-            clear_cache_on_next_fill.store(false);
-            userSeeked.store(false);
-            if (start_preroll) {
-                scrub_active.store(false);
-            } else if (is_paused) {
-                scrub_active.store(true);
-            } else {
-                scrub_active.store(false);
-            }
-            return;
-        }
 
         bool should_mark_seek = false;
         bool should_preroll = false;
@@ -409,9 +385,6 @@ namespace openshot
                                               CacheBase* cache)
     {
         const int64_t timeline_end = resolveTimelineEnd();
-        if (timeline_end > 0 && playhead >= timeline_end) {
-            return false;
-        }
         int64_t cache_playhead = playhead;
         if (reader) {
             cache_playhead = clampToTimelineRange(playhead, timeline_end);
