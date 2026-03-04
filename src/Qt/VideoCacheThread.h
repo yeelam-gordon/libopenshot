@@ -129,6 +129,12 @@ namespace openshot
         /// @brief Compute preroll frame count from settings.
         int64_t computePrerollFrames(const Settings* settings) const;
 
+        /// @brief Resolve timeline end frame from reader/timeline metadata.
+        int64_t resolveTimelineEnd() const;
+
+        /// @brief Clamp frame index to [1, timeline_end] when timeline_end is valid.
+        int64_t clampToTimelineRange(int64_t frame, int64_t timeline_end) const;
+
         /**
          * @brief When paused and playhead is outside current cache, clear all frames.
          * @param playhead Current requested_display_frame

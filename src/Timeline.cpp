@@ -944,6 +944,9 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 	// Adjust out of bounds frame number
 	if (requested_frame < 1)
 		requested_frame = 1;
+	const int64_t max_frame = GetMaxFrame();
+	if (max_frame > 0 && requested_frame > max_frame)
+		requested_frame = max_frame;
 
 	// Check cache
 	std::shared_ptr<Frame> frame;

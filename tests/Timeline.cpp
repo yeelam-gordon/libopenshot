@@ -1377,3 +1377,33 @@ TEST_CASE( "ApplyJSONDiff Update Reader Info", "[libopenshot][timeline]" )
 	CHECK(mapper->Reader()->info.duration == Approx(20.88333).margin(0.00001));
 
 }
+
+TEST_CASE("GetFrame clamps requests past timeline end", "[libopenshot][timeline][cache]") {
+	TimelineSolidColorReader reader(
+		64, 64,
+		30, 1,
+		300,
+		QColor(10, 20, 30, 255));
+	Clip clip(&reader);
+	clip.Layer(1);
+	clip.Position(0.0);
+	clip.End(1.0);
+
+	Timeline t(640, 480, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	t.AddClip(&clip);
+	t.Open();
+
+	const int64_t end = t.GetMaxFrame();
+	REQUIRE(end > 1);
+	REQUIRE(t.GetCache() != nullptr);
+
+	std::shared_ptr<Frame> first = t.GetFrame(end + 25);
+	REQUIRE(first != nullptr);
+	CHECK(first->number == end);
+	const int64_t count_after_first = t.GetCache()->Count();
+
+	std::shared_ptr<Frame> second = t.GetFrame(end + 120);
+	REQUIRE(second != nullptr);
+	CHECK(second->number == end);
+	CHECK(t.GetCache()->Count() == count_after_first);
+}

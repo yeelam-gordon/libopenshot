@@ -196,6 +196,27 @@ TEST_CASE("clearCacheIfPaused: clears only when paused and not in cache", "[Vide
     CHECK(cache.Contains(5));
 }
 
+TEST_CASE("clearCacheIfPaused: does not clear when paused slightly past timeline end", "[VideoCacheThread]") {
+    TestableVideoCacheThread thread;
+    CacheMemory cache(/*max_bytes=*/100000000);
+
+    Timeline timeline(/*width=*/1280, /*height=*/720, /*fps=*/Fraction(24,1),
+                      /*sample_rate=*/48000, /*channels=*/2, ChannelLayout::LAYOUT_STEREO);
+    timeline.SetCache(&cache);
+    thread.Reader(&timeline);
+
+    const int64_t end = timeline.info.video_length;
+    REQUIRE(end > 1);
+
+    cache.Add(std::make_shared<Frame>(end, 0, 0));
+    const int64_t initial_count = cache.Count();
+
+    const bool didClear = thread.clearCacheIfPaused(/*playhead=*/end + 12, /*paused=*/true, &cache);
+    CHECK(!didClear);
+    CHECK(cache.Count() == initial_count);
+    CHECK(cache.Contains(end));
+}
+
 TEST_CASE("handleUserSeek: sets last_cached_index to playhead - dir", "[VideoCacheThread]") {
     TestableVideoCacheThread thread;
 
@@ -428,6 +449,55 @@ TEST_CASE("Seek commit: paused scrub preview then same-frame commit preserves ca
     CHECK(thread.getLastCachedIndex() == 210);
     CHECK(cache.Contains(140));
     CHECK(cache.Count() >= 2);
+}
+
+TEST_CASE("Seek preview: paused out-of-range seek clamps to end and preserves cache", "[VideoCacheThread]") {
+    TestableVideoCacheThread thread;
+    CacheMemory cache(/*max_bytes=*/100000000);
+    Timeline timeline(/*width=*/1280, /*height=*/720, /*fps=*/Fraction(24,1),
+                      /*sample_rate=*/48000, /*channels=*/2, ChannelLayout::LAYOUT_STEREO);
+    timeline.SetCache(&cache);
+    thread.Reader(&timeline);
+
+    const int64_t end = timeline.info.video_length;
+    REQUIRE(end > 1);
+
+    cache.Add(std::make_shared<Frame>(end, 0, 0));
+    cache.Add(std::make_shared<Frame>(end - 1, 0, 0));
+    thread.setLastCachedIndex(end - 1);
+
+    thread.Seek(/*new_position=*/end + 24, /*start_preroll=*/false);
+
+    CHECK(thread.isScrubbing());
+    CHECK(!thread.getUserSeekedFlag());
+    CHECK(thread.getRequestedDisplayFrame() == end);
+    CHECK(thread.getLastCachedIndex() == end - 1);
+    CHECK(cache.Contains(end));
+}
+
+TEST_CASE("Seek commit: paused out-of-range seek past end does not enable cache rebuild", "[VideoCacheThread]") {
+    TestableVideoCacheThread thread;
+    CacheMemory cache(/*max_bytes=*/100000000);
+    Timeline timeline(/*width=*/1280, /*height=*/720, /*fps=*/Fraction(24,1),
+                      /*sample_rate=*/48000, /*channels=*/2, ChannelLayout::LAYOUT_STEREO);
+    timeline.SetCache(&cache);
+    thread.Reader(&timeline);
+
+    const int64_t end = timeline.info.video_length;
+    REQUIRE(end > 1);
+
+    cache.Add(std::make_shared<Frame>(end, 0, 0));
+    cache.Add(std::make_shared<Frame>(end - 1, 0, 0));
+    thread.setLastCachedIndex(end - 1);
+
+    thread.Seek(/*new_position=*/end + 24, /*start_preroll=*/true);
+
+    CHECK(!thread.isScrubbing());
+    CHECK(!thread.getUserSeekedFlag());
+    CHECK(!thread.getPrerollOnNextFill());
+    CHECK(thread.getRequestedDisplayFrame() == end);
+    CHECK(thread.getLastCachedIndex() == end - 1);
+    CHECK(cache.Contains(end));
 }
 
 TEST_CASE("NotifyPlaybackPosition: ignored while scrubbing, applied after commit", "[VideoCacheThread]") {
