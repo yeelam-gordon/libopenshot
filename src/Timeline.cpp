@@ -945,12 +945,12 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 	if (requested_frame < 1)
 		requested_frame = 1;
 	const int64_t max_frame = GetMaxFrame();
-	if (max_frame > 0 && requested_frame > max_frame)
-		requested_frame = max_frame;
+	const bool past_timeline_end = (max_frame > 0 && requested_frame > max_frame);
 
 	// Check cache
 	std::shared_ptr<Frame> frame;
-	frame = final_cache->GetFrame(requested_frame);
+	if (!past_timeline_end)
+		frame = final_cache->GetFrame(requested_frame);
 	if (frame) {
 		// Debug output
 		ZmqLogger::Instance()->AppendDebugMethod(
@@ -967,7 +967,8 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 
 		// Check cache 2nd time
 		std::shared_ptr<Frame> frame;
-		frame = final_cache->GetFrame(requested_frame);
+		if (!past_timeline_end)
+			frame = final_cache->GetFrame(requested_frame);
 		if (frame) {
 			// Debug output
 			ZmqLogger::Instance()->AppendDebugMethod(
@@ -1118,8 +1119,9 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 			// Set frame # on mapped frame
 			new_frame->SetFrameNumber(requested_frame);
 
-			// Add final frame to cache
-			final_cache->Add(new_frame);
+				// Add final frame to cache (only for valid timeline range)
+				if (!past_timeline_end)
+					final_cache->Add(new_frame);
 			if (force_safe_composite) {
 				last_rendered_cache_epoch.store(current_epoch, std::memory_order_relaxed);
 			}

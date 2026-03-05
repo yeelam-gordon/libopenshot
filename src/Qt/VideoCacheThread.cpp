@@ -63,7 +63,7 @@ namespace openshot
         }
 
         const int64_t cached_index = last_cached_index.load();
-        const int64_t playhead = requested_display_frame.load();
+        int64_t playhead = requested_display_frame.load();
         int dir = computeDirection();
 
         // Near timeline boundaries, don't require more pre-roll than can exist.
@@ -77,6 +77,7 @@ namespace openshot
         if (max_frame < 1) {
             return false;
         }
+        playhead = clampToTimelineRange(playhead, max_frame);
 
         int64_t required_ahead = ready_min;
         int64_t available_ahead = (dir > 0)
@@ -146,7 +147,6 @@ namespace openshot
         const int64_t timeline_end = resolveTimelineEnd();
         const int64_t clamped_new_position = clampToTimelineRange(new_position, timeline_end);
         const int64_t current_requested = requested_display_frame.load();
-        const int64_t clamped_requested = clampToTimelineRange(current_requested, timeline_end);
 
         bool should_mark_seek = false;
         bool should_preroll = false;
@@ -265,7 +265,7 @@ namespace openshot
             if (should_mark_seek || should_preroll || should_clear_cache) {
                 last_cached_index.store(clamped_new_position - dir);
             }
-            requested_display_frame.store(clamped_new_position);
+            requested_display_frame.store(new_position);
             cached_frame_count.store(new_cached_count);
             preroll_on_next_fill.store(should_preroll);
             // Clear behavior follows the latest seek intent.
@@ -294,16 +294,13 @@ namespace openshot
             return;
         }
 
-        const int64_t timeline_end = resolveTimelineEnd();
-        const int64_t clamped_new_position = clampToTimelineRange(new_position, timeline_end);
-
         int64_t new_cached_count = cached_frame_count.load();
         if (CacheBase* cache = reader ? reader->GetCache() : nullptr) {
             new_cached_count = cache->Count();
         }
         {
             std::lock_guard<std::mutex> guard(seek_state_mutex);
-            requested_display_frame.store(clamped_new_position);
+            requested_display_frame.store(new_position);
             cached_frame_count.store(new_cached_count);
         }
     }
@@ -490,7 +487,8 @@ namespace openshot
             bool should_clear_cache = clear_cache_on_next_fill.exchange(false);
             if (should_clear_cache && timeline) {
                 const int dir_on_clear = computeDirection();
-                const int64_t clear_playhead = requested_display_frame.load();
+                const int64_t clear_playhead = clampToTimelineRange(
+                    requested_display_frame.load(), resolveTimelineEnd());
                 timeline->ClearAllCache();
                 cached_frame_count.store(0);
                 // Reset ready baseline immediately after clear. Otherwise a
@@ -515,9 +513,8 @@ namespace openshot
                 continue;
             }
             int64_t  timeline_end = resolveTimelineEnd();
-            int64_t  playhead     = requested_display_frame.load();
-            playhead = clampToTimelineRange(playhead, timeline_end);
-            requested_display_frame.store(playhead);
+            int64_t  raw_playhead = requested_display_frame.load();
+            int64_t  playhead     = clampToTimelineRange(raw_playhead, timeline_end);
             bool     paused       = (speed.load() == 0);
             int64_t  preroll_frames = computePrerollFrames(settings);
 
@@ -572,8 +569,8 @@ namespace openshot
             bool use_preroll = false;
             {
                 std::lock_guard<std::mutex> guard(seek_state_mutex);
-                playhead = clampToTimelineRange(requested_display_frame.load(), timeline_end);
-                requested_display_frame.store(playhead);
+                raw_playhead = requested_display_frame.load();
+                playhead = clampToTimelineRange(raw_playhead, timeline_end);
                 did_user_seek = userSeeked.load();
                 use_preroll = preroll_on_next_fill.load();
                 if (did_user_seek) {

@@ -1378,7 +1378,7 @@ TEST_CASE( "ApplyJSONDiff Update Reader Info", "[libopenshot][timeline]" )
 
 }
 
-TEST_CASE("GetFrame clamps requests past timeline end", "[libopenshot][timeline][cache]") {
+TEST_CASE("GetFrame past-end requests are not cached", "[libopenshot][timeline][cache]") {
 	TimelineSolidColorReader reader(
 		64, 64,
 		30, 1,
@@ -1396,14 +1396,15 @@ TEST_CASE("GetFrame clamps requests past timeline end", "[libopenshot][timeline]
 	const int64_t end = t.GetMaxFrame();
 	REQUIRE(end > 1);
 	REQUIRE(t.GetCache() != nullptr);
+	const int64_t count_before = t.GetCache()->Count();
 
 	std::shared_ptr<Frame> first = t.GetFrame(end + 25);
 	REQUIRE(first != nullptr);
-	CHECK(first->number == end);
-	const int64_t count_after_first = t.GetCache()->Count();
+	CHECK(first->number == end + 25);
+	CHECK(t.GetCache()->Count() == count_before);
 
 	std::shared_ptr<Frame> second = t.GetFrame(end + 120);
 	REQUIRE(second != nullptr);
-	CHECK(second->number == end);
-	CHECK(t.GetCache()->Count() == count_after_first);
+	CHECK(second->number == end + 120);
+	CHECK(t.GetCache()->Count() == count_before);
 }

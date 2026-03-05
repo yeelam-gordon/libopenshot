@@ -45,6 +45,7 @@ public:
     bool    isScrubbing() const { return scrub_active.load(); }
     bool    getUserSeekedFlag() const { return userSeeked.load(); }
     bool    getPrerollOnNextFill() const { return preroll_on_next_fill.load(); }
+    bool    getClearCacheOnNextFill() const { return clear_cache_on_next_fill.load(); }
     int64_t getRequestedDisplayFrame() const { return requested_display_frame.load(); }
 };
 
@@ -163,6 +164,26 @@ TEST_CASE("isReady: clamps preroll requirement at timeline boundaries", "[VideoC
     CHECK(thread.isReady());
 }
 
+TEST_CASE("isReady: treats out-of-range playhead as timeline edge for readiness", "[VideoCacheThread]") {
+    TestableVideoCacheThread thread;
+
+    Timeline timeline(/*width=*/1280, /*height=*/720, /*fps=*/Fraction(30,1),
+                      /*sample_rate=*/48000, /*channels=*/2, ChannelLayout::LAYOUT_STEREO);
+    thread.Reader(&timeline);
+
+    const int64_t end = timeline.info.video_length;
+    REQUIRE(end > 10);
+
+    thread.setMinFramesAhead(30);
+    thread.setSpeed(1);
+    thread.setPlayhead(end + 100);
+
+    thread.setLastCachedIndex(end - 1);
+    CHECK(!thread.isReady());
+    thread.setLastCachedIndex(end);
+    CHECK(thread.isReady());
+}
+
 TEST_CASE("clearCacheIfPaused: clears only when paused and not in cache", "[VideoCacheThread]") {
     TestableVideoCacheThread thread;
     CacheMemory cache(/*max_bytes=*/100000000);
@@ -215,6 +236,27 @@ TEST_CASE("clearCacheIfPaused: clears when paused past timeline end and playhead
     const bool didClear = thread.clearCacheIfPaused(/*playhead=*/end + 12, /*paused=*/true, &cache);
     CHECK(didClear);
     CHECK(cache.Count() == 0);
+}
+
+TEST_CASE("clearCacheIfPaused: does not clear when paused past timeline end and end frame is cached", "[VideoCacheThread]") {
+    TestableVideoCacheThread thread;
+    CacheMemory cache(/*max_bytes=*/100000000);
+
+    Timeline timeline(/*width=*/1280, /*height=*/720, /*fps=*/Fraction(24,1),
+                      /*sample_rate=*/48000, /*channels=*/2, ChannelLayout::LAYOUT_STEREO);
+    timeline.SetCache(&cache);
+    thread.Reader(&timeline);
+
+    const int64_t end = timeline.info.video_length;
+    REQUIRE(end > 1);
+
+    cache.Add(std::make_shared<Frame>(end, 0, 0));
+    const int64_t initial_count = cache.Count();
+    REQUIRE(initial_count > 0);
+
+    const bool didClear = thread.clearCacheIfPaused(/*playhead=*/end + 12, /*paused=*/true, &cache);
+    CHECK(!didClear);
+    CHECK(cache.Count() == initial_count);
 }
 
 TEST_CASE("handleUserSeek: sets last_cached_index to playhead - dir", "[VideoCacheThread]") {
@@ -470,7 +512,7 @@ TEST_CASE("Seek preview: paused out-of-range seek clamps to end and preserves ca
 
     CHECK(thread.isScrubbing());
     CHECK(!thread.getUserSeekedFlag());
-    CHECK(thread.getRequestedDisplayFrame() == end);
+    CHECK(thread.getRequestedDisplayFrame() == end + 24);
     CHECK(thread.getLastCachedIndex() == end - 1);
     CHECK(cache.Contains(end));
 }
@@ -495,9 +537,58 @@ TEST_CASE("Seek commit: paused out-of-range seek past end enables cache rebuild 
     CHECK(!thread.isScrubbing());
     CHECK(thread.getUserSeekedFlag());
     CHECK(thread.getPrerollOnNextFill());
-    CHECK(thread.getRequestedDisplayFrame() == end);
+    CHECK(thread.getRequestedDisplayFrame() == end + 24);
     CHECK(thread.getLastCachedIndex() == end - 1);
     CHECK(!cache.Contains(end));
+}
+
+TEST_CASE("Seek commit: playback jump to cached frame preserves cache", "[VideoCacheThread]") {
+    TestableVideoCacheThread thread;
+    CacheMemory cache(/*max_bytes=*/100000000);
+    Timeline timeline(/*width=*/1280, /*height=*/720, /*fps=*/Fraction(24,1),
+                      /*sample_rate=*/48000, /*channels=*/2, ChannelLayout::LAYOUT_STEREO);
+    timeline.SetCache(&cache);
+    thread.Reader(&timeline);
+
+    cache.Add(std::make_shared<Frame>(150, 0, 0));
+    cache.Add(std::make_shared<Frame>(220, 0, 0));
+    thread.setPlayhead(220);
+    thread.setSpeed(1);
+    thread.setLastCachedIndex(230);
+
+    thread.Seek(/*new_position=*/150, /*start_preroll=*/true);
+
+    CHECK(!thread.isScrubbing());
+    CHECK(!thread.getUserSeekedFlag());
+    CHECK(!thread.getPrerollOnNextFill());
+    CHECK(!thread.getClearCacheOnNextFill());
+    CHECK(thread.getRequestedDisplayFrame() == 150);
+    CHECK(thread.getLastCachedIndex() == 230);
+}
+
+TEST_CASE("Seek commit: playback click inside active cached window preserves cache", "[VideoCacheThread]") {
+    TestableVideoCacheThread thread;
+    CacheMemory cache(/*max_bytes=*/100000000);
+    Timeline timeline(/*width=*/1280, /*height=*/720, /*fps=*/Fraction(24,1),
+                      /*sample_rate=*/48000, /*channels=*/2, ChannelLayout::LAYOUT_STEREO);
+    timeline.SetCache(&cache);
+    thread.Reader(&timeline);
+
+    cache.Add(std::make_shared<Frame>(220, 0, 0));
+    cache.Add(std::make_shared<Frame>(230, 0, 0));
+    cache.Add(std::make_shared<Frame>(260, 0, 0));
+    thread.setPlayhead(220);
+    thread.setSpeed(1);
+    thread.setLastCachedIndex(260);
+
+    thread.Seek(/*new_position=*/230, /*start_preroll=*/true);
+
+    CHECK(!thread.isScrubbing());
+    CHECK(!thread.getUserSeekedFlag());
+    CHECK(!thread.getPrerollOnNextFill());
+    CHECK(!thread.getClearCacheOnNextFill());
+    CHECK(thread.getRequestedDisplayFrame() == 230);
+    CHECK(thread.getLastCachedIndex() == 260);
 }
 
 TEST_CASE("NotifyPlaybackPosition: ignored while scrubbing, applied after commit", "[VideoCacheThread]") {
@@ -520,4 +611,28 @@ TEST_CASE("NotifyPlaybackPosition: ignored while scrubbing, applied after commit
 
     thread.NotifyPlaybackPosition(/*new_position=*/25);
     CHECK(thread.getRequestedDisplayFrame() == 25);
+}
+
+TEST_CASE("Seek non-preroll: playback uncached target does not force cache rebuild", "[VideoCacheThread]") {
+    TestableVideoCacheThread thread;
+    CacheMemory cache(/*max_bytes=*/100000000);
+    Timeline timeline(/*width=*/1280, /*height=*/720, /*fps=*/Fraction(24,1),
+                      /*sample_rate=*/48000, /*channels=*/2, ChannelLayout::LAYOUT_STEREO);
+    timeline.SetCache(&cache);
+    thread.Reader(&timeline);
+
+    cache.Add(std::make_shared<Frame>(220, 0, 0));
+    cache.Add(std::make_shared<Frame>(221, 0, 0));
+    thread.setPlayhead(220);
+    thread.setSpeed(1);
+    thread.setLastCachedIndex(230);
+
+    thread.Seek(/*new_position=*/120, /*start_preroll=*/false);
+
+    CHECK(!thread.isScrubbing());
+    CHECK(!thread.getUserSeekedFlag());
+    CHECK(!thread.getPrerollOnNextFill());
+    CHECK(!thread.getClearCacheOnNextFill());
+    CHECK(thread.getRequestedDisplayFrame() == 120);
+    CHECK(thread.getLastCachedIndex() == 230);
 }
