@@ -1459,6 +1459,13 @@ void Timeline::apply_json_to_clips(Json::Value change) {
 						// Apply the change to the effect directly
 						apply_json_to_effects(change, e);
 
+						// Effect mutations on a clip can leave stale post-effect frames in the
+						// clip cache (keyed by clip frame number). Clear only this clip cache
+						// so fixed-frame previews refresh without flushing reader decode caches.
+						if (existing_clip->GetCache()) {
+							existing_clip->GetCache()->Clear();
+						}
+
 						// Calculate start and end frames that this impacts, and remove those frames from the cache
 						int64_t new_starting_frame = (existing_clip->Position() * info.fps.ToDouble()) + 1;
 						int64_t new_ending_frame = ((existing_clip->Position() + existing_clip->Duration()) * info.fps.ToDouble()) + 1;

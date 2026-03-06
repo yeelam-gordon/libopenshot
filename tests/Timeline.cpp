@@ -15,6 +15,7 @@
 #include <memory>
 #include <list>
 #include <vector>
+#include <cstdint>
 #include <omp.h>
 
 #include "openshot_catch.h"
@@ -29,9 +30,29 @@
 #include "effects/Brightness.h"
 #include "Exceptions.h"
 #include "effects/Blur.h"
+#include "effects/Bars.h"
 #include "effects/Negate.h"
 
 using namespace openshot;
+
+static uint64_t image_fingerprint(const std::shared_ptr<QImage>& image) {
+	const uint64_t kFnvOffset = 1469598103934665603ULL;
+	const uint64_t kFnvPrime = 1099511628211ULL;
+	uint64_t hash = kFnvOffset;
+
+	if (!image) {
+		return hash;
+	}
+
+	const unsigned char* bytes = image->constBits();
+	const size_t count = static_cast<size_t>(image->sizeInBytes());
+	for (size_t i = 0; i < count; ++i) {
+		hash ^= static_cast<uint64_t>(bytes[i]);
+		hash *= kFnvPrime;
+	}
+
+	return hash;
+}
 
 class TimelineTrackingMaskReader : public ReaderBase {
 private:
@@ -1301,6 +1322,80 @@ TEST_CASE( "ApplyJSONDiff alpha updates refresh fixed-frame preview content", "[
 		REQUIRE(refreshed != nullptr);
 		CHECK(t.GetCache()->Contains(frame_number));
 		CHECK(overlay_clip.GetCache()->Count() > 0);
+	}
+}
+
+TEST_CASE( "ApplyJSONDiff clip Bars effect updates refresh fixed-frame preview content", "[libopenshot][timeline][effect][bars]" )
+{
+	TimelineSolidColorReader base_reader(
+		/*width=*/64, /*height=*/64, /*fps_num=*/30, /*fps_den=*/1, /*length_frames=*/300,
+		QColor(10, 200, 20, 255)
+	);
+
+	Clip clip(&base_reader);
+	clip.Id("BARS_CLIP_TEST");
+	clip.Layer(0);
+	clip.Position(0.0);
+	clip.End(5.0);
+
+	Bars bars;
+	bars.Id("BARS_EFFECT_TEST");
+	bars.Layer(0);
+	bars.Position(0.0);
+	bars.Start(0.0);
+	bars.End(5.0);
+	bars.color = Color("#000000");
+	bars.left = Keyframe(0.0);
+	bars.top = Keyframe(0.0);
+	bars.right = Keyframe(0.0);
+	bars.bottom = Keyframe(0.0);
+	clip.AddEffect(&bars);
+
+	Timeline t(64, 64, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	t.AddClip(&clip);
+	t.Open();
+
+	const int64_t frame_number = 1;
+	auto frame = t.GetFrame(frame_number);
+	REQUIRE(frame != nullptr);
+	CHECK(frame->GetImage()->pixelColor(20, 20) == QColor(10, 200, 20, 255));
+	uint64_t previous_hash = image_fingerprint(frame->GetImage());
+
+	const std::vector<double> top_steps = {0.02, 0.04, 0.06, 0.08, 0.10};
+	for (double top_value : top_steps) {
+		Keyframe top_kf(top_value);
+
+		Json::Value root(Json::arrayValue);
+		Json::Value change(Json::objectValue);
+		change["type"] = "update";
+		change["partial"] = true;
+
+		Json::Value key(Json::arrayValue);
+		key.append("clips");
+		Json::Value clip_key(Json::objectValue);
+		clip_key["id"] = clip.Id();
+		key.append(clip_key);
+		key.append("effects");
+		Json::Value effect_key(Json::objectValue);
+		effect_key["id"] = bars.Id();
+		key.append(effect_key);
+		change["key"] = key;
+
+		Json::Value value(Json::objectValue);
+		value["top"] = top_kf.JsonValue();
+		change["value"] = value;
+		root.append(change);
+
+		t.ApplyJsonDiff(root.toStyledString());
+		CHECK(bars.top.GetValue(frame_number) == Approx(top_value).margin(0.0001));
+
+		frame = t.GetFrame(frame_number);
+		REQUIRE(frame != nullptr);
+		const uint64_t current_hash = image_fingerprint(frame->GetImage());
+
+		// Regression check: every Bars update should change the rendered image.
+		CHECK(current_hash != previous_hash);
+		previous_hash = current_hash;
 	}
 }
 
