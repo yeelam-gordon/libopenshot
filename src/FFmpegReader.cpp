@@ -1145,7 +1145,7 @@ void FFmpegReader::UpdateVideoInfo() {
 
 	// Normalize FFmpeg-decoded still images (e.g. JPG/JPEG) to match image-reader behavior.
 	// This keeps timing/flags consistent regardless of which reader path was used.
-	if (!info.has_single_image && audioStream < 0) {
+	if (!info.has_single_image) {
 		const AVCodecID codec_id = AV_FIND_DECODER_CODEC_ID(pStream);
 		const bool likely_still_codec =
 			codec_id == AV_CODEC_ID_MJPEG ||
@@ -1157,11 +1157,25 @@ void FFmpegReader::UpdateVideoInfo() {
 		const bool likely_image_demuxer =
 			pFormatCtx && pFormatCtx->iformat && pFormatCtx->iformat->name &&
 			strstr(pFormatCtx->iformat->name, "image2");
+		const bool has_attached_pic = HasAlbumArt();
+		const bool single_frame_stream =
+			(pStream && pStream->nb_frames > 0 && pStream->nb_frames <= 1);
 		const bool single_frame_clip = info.video_length <= 1;
 
-		if (single_frame_clip && (likely_still_codec || likely_image_demuxer)) {
+		const bool is_still_image_video =
+			has_attached_pic ||
+			((single_frame_stream || single_frame_clip) &&
+			 (likely_still_codec || likely_image_demuxer));
+
+		if (is_still_image_video) {
 			info.has_single_image = true;
-			record_duration(video_stream_duration_seconds, 60 * 60 * 1);  // 1 hour duration
+
+			// Only force long duration for standalone images. For audio + attached-art
+			// files, keep stream-derived duration so the cover image spans the audio.
+			if (audioStream < 0) {
+				record_duration(video_stream_duration_seconds, 60 * 60 * 1);  // 1 hour duration
+			}
+
 			ApplyDurationStrategy();
 		}
 	}
@@ -1203,7 +1217,6 @@ std::shared_ptr<Frame> FFmpegReader::GetFrame(int64_t requested_frame) {
 	if (frame) {
 		// Debug output
 		ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::GetFrame", "returned cached frame", requested_frame);
-
 		// Return the cached frame
 		return frame;
 	} else {
@@ -1216,7 +1229,6 @@ std::shared_ptr<Frame> FFmpegReader::GetFrame(int64_t requested_frame) {
 		if (frame) {
 			// Debug output
 			ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::GetFrame", "returned cached frame on 2nd look", requested_frame);
-
 		} else {
 			// Frame is not in cache
 			// Reset seek count
@@ -2644,9 +2656,32 @@ void FFmpegReader::CheckWorkingFrames(int64_t requested_frame) {
 		// Check if working frame is final
 		if (info.has_video && !f->has_image_data
 			&& !packet_status.end_of_file && !is_seek_trash) {
+			if (info.has_single_image) {
+				// For still-image video (including attached cover art), reuse the most
+				// recent image so playback does not stall waiting for video EOF.
+				std::shared_ptr<Frame> previous_frame_instance = final_cache.GetFrame(f->number - 1);
+				if (previous_frame_instance && previous_frame_instance->has_image_data) {
+					f->AddImage(std::make_shared<QImage>(previous_frame_instance->GetImage()->copy()));
+				}
+				if (!f->has_image_data
+					&& last_final_video_frame
+					&& last_final_video_frame->has_image_data
+					&& last_final_video_frame->number <= f->number) {
+					f->AddImage(std::make_shared<QImage>(last_final_video_frame->GetImage()->copy()));
+				}
+				if (!f->has_image_data
+					&& last_video_frame
+					&& last_video_frame->has_image_data
+					&& last_video_frame->number <= f->number) {
+					f->AddImage(std::make_shared<QImage>(last_video_frame->GetImage()->copy()));
+				}
+			}
+
 			// Do not finalize non-EOF video frames without decoded image data.
 			// This prevents repeated previous-frame fallbacks being cached as real frames.
-			continue;
+			if (!f->has_image_data) {
+				continue;
+			}
 		}
 		if ((!packet_status.end_of_file && is_video_ready && is_audio_ready) || packet_status.end_of_file || is_seek_trash) {
 			// Debug output

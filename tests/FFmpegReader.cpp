@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <chrono>
 
 #include "openshot_catch.h"
 
@@ -420,6 +421,54 @@ TEST_CASE( "Static_Image_JPG_Reports_Single_Image", "[libopenshot][ffmpegreader]
 
 	jpg_reader.Close();
 	std::remove(jpg_path.str().c_str());
+}
+
+TEST_CASE( "Attached_Picture_Audio_Does_Not_Stall_Early_Frames", "[libopenshot][ffmpegreader]" )
+{
+	// Build a temporary fixture with audio + attached cover art at runtime.
+	// This avoids adding another binary media file to the repository.
+	if (std::system("ffmpeg -hide_banner -version >/dev/null 2>&1") != 0) {
+		WARN("Skipping attached-picture test: ffmpeg executable not available");
+		return;
+	}
+
+	std::srand(static_cast<unsigned int>(std::time(nullptr)));
+	std::stringstream fixture_path;
+	fixture_path << "libopenshot-attached-art-test-" << std::rand() << ".m4a";
+
+	std::stringstream command;
+	command << "ffmpeg -y -hide_banner -loglevel error "
+	        << "-i \"" << TEST_MEDIA_PATH << "front.png\" "
+	        << "-f lavfi -i \"anullsrc=r=44100:cl=stereo\" "
+	        << "-t 2 "
+	        << "-map 1:a:0 -map 0:v:0 "
+	        << "-c:a aac -b:a 128k "
+	        << "-c:v mjpeg -disposition:v:0 attached_pic "
+	        << "\"" << fixture_path.str() << "\"";
+	const int command_result = std::system(command.str().c_str());
+	REQUIRE(command_result == 0);
+
+	FFmpegReader r(fixture_path.str(), DurationStrategy::VideoPreferred);
+	r.Open();
+
+	CHECK(r.info.has_video);
+	CHECK(r.info.has_audio);
+	CHECK(r.info.has_single_image);
+
+	auto f1 = r.GetFrame(1);
+	CHECK(f1->has_image_data);
+	CHECK(f1->GetAudioSamplesCount() > 0);
+
+	const auto frame2_start = std::chrono::steady_clock::now();
+	auto f2 = r.GetFrame(2);
+	const auto frame2_end = std::chrono::steady_clock::now();
+	const auto frame2_ms = std::chrono::duration_cast<std::chrono::milliseconds>(frame2_end - frame2_start).count();
+	CHECK(frame2_ms < 1500);
+	CHECK(f2->has_image_data);
+	CHECK(f2->GetAudioSamplesCount() > 0);
+
+	r.Close();
+	std::remove(fixture_path.str().c_str());
 }
 
 TEST_CASE( "verify parent Timeline", "[libopenshot][ffmpegreader]" )
