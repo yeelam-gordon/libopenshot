@@ -12,6 +12,7 @@
 
 #include <sstream>
 #include <memory>
+#include <fstream>
 
 #include "openshot_catch.h"
 
@@ -232,4 +233,76 @@ TEST_CASE( "Gif", "[libopenshot][ffmpegwriter]" )
 
     // Close reader
     r1.Close();
+}
+
+TEST_CASE( "SizeOrdering_x264_CRF", "[libopenshot][ffmpegwriter][filesize]" )
+{
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "sintel_trailer-720p.mp4";
+	FFmpegReader reader(path.str());
+	reader.Open();
+
+	auto file_size = [](const std::string& file_path) -> std::streamoff {
+		std::ifstream in(file_path, std::ios::binary | std::ios::ate);
+		if (!in)
+			return -1;
+		return in.tellg();
+	};
+
+	auto encode = [&](const std::string& out_name, int crf, int audio_bitrate) -> std::streamoff {
+		FFmpegWriter w(out_name);
+		w.SetAudioOptions(true, "aac", 48000, 2, LAYOUT_STEREO, audio_bitrate);
+		w.SetVideoOptions(true, "libx264", Fraction(24,1), 1280, 720, Fraction(1,1), false, false, crf);
+		w.PrepareStreams();
+		w.SetOption(VIDEO_STREAM, "crf", std::to_string(crf));
+		w.Open();
+		w.WriteFrame(&reader, 1, 120);
+		w.Close();
+		return file_size(out_name);
+	};
+
+	const auto low_size = encode("SizeOrdering_x264_CRF_low.mp4", 30, 96000);
+	const auto med_size = encode("SizeOrdering_x264_CRF_med.mp4", 23, 128000);
+	const auto high_size = encode("SizeOrdering_x264_CRF_high.mp4", 20, 160000);
+
+	CHECK(low_size < med_size);
+	CHECK(med_size < high_size);
+
+	reader.Close();
+}
+
+TEST_CASE( "SizeOrdering_vp9_CRF", "[libopenshot][ffmpegwriter][filesize]" )
+{
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "sintel_trailer-720p.mp4";
+	FFmpegReader reader(path.str());
+	reader.Open();
+
+	auto file_size = [](const std::string& file_path) -> std::streamoff {
+		std::ifstream in(file_path, std::ios::binary | std::ios::ate);
+		if (!in)
+			return -1;
+		return in.tellg();
+	};
+
+	auto encode = [&](const std::string& out_name, int crf, int audio_bitrate) -> std::streamoff {
+		FFmpegWriter w(out_name);
+		w.SetAudioOptions(true, "libvorbis", 48000, 2, LAYOUT_STEREO, audio_bitrate);
+		w.SetVideoOptions(true, "libvpx-vp9", Fraction(24,1), 1280, 720, Fraction(1,1), false, false, crf);
+		w.PrepareStreams();
+		w.SetOption(VIDEO_STREAM, "crf", std::to_string(crf));
+		w.Open();
+		w.WriteFrame(&reader, 1, 120);
+		w.Close();
+		return file_size(out_name);
+	};
+
+	const auto low_size = encode("SizeOrdering_vp9_CRF_low.webm", 46, 96000);
+	const auto med_size = encode("SizeOrdering_vp9_CRF_med.webm", 34, 128000);
+	const auto high_size = encode("SizeOrdering_vp9_CRF_high.webm", 26, 160000);
+
+	CHECK(low_size < med_size);
+	CHECK(med_size < high_size);
+
+	reader.Close();
 }
