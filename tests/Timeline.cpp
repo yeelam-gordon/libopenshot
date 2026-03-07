@@ -1275,7 +1275,6 @@ TEST_CASE( "ApplyJSONDiff alpha updates refresh fixed-frame preview content", "[
 	const int64_t frame_number = 1;
 
 	auto apply_alpha = [&](double alpha_value) {
-		Keyframe alpha_kf(alpha_value);
 		Json::Value root(Json::arrayValue);
 		Json::Value change(Json::objectValue);
 		change["type"] = "update";
@@ -1288,8 +1287,22 @@ TEST_CASE( "ApplyJSONDiff alpha updates refresh fixed-frame preview content", "[
 		key.append(key_id);
 		change["key"] = key;
 
+		Json::Value alpha_json(Json::objectValue);
+		Json::Value points(Json::arrayValue);
+		Json::Value p1(Json::objectValue);
+		p1["co"]["X"] = 1.0;
+		p1["co"]["Y"] = 1.0;
+		p1["interpolation"] = 0;
+		points.append(p1);
+		Json::Value p2(Json::objectValue);
+		p2["co"]["X"] = static_cast<double>(frame_number);
+		p2["co"]["Y"] = alpha_value;
+		p2["interpolation"] = 1;
+		points.append(p2);
+		alpha_json["Points"] = points;
+
 		Json::Value value(Json::objectValue);
-		value["alpha"] = alpha_kf.JsonValue();
+		value["alpha"] = alpha_json;
 		change["value"] = value;
 
 		root.append(change);
@@ -1323,6 +1336,54 @@ TEST_CASE( "ApplyJSONDiff alpha updates refresh fixed-frame preview content", "[
 		CHECK(t.GetCache()->Contains(frame_number));
 		CHECK(overlay_clip.GetCache()->Count() > 0);
 	}
+}
+
+TEST_CASE( "ApplyJSONDiff enables and drains edit safety window", "[libopenshot][timeline][edit]" )
+{
+	TimelineSolidColorReader reader(
+		/*width=*/64, /*height=*/64, /*fps_num=*/30, /*fps_den=*/1, /*length_frames=*/300,
+		QColor(220, 30, 180, 255)
+	);
+
+	Clip clip(&reader);
+	clip.Id("EDIT_WINDOW_CLIP");
+	clip.Layer(0);
+	clip.Position(0.0);
+	clip.End(10.0);
+
+	Timeline t(64, 64, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	t.AddClip(&clip);
+	t.Open();
+
+	CHECK(t.SafeEditFramesRemaining() == 0);
+
+	Json::Value root(Json::arrayValue);
+	Json::Value change(Json::objectValue);
+	change["type"] = "update";
+	change["partial"] = true;
+
+	Json::Value key(Json::arrayValue);
+	key.append("clips");
+	Json::Value key_id(Json::objectValue);
+	key_id["id"] = clip.Id();
+	key.append(key_id);
+	change["key"] = key;
+
+	Json::Value value(Json::objectValue);
+	value["rotation"] = Keyframe(10.0).JsonValue();
+	change["value"] = value;
+	root.append(change);
+
+	t.ApplyJsonDiff(root.toStyledString());
+	CHECK(t.SafeEditFramesRemaining() == 240);
+
+	(void)t.GetFrame(1);
+	CHECK(t.SafeEditFramesRemaining() == 239);
+
+	for (int64_t frame = 2; frame <= 240; ++frame) {
+		(void)t.GetFrame(frame);
+	}
+	CHECK(t.SafeEditFramesRemaining() == 0);
 }
 
 TEST_CASE( "ApplyJSONDiff clip Bars effect updates refresh fixed-frame preview content", "[libopenshot][timeline][effect][bars]" )

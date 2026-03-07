@@ -514,31 +514,35 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
         }
 
 		const bool has_external_background = (background_frame != nullptr);
-		if (!background_frame) {
-            // Create missing background_frame w/ transparent color (if needed)
-            background_frame = std::make_shared<Frame>(frame->number, frame->GetWidth(), frame->GetHeight(),
-                                                       "#00000000",  frame->GetAudioSamplesCount(),
-                                                       frame->GetAudioChannelsCount());
-        }
 
-		// Direct callers that pass their own background receive a copied frame
-		// to avoid mutating cached clip frames.
-		if (!options && has_external_background) {
-			auto output = std::make_shared<Frame>(*frame.get());
-			apply_background(output, background_frame);
-			return output;
+		// Timeline path.
+		if (options) {
+			if (!background_frame) {
+				// Create a transparent background if missing.
+				background_frame = std::make_shared<Frame>(frame->number, frame->GetWidth(), frame->GetHeight(),
+														   "#00000000", frame->GetAudioSamplesCount(),
+														   frame->GetAudioChannelsCount());
+			}
+			if (options->force_safe_composite) {
+				// Edit mode: composite without mutating cached frame pixels.
+				apply_background(frame, background_frame, false);
+				return frame;
+			}
+
+			// Playback mode: keep original fast path.
+			apply_background(frame, background_frame, true);
+			return frame;
 		}
 
-			// Keep fast mutating path by default, but allow timeline edit/update
-			// renders to request safe (non-mutating) composition.
-			bool update_frame_image = (options == NULL);
-			if (options != NULL && !options->force_safe_composite) {
-				update_frame_image = true;
-			}
-			apply_background(frame, background_frame, update_frame_image);
+		// No background: return the frame directly.
+		if (!has_external_background) {
+			return frame;
+		}
 
-		// Return processed 'frame'
-		return frame;
+		// External background: composite on a copy.
+		auto output = std::make_shared<Frame>(*frame.get());
+		apply_background(output, background_frame, true);
+		return output;
 	}
 	else
 		// Throw error if reader not initialized

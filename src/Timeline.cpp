@@ -31,7 +31,7 @@ using namespace openshot;
 
 // Default Constructor for the timeline (which sets the canvas width and height)
 Timeline::Timeline(int width, int height, Fraction fps, int sample_rate, int channels, ChannelLayout channel_layout) :
-		is_open(false), auto_map_clips(true), managed_cache(true), path(""), max_time(0.0), cache_epoch(0), last_rendered_cache_epoch(0)
+		is_open(false), auto_map_clips(true), managed_cache(true), path(""), max_time(0.0), cache_epoch(0), safe_edit_frames_remaining(0)
 {
 	// Create CrashHandler and Attach (incase of errors)
 	CrashHandler::Instance();
@@ -82,7 +82,7 @@ Timeline::Timeline(const ReaderInfo info) : Timeline::Timeline(
 
 // Constructor for the timeline (which loads a JSON structure from a file path, and initializes a timeline)
 Timeline::Timeline(const std::string& projectPath, bool convert_absolute_paths) :
-		is_open(false), auto_map_clips(true), managed_cache(true), path(projectPath), max_time(0.0), cache_epoch(0), last_rendered_cache_epoch(0) {
+		is_open(false), auto_map_clips(true), managed_cache(true), path(projectPath), max_time(0.0), cache_epoch(0), safe_edit_frames_remaining(0) {
 
 	// Create CrashHandler and Attach (incase of errors)
 	CrashHandler::Instance();
@@ -1064,9 +1064,11 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 			}
 
 			// Compose intersecting clips in a single pass
-			const uint64_t current_epoch = cache_epoch.load(std::memory_order_relaxed);
-			const bool force_safe_composite =
-				(current_epoch != last_rendered_cache_epoch.load(std::memory_order_relaxed));
+			const int safe_remaining = safe_edit_frames_remaining.load(std::memory_order_relaxed);
+			const bool force_safe_composite = (safe_remaining > 0);
+			if (force_safe_composite) {
+				safe_edit_frames_remaining.fetch_sub(1, std::memory_order_relaxed);
+			}
 			for (const auto& ci : clip_infos) {
 				// Debug output
 				ZmqLogger::Instance()->AppendDebugMethod(
@@ -1122,10 +1124,6 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 				// Add final frame to cache (only for valid timeline range)
 				if (!past_timeline_end)
 					final_cache->Add(new_frame);
-			if (force_safe_composite) {
-				last_rendered_cache_epoch.store(current_epoch, std::memory_order_relaxed);
-			}
-
 			// Return frame (or blank frame)
 			return new_frame;
 		}
@@ -1393,6 +1391,8 @@ void Timeline::ApplyJsonDiff(std::string value) {
 
 		// Timeline content changed: notify cache clients to rescan active window.
 		if (!root.empty()) {
+			// After edits, force safe composition for a short window.
+			safe_edit_frames_remaining.store(240, std::memory_order_relaxed);
 			BumpCacheEpoch();
 		}
 	}
@@ -1459,9 +1459,7 @@ void Timeline::apply_json_to_clips(Json::Value change) {
 						// Apply the change to the effect directly
 						apply_json_to_effects(change, e);
 
-						// Effect mutations on a clip can leave stale post-effect frames in the
-						// clip cache (keyed by clip frame number). Clear only this clip cache
-						// so fixed-frame previews refresh without flushing reader decode caches.
+						// Effect-only diffs must clear the owning clip cache.
 						if (existing_clip->GetCache()) {
 							existing_clip->GetCache()->Clear();
 						}
@@ -1516,18 +1514,6 @@ void Timeline::apply_json_to_clips(Json::Value change) {
 			// Remove both the old and new ranges from the timeline cache
 			final_cache->Remove(old_starting_frame - 8, old_ending_frame + 8);
 			final_cache->Remove(new_starting_frame - 8, new_ending_frame + 8);
-
-			// Clear transformed/composited clip cache (keyed by clip frame number),
-			// since property updates (e.g. alpha) can change all rendered frames.
-			if (existing_clip->GetCache()) {
-				existing_clip->GetCache()->Clear();
-			}
-
-			// Remove cache on clip's Reader (if found)
-			if (existing_clip->Reader() && existing_clip->Reader()->GetCache()) {
-				existing_clip->Reader()->GetCache()->Remove(old_starting_frame - 8, old_ending_frame + 8);
-				existing_clip->Reader()->GetCache()->Remove(new_starting_frame - 8, new_ending_frame + 8);
-			}
 
 			// Apply framemapper (or update existing framemapper)
 			if (auto_map_clips) {
