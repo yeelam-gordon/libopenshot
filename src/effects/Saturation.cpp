@@ -51,24 +51,43 @@ void Saturation::ApplyCustomMaskBlend(std::shared_ptr<QImage> original_image, st
 	unsigned char* mask_pixels = reinterpret_cast<unsigned char*>(mask_image->bits());
 	const int pixel_count = effected_image->width() * effected_image->height();
 
-	#pragma omp parallel for schedule(static)
-	for (int i = 0; i < pixel_count; ++i) {
-		const int idx = i * 4;
-		float factor = static_cast<float>(qGray(mask_pixels[idx], mask_pixels[idx + 1], mask_pixels[idx + 2])) / 255.0f;
-		if (mask_invert)
+	if (mask_invert) {
+		#pragma omp parallel for schedule(static)
+		for (int i = 0; i < pixel_count; ++i) {
+			const int idx = i * 4;
+			float factor = static_cast<float>(qGray(mask_pixels[idx], mask_pixels[idx + 1], mask_pixels[idx + 2])) / 255.0f;
 			factor = 1.0f - factor;
-		// Use a non-linear response curve for custom saturation drive mode.
-		factor = factor * factor;
-		const float inverse = 1.0f - factor;
+			// Use a non-linear response curve for custom saturation drive mode.
+			factor = factor * factor;
+			const float inverse = 1.0f - factor;
 
-		// Drive saturation strength with mask while preserving source alpha.
-		effected_pixels[idx] = static_cast<unsigned char>(
-			(original_pixels[idx] * inverse) + (effected_pixels[idx] * factor));
-		effected_pixels[idx + 1] = static_cast<unsigned char>(
-			(original_pixels[idx + 1] * inverse) + (effected_pixels[idx + 1] * factor));
-		effected_pixels[idx + 2] = static_cast<unsigned char>(
-			(original_pixels[idx + 2] * inverse) + (effected_pixels[idx + 2] * factor));
-		effected_pixels[idx + 3] = original_pixels[idx + 3];
+			// Drive saturation strength with mask while preserving source alpha.
+			effected_pixels[idx] = static_cast<unsigned char>(
+				(original_pixels[idx] * inverse) + (effected_pixels[idx] * factor));
+			effected_pixels[idx + 1] = static_cast<unsigned char>(
+				(original_pixels[idx + 1] * inverse) + (effected_pixels[idx + 1] * factor));
+			effected_pixels[idx + 2] = static_cast<unsigned char>(
+				(original_pixels[idx + 2] * inverse) + (effected_pixels[idx + 2] * factor));
+			effected_pixels[idx + 3] = original_pixels[idx + 3];
+		}
+	} else {
+		#pragma omp parallel for schedule(static)
+		for (int i = 0; i < pixel_count; ++i) {
+			const int idx = i * 4;
+			float factor = static_cast<float>(qGray(mask_pixels[idx], mask_pixels[idx + 1], mask_pixels[idx + 2])) / 255.0f;
+			// Use a non-linear response curve for custom saturation drive mode.
+			factor = factor * factor;
+			const float inverse = 1.0f - factor;
+
+			// Drive saturation strength with mask while preserving source alpha.
+			effected_pixels[idx] = static_cast<unsigned char>(
+				(original_pixels[idx] * inverse) + (effected_pixels[idx] * factor));
+			effected_pixels[idx + 1] = static_cast<unsigned char>(
+				(original_pixels[idx + 1] * inverse) + (effected_pixels[idx + 1] * factor));
+			effected_pixels[idx + 2] = static_cast<unsigned char>(
+				(original_pixels[idx + 2] * inverse) + (effected_pixels[idx + 2] * factor));
+			effected_pixels[idx + 3] = original_pixels[idx + 3];
+		}
 	}
 }
 
@@ -128,52 +147,23 @@ std::shared_ptr<openshot::Frame> Saturation::GetFrame(std::shared_ptr<openshot::
 		return value;
 	};
 
-	#pragma omp parallel for if(pixel_count >= 16384) schedule(static) shared (pixels)
-	for (int pixel = 0; pixel < pixel_count; ++pixel)
-	{
-		const int idx = pixel * 4;
-
-		// Calculate alpha % (to be used for removing pre-multiplied alpha value)
-		const int A = pixels[idx + 3];
-		if (A <= 0)
-			continue;
-		const float alpha_percent = static_cast<float>(A) * (1.0f / 255.0f);
-		const float inv_alpha_percent = inv_alpha[A];
-
-		// Get RGB values, and remove pre-multiplied alpha
-		int R = static_cast<int>(pixels[idx + 0] * inv_alpha_percent);
-		int G = static_cast<int>(pixels[idx + 1] * inv_alpha_percent);
-		int B = static_cast<int>(pixels[idx + 2] * inv_alpha_percent);
-
-		/*
-		 * Common saturation adjustment
-		 */
-
+	const auto apply_saturation = [&](int &R, int &G, int &B) {
 		// Calculate the saturation multiplier
 		const float p = std::sqrt((R * R * pR) +
 								  (G * G * pG) +
 								  (B * B * pB));
 
-		// Adjust the saturation
+		// Adjust common saturation
 		R = clamp_i(static_cast<int>(p + (R - p) * saturation_value));
 		G = clamp_i(static_cast<int>(p + (G - p) * saturation_value));
 		B = clamp_i(static_cast<int>(p + (B - p) * saturation_value));
 
-		/*
-		 * Color-separated saturation adjustment
-		 *
-		 * Splitting each of the three subpixels (R, G and B) into three distincs sub-subpixels (R, G and B in turn)
-		 * which in their optical sum reproduce the original subpixel's color OR produce white light in the brightness
-		 * of the original subpixel (dependening on the color channel's slider value).
-		 */
-
-		// Compute the brightness ("saturation multiplier") of the replaced subpixels
-		// Actually mathematical no-ops mostly, verbosity is kept just for clarification
+		// Compute per-channel replacement brightness
 		const float p_r = R * sqrt_pR;
 		const float p_g = G * sqrt_pG;
 		const float p_b = B * sqrt_pB;
 
-		// Adjust the saturation
+		// Adjust channel-separated saturation
 		const int Rr = static_cast<int>(p_r + (R - p_r) * saturation_value_R);
 		const int Gr = static_cast<int>(p_r - p_r * saturation_value_R);
 		const int Br = static_cast<int>(p_r - p_r * saturation_value_R);
@@ -186,25 +176,47 @@ std::shared_ptr<openshot::Frame> Saturation::GetFrame(std::shared_ptr<openshot::
 		const int Gb = static_cast<int>(p_b - p_b * saturation_value_B);
 		const int Bb = static_cast<int>(p_b + (B - p_b) * saturation_value_B);
 
-		// Recombine brightness of sub-subpixels (Rx, Gx and Bx) into sub-pixels (R, G and B) again
-		R = Rr + Rg + Rb;
-		G = Gr + Gg + Gb;
-		B = Br + Bg + Bb;
+		// Recombine and constrain values
+		R = clamp_i(Rr + Rg + Rb);
+		G = clamp_i(Gr + Gg + Gb);
+		B = clamp_i(Br + Bg + Bb);
+	};
 
-		// Constrain the value from 0 to 255
-		R = clamp_i(R);
-		G = clamp_i(G);
-		B = clamp_i(B);
+	#pragma omp parallel for if(pixel_count >= 16384) schedule(static) shared (pixels)
+	for (int pixel = 0; pixel < pixel_count; ++pixel)
+	{
+		const int idx = pixel * 4;
 
-		// Set all pixels to new value
-		pixels[idx + 0] = static_cast<unsigned char>(R);
-		pixels[idx + 1] = static_cast<unsigned char>(G);
-		pixels[idx + 2] = static_cast<unsigned char>(B);
+		// Split hot paths by alpha to avoid unnecessary premultiply/unpremultiply work.
+		const int A = pixels[idx + 3];
+		if (A <= 0)
+			continue;
+		int R = 0;
+		int G = 0;
+		int B = 0;
+		if (A == 255) {
+			R = pixels[idx + 0];
+			G = pixels[idx + 1];
+			B = pixels[idx + 2];
+			apply_saturation(R, G, B);
+			pixels[idx + 0] = static_cast<unsigned char>(R);
+			pixels[idx + 1] = static_cast<unsigned char>(G);
+			pixels[idx + 2] = static_cast<unsigned char>(B);
+		} else {
+			const float alpha_percent = static_cast<float>(A) * (1.0f / 255.0f);
+			const float inv_alpha_percent = inv_alpha[A];
 
-		// Pre-multiply the alpha back into the color channels
-		pixels[idx + 0] = static_cast<unsigned char>(pixels[idx + 0] * alpha_percent);
-		pixels[idx + 1] = static_cast<unsigned char>(pixels[idx + 1] * alpha_percent);
-		pixels[idx + 2] = static_cast<unsigned char>(pixels[idx + 2] * alpha_percent);
+			// Get RGB values, and remove pre-multiplied alpha
+			R = static_cast<int>(pixels[idx + 0] * inv_alpha_percent);
+			G = static_cast<int>(pixels[idx + 1] * inv_alpha_percent);
+			B = static_cast<int>(pixels[idx + 2] * inv_alpha_percent);
+			apply_saturation(R, G, B);
+
+			// Pre-multiply alpha back into color channels
+			pixels[idx + 0] = static_cast<unsigned char>(R * alpha_percent);
+			pixels[idx + 1] = static_cast<unsigned char>(G * alpha_percent);
+			pixels[idx + 2] = static_cast<unsigned char>(B * alpha_percent);
+		}
 	}
 
 	// return the modified frame

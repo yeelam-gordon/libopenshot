@@ -76,7 +76,6 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 
 	int brightness_adj = static_cast<int>(255 * brightness_value);
 	float contrast_factor = 20.0f / std::max(0.00001f, 20.0f - static_cast<float>(contrast_value));
-	const bool invert_mask = mask_invert;
 	const bool output_mask = replace_image;
 	const auto clamp_u8 = [](int value) -> unsigned char {
 		if (value < 0) return 0;
@@ -118,6 +117,27 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 			pixels[idx + 2] = new_val;
 			pixels[idx + 3] = new_val;
 		}
+	} else if (mask_invert) {
+		#pragma omp parallel for if(num_pixels >= 16384) schedule(static)
+		for (int i = 0; i < num_pixels; ++i) {
+			const int idx = i * 4;
+			const int R = mask_pixels[idx + 0];
+			const int G = mask_pixels[idx + 1];
+			const int B = mask_pixels[idx + 2];
+			const int A = mask_pixels[idx + 3];
+
+			const int gray = ((R * 11) + (G * 16) + (B * 5)) >> 5;
+			int alpha = A - adjusted_gray[gray];
+			if (alpha < 0) alpha = 0;
+			else if (alpha > 255) alpha = 255;
+			alpha = 255 - alpha;
+
+			// Premultiplied RGBA → multiply each channel by alpha
+			pixels[idx + 0] = mul_lut[alpha][pixels[idx + 0]];
+			pixels[idx + 1] = mul_lut[alpha][pixels[idx + 1]];
+			pixels[idx + 2] = mul_lut[alpha][pixels[idx + 2]];
+			pixels[idx + 3] = mul_lut[alpha][pixels[idx + 3]];
+		}
 	} else {
 		#pragma omp parallel for if(num_pixels >= 16384) schedule(static)
 		for (int i = 0; i < num_pixels; ++i) {
@@ -131,8 +151,6 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 			int alpha = A - adjusted_gray[gray];
 			if (alpha < 0) alpha = 0;
 			else if (alpha > 255) alpha = 255;
-			if (invert_mask)
-				alpha = 255 - alpha;
 
 			// Premultiplied RGBA → multiply each channel by alpha
 			pixels[idx + 0] = mul_lut[alpha][pixels[idx + 0]];

@@ -81,37 +81,47 @@ std::shared_ptr<openshot::Frame> Brightness::GetFrame(std::shared_ptr<openshot::
 		return value;
 	};
 
+	const auto adjust_contrast_and_brightness = [&](int &R, int &G, int &B) {
+		R = clamp_u8(clamp_i(static_cast<int>((contrast_factor * (R - 128)) + 128.0f)) + brightness_offset_i);
+		G = clamp_u8(clamp_i(static_cast<int>((contrast_factor * (G - 128)) + 128.0f)) + brightness_offset_i);
+		B = clamp_u8(clamp_i(static_cast<int>((contrast_factor * (B - 128)) + 128.0f)) + brightness_offset_i);
+	};
+
 	#pragma omp parallel for if(pixel_count >= 16384) schedule(static)
 	for (int pixel = 0; pixel < pixel_count; ++pixel)
 	{
 		const int idx = pixel * 4;
 
-		// Calculate alpha % (to be used for removing pre-multiplied alpha value)
+		// Split hot paths by alpha to avoid unnecessary premultiply/unpremultiply work.
 		const int A = pixels[idx + 3];
 		if (A <= 0)
 			continue;
-		const float alpha_percent = static_cast<float>(A) * (1.0f / 255.0f);
-		const float inv_alpha_percent = inv_alpha[A];
+		int R = 0;
+		int G = 0;
+		int B = 0;
+		if (A == 255) {
+			R = pixels[idx + 0];
+			G = pixels[idx + 1];
+			B = pixels[idx + 2];
+			adjust_contrast_and_brightness(R, G, B);
+			pixels[idx + 0] = static_cast<unsigned char>(R);
+			pixels[idx + 1] = static_cast<unsigned char>(G);
+			pixels[idx + 2] = static_cast<unsigned char>(B);
+		} else {
+			const float alpha_percent = static_cast<float>(A) * (1.0f / 255.0f);
+			const float inv_alpha_percent = inv_alpha[A];
 
-		// Get RGB values, and remove pre-multiplied alpha
-		int R = static_cast<int>(pixels[idx + 0] * inv_alpha_percent);
-		int G = static_cast<int>(pixels[idx + 1] * inv_alpha_percent);
-		int B = static_cast<int>(pixels[idx + 2] * inv_alpha_percent);
+			// Get RGB values, and remove pre-multiplied alpha
+			R = static_cast<int>(pixels[idx + 0] * inv_alpha_percent);
+			G = static_cast<int>(pixels[idx + 1] * inv_alpha_percent);
+			B = static_cast<int>(pixels[idx + 2] * inv_alpha_percent);
+			adjust_contrast_and_brightness(R, G, B);
 
-		// Apply constrained contrast adjustment
-		R = clamp_i(static_cast<int>((contrast_factor * (R - 128)) + 128.0f));
-		G = clamp_i(static_cast<int>((contrast_factor * (G - 128)) + 128.0f));
-		B = clamp_i(static_cast<int>((contrast_factor * (B - 128)) + 128.0f));
-
-		// Adjust brightness and write constrained values back to image
-		pixels[idx + 0] = clamp_u8(R + brightness_offset_i);
-		pixels[idx + 1] = clamp_u8(G + brightness_offset_i);
-		pixels[idx + 2] = clamp_u8(B + brightness_offset_i);
-
-		// Pre-multiply the alpha back into the color channels
-		pixels[idx + 0] = static_cast<unsigned char>(pixels[idx + 0] * alpha_percent);
-		pixels[idx + 1] = static_cast<unsigned char>(pixels[idx + 1] * alpha_percent);
-		pixels[idx + 2] = static_cast<unsigned char>(pixels[idx + 2] * alpha_percent);
+			// Pre-multiply alpha back into color channels
+			pixels[idx + 0] = static_cast<unsigned char>(R * alpha_percent);
+			pixels[idx + 1] = static_cast<unsigned char>(G * alpha_percent);
+			pixels[idx + 2] = static_cast<unsigned char>(B * alpha_percent);
+		}
 	}
 
 	// return the modified frame
@@ -136,22 +146,39 @@ void Brightness::ApplyCustomMaskBlend(std::shared_ptr<QImage> original_image, st
 	unsigned char* mask_pixels = reinterpret_cast<unsigned char*>(mask_image->bits());
 	const int pixel_count = effected_image->width() * effected_image->height();
 
-	#pragma omp parallel for schedule(static)
-	for (int i = 0; i < pixel_count; ++i) {
-		const int idx = i * 4;
-		float factor = static_cast<float>(qGray(mask_pixels[idx], mask_pixels[idx + 1], mask_pixels[idx + 2])) / 255.0f;
-		if (mask_invert)
+	if (mask_invert) {
+		#pragma omp parallel for schedule(static)
+		for (int i = 0; i < pixel_count; ++i) {
+			const int idx = i * 4;
+			float factor = static_cast<float>(qGray(mask_pixels[idx], mask_pixels[idx + 1], mask_pixels[idx + 2])) / 255.0f;
 			factor = 1.0f - factor;
-		factor = factor * factor;
-		const float inverse = 1.0f - factor;
+			factor = factor * factor;
+			const float inverse = 1.0f - factor;
 
-		effected_pixels[idx] = static_cast<unsigned char>(
-			(original_pixels[idx] * inverse) + (effected_pixels[idx] * factor));
-		effected_pixels[idx + 1] = static_cast<unsigned char>(
-			(original_pixels[idx + 1] * inverse) + (effected_pixels[idx + 1] * factor));
-		effected_pixels[idx + 2] = static_cast<unsigned char>(
-			(original_pixels[idx + 2] * inverse) + (effected_pixels[idx + 2] * factor));
-		effected_pixels[idx + 3] = original_pixels[idx + 3];
+			effected_pixels[idx] = static_cast<unsigned char>(
+				(original_pixels[idx] * inverse) + (effected_pixels[idx] * factor));
+			effected_pixels[idx + 1] = static_cast<unsigned char>(
+				(original_pixels[idx + 1] * inverse) + (effected_pixels[idx + 1] * factor));
+			effected_pixels[idx + 2] = static_cast<unsigned char>(
+				(original_pixels[idx + 2] * inverse) + (effected_pixels[idx + 2] * factor));
+			effected_pixels[idx + 3] = original_pixels[idx + 3];
+		}
+	} else {
+		#pragma omp parallel for schedule(static)
+		for (int i = 0; i < pixel_count; ++i) {
+			const int idx = i * 4;
+			float factor = static_cast<float>(qGray(mask_pixels[idx], mask_pixels[idx + 1], mask_pixels[idx + 2])) / 255.0f;
+			factor = factor * factor;
+			const float inverse = 1.0f - factor;
+
+			effected_pixels[idx] = static_cast<unsigned char>(
+				(original_pixels[idx] * inverse) + (effected_pixels[idx] * factor));
+			effected_pixels[idx + 1] = static_cast<unsigned char>(
+				(original_pixels[idx + 1] * inverse) + (effected_pixels[idx + 1] * factor));
+			effected_pixels[idx + 2] = static_cast<unsigned char>(
+				(original_pixels[idx + 2] * inverse) + (effected_pixels[idx + 2] * factor));
+			effected_pixels[idx + 3] = original_pixels[idx + 3];
+		}
 	}
 }
 
