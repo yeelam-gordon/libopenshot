@@ -130,6 +130,14 @@ std::shared_ptr<openshot::Frame> Saturation::GetFrame(std::shared_ptr<openshot::
 	const float sqrt_pR = std::sqrt(pR);
 	const float sqrt_pG = std::sqrt(pG);
 	const float sqrt_pB = std::sqrt(pB);
+	// Rec.601 fixed-point luma weights used in many image/video pipelines.
+	// This avoids per-pixel sqrt() while keeping output stable.
+	static const std::array<float, 65026> sqrt_lut = [] {
+		std::array<float, 65026> lut{};
+		for (int i = 0; i <= 65025; ++i)
+			lut[i] = std::sqrt(static_cast<float>(i));
+		return lut;
+	}();
 
 	// Loop through pixels
 	unsigned char *pixels = reinterpret_cast<unsigned char *>(frame_image->bits());
@@ -148,10 +156,10 @@ std::shared_ptr<openshot::Frame> Saturation::GetFrame(std::shared_ptr<openshot::
 	};
 
 	const auto apply_saturation = [&](int &R, int &G, int &B) {
-		// Calculate the saturation multiplier
-		const float p = std::sqrt((R * R * pR) +
-								  (G * G * pG) +
-								  (B * B * pB));
+		// Approximate sqrt(R^2*pR + G^2*pG + B^2*pB) with fixed-point weighted
+		// intensity and lookup table. 77/150/29 ~= 0.299/0.587/0.114.
+		const int weighted_sq = (77 * R * R + 150 * G * G + 29 * B * B + 128) >> 8;
+		const float p = sqrt_lut[weighted_sq];
 
 		// Adjust common saturation
 		R = clamp_i(static_cast<int>(p + (R - p) * saturation_value));
