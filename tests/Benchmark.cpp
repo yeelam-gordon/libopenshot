@@ -28,6 +28,7 @@
 #include "ReaderBase.h"
 #include "Timeline.h"
 #include "effects/Brightness.h"
+#include "effects/ChromaKey.h"
 #include "effects/Crop.h"
 #include "effects/Mask.h"
 #include "effects/Saturation.h"
@@ -63,6 +64,7 @@ int main(int argc, char* argv[]) {
 	const string overlay = base + "front3.png";
 	string filter_test;
 	bool list_only = false;
+	const int64_t chroma_bench_frames = 500;
 
 	for (int i = 1; i < argc; ++i) {
 		const string arg = argv[i];
@@ -239,6 +241,39 @@ int main(int argc, char* argv[]) {
 								 Keyframe(0.25));
 		clip.AddEffect(&s);
 		read_forward_backward(clip);
+		clip.Close();
+		r.Close();
+	});
+
+	trials.emplace_back("Effect_ChromaKey_BASIC", [&]() {
+		FFmpegReader r(video);
+		r.Open();
+		Clip clip(&r);
+		clip.Open();
+		// Default/basic chroma key method baseline
+		ChromaKey key(Color(0, 255, 0, 255), Keyframe(80.0), Keyframe(20.0), CHROMAKEY_BASIC);
+		clip.AddEffect(&key);
+		const int64_t bench_frames = std::min<int64_t>(clip.info.video_length, chroma_bench_frames);
+		for (int64_t i = 1; i <= bench_frames; ++i)
+			clip.GetFrame(i);
+		for (int64_t i = bench_frames; i >= 1; --i)
+			clip.GetFrame(i);
+		clip.Close();
+		r.Close();
+	});
+
+	trials.emplace_back("Effect_ChromaKey_BASIC_SOFT", [&]() {
+		FFmpegReader r(video);
+		r.Open();
+		Clip clip(&r);
+		clip.Open();
+		ChromaKey key(Color(0, 255, 0, 255), Keyframe(80.0), Keyframe(20.0), CHROMAKEY_BASIC_SOFT);
+		clip.AddEffect(&key);
+		const int64_t bench_frames = std::min<int64_t>(clip.info.video_length, chroma_bench_frames);
+		for (int64_t i = 1; i <= bench_frames; ++i)
+			clip.GetFrame(i);
+		for (int64_t i = bench_frames; i >= 1; --i)
+			clip.GetFrame(i);
 		clip.Close();
 		r.Close();
 	});
