@@ -590,42 +590,6 @@ TEST_CASE("EffectBase source FPS mode maps using parent clip FPS", "[effect][mas
 	CHECK(tracking->requests == expected);
 }
 
-TEST_CASE("EffectBase honors split-file trim carried by mask reader", "[effect][mask][timing][reader_trim]") {
-	auto* tracking = new TrackingMaskReader(24, 1, 100);
-	tracking->TrimStart(1.0 / 24.0);
-	tracking->TrimEnd(3.0 / 24.0);
-
-	Brightness effect(Keyframe(0.0), Keyframe(0.0));
-	effect.MaskReader(tracking);
-	effect.mask_time_mode = EffectBase::MASK_TIME_TIMELINE;
-	effect.mask_loop_mode = EffectBase::MASK_LOOP_PLAY_ONCE;
-
-	for (int64_t n = 1; n <= 6; ++n)
-		effect.ProcessFrame(make_input_frame(n), n);
-
-	const std::vector<int64_t> expected = {2, 3, 4, 4, 4, 4};
-	CHECK(tracking->requests == expected);
-}
-
-TEST_CASE("EffectBase composes reader trim with effect trim", "[effect][mask][timing][reader_trim][compose]") {
-	auto* tracking = new TrackingMaskReader(24, 1, 100);
-	tracking->TrimStart(2.0 / 24.0);
-	tracking->TrimEnd(10.0 / 24.0);
-
-	Brightness effect(Keyframe(0.0), Keyframe(0.0));
-	effect.MaskReader(tracking);
-	effect.Start(1.0 / 24.0);
-	effect.End(3.0 / 24.0);
-	effect.mask_time_mode = EffectBase::MASK_TIME_TIMELINE;
-	effect.mask_loop_mode = EffectBase::MASK_LOOP_PLAY_ONCE;
-
-	for (int64_t n = 1; n <= 5; ++n)
-		effect.ProcessFrame(make_input_frame(n), n);
-
-	const std::vector<int64_t> expected = {4, 5, 6, 6, 6};
-	CHECK(tracking->requests == expected);
-}
-
 TEST_CASE("Clip-attached effects still process every frame while using trimmed mask source", "[effect][mask][timing][clip_effect]") {
 	DummyReader clip_reader(Fraction(24, 1), 320, 240, 48000, 2, 4.0f);
 	Clip parent_clip;

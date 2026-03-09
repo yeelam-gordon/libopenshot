@@ -382,20 +382,8 @@ int64_t EffectBase::MapMaskFrameNumber(int64_t frame_number) {
 	const double source_fps = (mask_reader->info.fps.num > 0 && mask_reader->info.fps.den > 0)
 		? mask_reader->info.fps.ToDouble() : 30.0;
 	const double source_duration = ResolveMaskSourceDuration();
-	const double reader_start_sec = std::min<double>(std::max(0.0f, mask_reader->TrimStart()), source_duration);
-	double reader_end_sec = std::min<double>(std::max(0.0f, mask_reader->TrimEnd()), source_duration);
-	if (reader_end_sec > 0.0 && reader_end_sec < reader_start_sec)
-		reader_end_sec = reader_start_sec;
-
-	const double reader_visible_end_sec = (reader_end_sec > 0.0) ? reader_end_sec : source_duration;
-	const double reader_visible_duration = std::max(0.0, reader_visible_end_sec - reader_start_sec);
-
-	const double effect_start_sec = std::min<double>(std::max(0.0f, Start()), reader_visible_duration);
-	const double effect_end_sec = std::min<double>(std::max(0.0f, End()), reader_visible_duration);
-	const double start_sec = reader_start_sec + effect_start_sec;
-	const double end_sec = (effect_end_sec > 0.0)
-		? std::min<double>(reader_start_sec + effect_end_sec, reader_visible_end_sec)
-		: reader_end_sec;
+	const double start_sec = std::min<double>(std::max(0.0f, Start()), source_duration);
+	const double end_sec = std::min<double>(std::max(0.0f, End()), source_duration);
 
 	const int64_t range_start = std::max(int64_t(1), static_cast<int64_t>(std::llround(start_sec * source_fps)) + 1);
 	int64_t range_end = (end_sec > 0.0)

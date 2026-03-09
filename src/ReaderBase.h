@@ -78,8 +78,6 @@ namespace openshot
 		/// Mutex for multiple threads
 		std::recursive_mutex getFrameMutex;
 		openshot::ClipBase* clip; ///< Pointer to the parent clip instance (if any)
-		float trim_start; ///< Optional initial trim start (seconds) carried with reader JSON.
-		float trim_end; ///< Optional initial trim end (seconds), 0 means source end.
 
 	public:
 
@@ -94,18 +92,6 @@ namespace openshot
 
 		/// Set parent clip object of this reader
 		void ParentClip(openshot::ClipBase* new_clip);
-
-		/// Get optional reader trim start in seconds.
-		float TrimStart() const { return trim_start; }
-
-		/// Get optional reader trim end in seconds, 0 means source end.
-		float TrimEnd() const { return trim_end; }
-
-		/// Set optional reader trim start in seconds.
-		void TrimStart(float value) { trim_start = value; }
-
-		/// Set optional reader trim end in seconds, 0 means source end.
-		void TrimEnd(float value) { trim_end = value; }
 
 		/// Close the reader (and any resources it was consuming)
 		virtual void Close() = 0;

@@ -54,8 +54,6 @@ ReaderBase::ReaderBase()
 
 	// Init parent clip
 	clip = NULL;
-	trim_start = 0.0f;
-	trim_end = 0.0f;
 }
 
 // Display file information
@@ -144,8 +142,6 @@ Json::Value ReaderBase::JsonValue() const {
 	root["audio_timebase"] = Json::Value(Json::objectValue);
 	root["audio_timebase"]["num"] = info.audio_timebase.num;
 	root["audio_timebase"]["den"] = info.audio_timebase.den;
-	root["start"] = TrimStart();
-	root["end"] = TrimEnd();
 
 	// Append metadata map
 	root["metadata"] = Json::Value(Json::objectValue);
@@ -232,10 +228,6 @@ void ReaderBase::SetJsonValue(const Json::Value root) {
 		if (!root["audio_timebase"]["den"].isNull())
 			info.audio_timebase.den = root["audio_timebase"]["den"].asInt();
 	}
-	if (!root["start"].isNull())
-		TrimStart(root["start"].asDouble());
-	if (!root["end"].isNull())
-		TrimEnd(root["end"].asDouble());
 	if (!root["metadata"].isNull() && root["metadata"].isObject()) {
 		for( Json::Value::const_iterator itr = root["metadata"].begin() ; itr != root["metadata"].end() ; itr++ ) {
 			std::string key = itr.key().asString();
