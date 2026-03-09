@@ -758,8 +758,8 @@ TEST_CASE("Global mask effect source FPS mode follows timeline FPS mapping", "[l
 	Json::Value timing;
 	timing["mask_time_mode"] = 1; // Source FPS
 	timing["mask_loop_mode"] = 0; // Play Once
-	timing["mask_start"] = 0.0;
-	timing["mask_end"] = 0;
+	timing["start"] = 0.0;
+	timing["end"] = 1.0;
 	effect.SetJsonValue(timing);
 
 	t.AddEffect(&effect);
@@ -771,6 +771,47 @@ TEST_CASE("Global mask effect source FPS mode follows timeline FPS mapping", "[l
 	}
 
 	const std::vector<int64_t> expected = {1, 2, 2, 3, 3};
+	CHECK(tracking->requests == expected);
+
+	t.Close();
+}
+
+TEST_CASE("Global mask effect start trims source without freezing playback", "[libopenshot][timeline][effect][mask][trim]") {
+	Timeline t(320, 240, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+
+	DummyReader clip_reader(Fraction(30, 1), 320, 240, 44100, 2, 2.0f);
+	Clip clip(&clip_reader);
+	clip.Layer(0);
+	clip.Position(0.0);
+	clip.Start(0.0);
+	clip.End(1.0);
+	t.AddClip(&clip);
+
+	Brightness effect(Keyframe(0.0), Keyframe(0.0));
+	effect.Layer(0);
+	effect.Position(0.0);
+	effect.Start(1.0 / 15.0);
+	effect.End(1.0);
+
+	auto* tracking = new TimelineTrackingMaskReader(15, 1, 120);
+	effect.MaskReader(tracking);
+
+	Json::Value timing;
+	timing["mask_time_mode"] = 1; // Source FPS
+	timing["mask_loop_mode"] = 0; // Play Once
+	timing["start"] = 1.0 / 15.0;
+	timing["end"] = 1.0;
+	effect.SetJsonValue(timing);
+
+	t.AddEffect(&effect);
+	t.Open();
+
+	for (int64_t frame = 1; frame <= 5; ++frame) {
+		auto out = t.GetFrame(frame);
+		REQUIRE(out != nullptr);
+	}
+
+	const std::vector<int64_t> expected = {2, 3, 3, 4, 4};
 	CHECK(tracking->requests == expected);
 
 	t.Close();

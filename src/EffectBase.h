@@ -121,9 +121,7 @@ namespace openshot
 			MASK_LOOP_PING_PONG = 2
 		};
 
-		float mask_start = 0.0f; ///< Start time (seconds) in mask source.
-		float mask_end = 0.0f; ///< End time (seconds), 0 means source end.
-		int mask_time_mode = MASK_TIME_TIMELINE; ///< How effect frames map to mask source frames.
+		int mask_time_mode = MASK_TIME_SOURCE_FPS; ///< How effect frames map to mask source frames.
 		int mask_loop_mode = MASK_LOOP_PLAY_ONCE; ///< Behavior when mask range reaches the end.
 
 		/// Display effect information in the standard output stream (stdout)

@@ -46,9 +46,7 @@ void EffectBase::InitEffectInfo()
 	parentEffect = NULL;
 	mask_invert = false;
 	mask_reader = NULL;
-	mask_start = 0.0f;
-	mask_end = 0.0f;
-	mask_time_mode = MASK_TIME_TIMELINE;
+	mask_time_mode = MASK_TIME_SOURCE_FPS;
 	mask_loop_mode = MASK_LOOP_PLAY_ONCE;
 
 	info.has_video = false;
@@ -109,8 +107,6 @@ Json::Value EffectBase::JsonValue() const {
 	root["apply_before_clip"] = info.apply_before_clip;
 	root["order"] = Order();
 	root["mask_invert"] = mask_invert;
-	root["mask_start"] = static_cast<double>(mask_start);
-	root["mask_end"] = static_cast<double>(mask_end);
 	root["mask_time_mode"] = mask_time_mode;
 	root["mask_loop_mode"] = mask_loop_mode;
 	if (mask_reader)
@@ -169,6 +165,13 @@ void EffectBase::SetJsonValue(const Json::Value root) {
 		my_root = root;
 	}
 
+	// Legacy compatibility: older shared-mask JSON stored source trim
+	// separately from the effect trim. Canonical trim now uses ClipBase.
+	if (my_root["start"].isNull() && !my_root["mask_start"].isNull())
+		my_root["start"] = my_root["mask_start"];
+	if (my_root["end"].isNull() && !my_root["mask_end"].isNull())
+		my_root["end"] = my_root["mask_end"];
+
 	// Set parent data
 	ClipBase::SetJsonValue(my_root);
 
@@ -181,13 +184,10 @@ void EffectBase::SetJsonValue(const Json::Value root) {
 
 	if (!my_root["mask_invert"].isNull())
 		mask_invert = my_root["mask_invert"].asBool();
-	if (!my_root["mask_start"].isNull())
-		mask_start = std::max(0.0f, my_root["mask_start"].asFloat());
-	if (!my_root["mask_end"].isNull())
-		mask_end = std::max(0.0f, my_root["mask_end"].asFloat());
 	if (!my_root["mask_time_mode"].isNull()) {
 		const int time_mode = my_root["mask_time_mode"].asInt();
-		mask_time_mode = (time_mode == MASK_TIME_SOURCE_FPS) ? time_mode : MASK_TIME_TIMELINE;
+		mask_time_mode = (time_mode == MASK_TIME_TIMELINE || time_mode == MASK_TIME_SOURCE_FPS)
+			? time_mode : MASK_TIME_SOURCE_FPS;
 	}
 	if (!my_root["mask_loop_mode"].isNull()) {
 		const int loop_mode = my_root["mask_loop_mode"].asInt();
@@ -206,12 +206,6 @@ void EffectBase::SetJsonValue(const Json::Value root) {
 		} else if (mask_reader_json.isObject() && mask_reader_json.empty()) {
 			MaskReader(NULL);
 		}
-	}
-
-	const double source_duration = ResolveMaskSourceDuration();
-	if (source_duration > 0.0) {
-		mask_start = static_cast<float>(std::min<double>(mask_start, source_duration));
-		mask_end = static_cast<float>(std::min<double>(mask_end, source_duration));
 	}
 
 	if (!my_root["parent_effect_id"].isNull()){
@@ -258,16 +252,9 @@ Json::Value EffectBase::BasePropertiesJSON(int64_t requested_frame) const {
 	root["parent_effect_id"] = add_property_json("Parent", 0.0, "string", info.parent_effect_id, NULL, -1, -1, false, requested_frame);
 
 	if (info.has_video) {
-		const double source_duration = ResolveMaskSourceDuration();
-		const float clamped_start = static_cast<float>(std::min<double>(std::max(0.0f, mask_start), source_duration));
-		const float clamped_end = static_cast<float>(std::min<double>(std::max(0.0f, mask_end), source_duration));
-
 		root["mask_invert"] = add_property_json("Mask: Invert", mask_invert, "int", "", NULL, 0, 1, false, requested_frame);
 		root["mask_invert"]["choices"].append(add_property_choice_json("Yes", true, mask_invert));
 		root["mask_invert"]["choices"].append(add_property_choice_json("No", false, mask_invert));
-
-		root["mask_start"] = add_property_json("Mask: Start", clamped_start, "float", "", NULL, 0.0, source_duration, false, requested_frame);
-		root["mask_end"] = add_property_json("Mask: End", clamped_end, "float", "", NULL, 0.0, source_duration, false, requested_frame);
 
 		root["mask_time_mode"] = add_property_json("Mask: Time Mode", mask_time_mode, "int", "", NULL, 0, 1, false, requested_frame);
 		root["mask_time_mode"]["choices"].append(add_property_choice_json("Timeline", MASK_TIME_TIMELINE, mask_time_mode));
@@ -371,7 +358,14 @@ int64_t EffectBase::MapMaskFrameNumber(int64_t frame_number) {
 	if (!mask_reader)
 		return frame_number;
 
-	const int64_t requested_index = std::max(int64_t(0), frame_number - 1);
+	int64_t requested_index = std::max(int64_t(0), frame_number - 1);
+	if (!clip && ParentTimeline()) {
+		const double host_fps = ResolveMaskHostFps();
+		if (host_fps > 0.0) {
+			const int64_t start_offset = static_cast<int64_t>(std::llround(std::max(0.0f, Start()) * host_fps));
+			requested_index = std::max(int64_t(0), requested_index - start_offset);
+		}
+	}
 	int64_t mapped_index = requested_index;
 
 	if (mask_time_mode == MASK_TIME_SOURCE_FPS &&
@@ -388,8 +382,20 @@ int64_t EffectBase::MapMaskFrameNumber(int64_t frame_number) {
 	const double source_fps = (mask_reader->info.fps.num > 0 && mask_reader->info.fps.den > 0)
 		? mask_reader->info.fps.ToDouble() : 30.0;
 	const double source_duration = ResolveMaskSourceDuration();
-	const double start_sec = std::min<double>(std::max(0.0f, mask_start), source_duration);
-	const double end_sec = std::min<double>(std::max(0.0f, mask_end), source_duration);
+	const double reader_start_sec = std::min<double>(std::max(0.0f, mask_reader->TrimStart()), source_duration);
+	double reader_end_sec = std::min<double>(std::max(0.0f, mask_reader->TrimEnd()), source_duration);
+	if (reader_end_sec > 0.0 && reader_end_sec < reader_start_sec)
+		reader_end_sec = reader_start_sec;
+
+	const double reader_visible_end_sec = (reader_end_sec > 0.0) ? reader_end_sec : source_duration;
+	const double reader_visible_duration = std::max(0.0, reader_visible_end_sec - reader_start_sec);
+
+	const double effect_start_sec = std::min<double>(std::max(0.0f, Start()), reader_visible_duration);
+	const double effect_end_sec = std::min<double>(std::max(0.0f, End()), reader_visible_duration);
+	const double start_sec = reader_start_sec + effect_start_sec;
+	const double end_sec = (effect_end_sec > 0.0)
+		? std::min<double>(reader_start_sec + effect_end_sec, reader_visible_end_sec)
+		: reader_end_sec;
 
 	const int64_t range_start = std::max(int64_t(1), static_cast<int64_t>(std::llround(start_sec * source_fps)) + 1);
 	int64_t range_end = (end_sec > 0.0)

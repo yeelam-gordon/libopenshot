@@ -424,52 +424,89 @@ TEST_CASE("EffectBase accepts legacy reader key for mask source", "[effect][mask
 	CHECK(effect.JsonValue()["mask_reader"]["type"].asString() == "QtImageReader");
 }
 
-TEST_CASE("EffectBase mask timing fields roundtrip and clamp", "[effect][mask][timing][json]") {
+TEST_CASE("EffectBase uses ClipBase start and end for mask source trim", "[effect][mask][timing][json]") {
 	Brightness effect(Keyframe(0.0), Keyframe(0.0));
 
 	Json::Value update;
-	update["mask_start"] = -10;
-	update["mask_end"] = -20;
+	update["start"] = -10;
+	update["end"] = -20;
 	update["mask_time_mode"] = 99;
 	update["mask_loop_mode"] = 99;
 	effect.SetJsonValue(update);
 
 	const Json::Value clamped = effect.JsonValue();
-	CHECK(clamped["mask_start"].asDouble() == Approx(0.0).margin(0.00001));
-	CHECK(clamped["mask_end"].asDouble() == Approx(0.0).margin(0.00001));
-	CHECK(clamped["mask_time_mode"].asInt() == 0);
+	CHECK(clamped["start"].asDouble() == Approx(-10.0).margin(0.00001));
+	CHECK(clamped["end"].asDouble() == Approx(-20.0).margin(0.00001));
+	CHECK(clamped["mask_time_mode"].asInt() == 1);
 	CHECK(clamped["mask_loop_mode"].asInt() == 0);
 
-	update["mask_start"] = 0.5;
-	update["mask_end"] = 1.2;
+	update["start"] = 0.5;
+	update["end"] = 1.2;
 	update["mask_time_mode"] = 1;
 	update["mask_loop_mode"] = 2;
 	effect.SetJsonValue(update);
 	const Json::Value roundtrip = effect.JsonValue();
-	CHECK(roundtrip["mask_start"].asDouble() == Approx(0.5).margin(0.00001));
-	CHECK(roundtrip["mask_end"].asDouble() == Approx(1.2).margin(0.00001));
+	CHECK(roundtrip["start"].asDouble() == Approx(0.5).margin(0.00001));
+	CHECK(roundtrip["end"].asDouble() == Approx(1.2).margin(0.00001));
 	CHECK(roundtrip["mask_time_mode"].asInt() == 1);
 	CHECK(roundtrip["mask_loop_mode"].asInt() == 2);
 }
 
-TEST_CASE("EffectBase mask properties expose timing and loop controls", "[effect][mask][timing][properties]") {
+TEST_CASE("EffectBase defaults mask time mode to source FPS", "[effect][mask][timing][default]") {
+	Brightness effect(Keyframe(0.0), Keyframe(0.0));
+	CHECK(effect.JsonValue()["mask_time_mode"].asInt() == 1);
+}
+
+TEST_CASE("EffectBase mask properties use base start and end controls", "[effect][mask][timing][properties]") {
 	Brightness effect(Keyframe(0.0), Keyframe(0.0));
 	Json::Value update;
-	update["mask_start"] = 0.2;
-	update["mask_end"] = 0.9;
+	update["start"] = 0.2;
+	update["end"] = 0.9;
 	update["mask_time_mode"] = 1;
 	update["mask_loop_mode"] = 2;
 	effect.SetJsonValue(update);
 
 	const Json::Value properties = openshot::stringToJson(effect.PropertiesJSON(1));
 	REQUIRE(properties.isObject());
+	CHECK(properties["start"]["name"].asString() == "Start");
+	CHECK(properties["end"]["name"].asString() == "End");
 	CHECK(properties["mask_reader"]["name"].asString() == "Mask: Source");
-	CHECK(properties["mask_start"]["name"].asString() == "Mask: Start");
-	CHECK(properties["mask_end"]["name"].asString() == "Mask: End");
 	CHECK(properties["mask_time_mode"]["name"].asString() == "Mask: Time Mode");
 	CHECK(properties["mask_loop_mode"]["name"].asString() == "Mask: Loop");
+	CHECK_FALSE(properties.isMember("mask_start"));
+	CHECK_FALSE(properties.isMember("mask_end"));
 	CHECK(properties["mask_time_mode"]["choices"].size() == 2);
 	CHECK(properties["mask_loop_mode"]["choices"].size() == 3);
+}
+
+TEST_CASE("EffectBase accepts legacy mask_start and mask_end aliases", "[effect][mask][timing][legacy_aliases]") {
+	Brightness effect(Keyframe(0.0), Keyframe(0.0));
+
+	Json::Value update;
+	update["mask_start"] = 0.5;
+	update["mask_end"] = 1.2;
+	effect.SetJsonValue(update);
+
+	const Json::Value roundtrip = effect.JsonValue();
+	CHECK(roundtrip["start"].asDouble() == Approx(0.5).margin(0.00001));
+	CHECK(roundtrip["end"].asDouble() == Approx(1.2).margin(0.00001));
+	CHECK_FALSE(roundtrip.isMember("mask_start"));
+	CHECK_FALSE(roundtrip.isMember("mask_end"));
+}
+
+TEST_CASE("EffectBase canonical start and end override legacy mask aliases", "[effect][mask][timing][legacy_precedence]") {
+	Brightness effect(Keyframe(0.0), Keyframe(0.0));
+
+	Json::Value update;
+	update["start"] = 0.25;
+	update["end"] = 0.75;
+	update["mask_start"] = 1.5;
+	update["mask_end"] = 2.5;
+	effect.SetJsonValue(update);
+
+	const Json::Value roundtrip = effect.JsonValue();
+	CHECK(roundtrip["start"].asDouble() == Approx(0.25).margin(0.00001));
+	CHECK(roundtrip["end"].asDouble() == Approx(0.75).margin(0.00001));
 }
 
 TEST_CASE("EffectBase timeline mode maps one-to-one with repeat loop", "[effect][mask][timing][timeline][repeat]") {
@@ -478,8 +515,8 @@ TEST_CASE("EffectBase timeline mode maps one-to-one with repeat loop", "[effect]
 	effect.MaskReader(tracking);
 
 	Json::Value update;
-	update["mask_start"] = 1.0 / 24.0;
-	update["mask_end"] = 3.0 / 24.0;
+	update["start"] = 1.0 / 24.0;
+	update["end"] = 3.0 / 24.0;
 	update["mask_time_mode"] = 0; // Timeline
 	update["mask_loop_mode"] = 1; // Repeat
 	effect.SetJsonValue(update);
@@ -497,8 +534,8 @@ TEST_CASE("EffectBase timeline mode supports ping-pong loop", "[effect][mask][ti
 	effect.MaskReader(tracking);
 
 	Json::Value update;
-	update["mask_start"] = 1.0 / 24.0;
-	update["mask_end"] = 3.0 / 24.0;
+	update["start"] = 1.0 / 24.0;
+	update["end"] = 3.0 / 24.0;
 	update["mask_time_mode"] = 0; // Timeline
 	update["mask_loop_mode"] = 2; // Ping-Pong
 	effect.SetJsonValue(update);
@@ -516,8 +553,8 @@ TEST_CASE("EffectBase timeline mode play-once clamps at end", "[effect][mask][ti
 	effect.MaskReader(tracking);
 
 	Json::Value update;
-	update["mask_start"] = 1.0 / 24.0;
-	update["mask_end"] = 3.0 / 24.0;
+	update["start"] = 1.0 / 24.0;
+	update["end"] = 3.0 / 24.0;
 	update["mask_time_mode"] = 0; // Timeline
 	update["mask_loop_mode"] = 0; // Play Once
 	effect.SetJsonValue(update);
@@ -540,8 +577,8 @@ TEST_CASE("EffectBase source FPS mode maps using parent clip FPS", "[effect][mas
 	effect.MaskReader(tracking);
 
 	Json::Value update;
-	update["mask_start"] = 0.0;
-	update["mask_end"] = 0;
+	update["start"] = 0.0;
+	update["end"] = 0;
 	update["mask_time_mode"] = 1; // Source FPS
 	update["mask_loop_mode"] = 0; // Play Once
 	effect.SetJsonValue(update);
@@ -550,5 +587,61 @@ TEST_CASE("EffectBase source FPS mode maps using parent clip FPS", "[effect][mas
 		effect.ProcessFrame(make_input_frame(n), n);
 
 	const std::vector<int64_t> expected = {1, 2, 2, 3, 3};
+	CHECK(tracking->requests == expected);
+}
+
+TEST_CASE("EffectBase honors split-file trim carried by mask reader", "[effect][mask][timing][reader_trim]") {
+	auto* tracking = new TrackingMaskReader(24, 1, 100);
+	tracking->TrimStart(1.0 / 24.0);
+	tracking->TrimEnd(3.0 / 24.0);
+
+	Brightness effect(Keyframe(0.0), Keyframe(0.0));
+	effect.MaskReader(tracking);
+	effect.mask_time_mode = EffectBase::MASK_TIME_TIMELINE;
+	effect.mask_loop_mode = EffectBase::MASK_LOOP_PLAY_ONCE;
+
+	for (int64_t n = 1; n <= 6; ++n)
+		effect.ProcessFrame(make_input_frame(n), n);
+
+	const std::vector<int64_t> expected = {2, 3, 4, 4, 4, 4};
+	CHECK(tracking->requests == expected);
+}
+
+TEST_CASE("EffectBase composes reader trim with effect trim", "[effect][mask][timing][reader_trim][compose]") {
+	auto* tracking = new TrackingMaskReader(24, 1, 100);
+	tracking->TrimStart(2.0 / 24.0);
+	tracking->TrimEnd(10.0 / 24.0);
+
+	Brightness effect(Keyframe(0.0), Keyframe(0.0));
+	effect.MaskReader(tracking);
+	effect.Start(1.0 / 24.0);
+	effect.End(3.0 / 24.0);
+	effect.mask_time_mode = EffectBase::MASK_TIME_TIMELINE;
+	effect.mask_loop_mode = EffectBase::MASK_LOOP_PLAY_ONCE;
+
+	for (int64_t n = 1; n <= 5; ++n)
+		effect.ProcessFrame(make_input_frame(n), n);
+
+	const std::vector<int64_t> expected = {4, 5, 6, 6, 6};
+	CHECK(tracking->requests == expected);
+}
+
+TEST_CASE("Clip-attached effects still process every frame while using trimmed mask source", "[effect][mask][timing][clip_effect]") {
+	DummyReader clip_reader(Fraction(24, 1), 320, 240, 48000, 2, 4.0f);
+	Clip parent_clip;
+	parent_clip.Reader(&clip_reader);
+
+	auto* tracking = new TrackingMaskReader(24, 1, 100);
+	Brightness effect(Keyframe(0.0), Keyframe(0.0));
+	effect.ParentClip(&parent_clip);
+	effect.MaskReader(tracking);
+	effect.Start(1.0 / 24.0);
+	effect.End(3.0 / 24.0);
+	effect.mask_loop_mode = EffectBase::MASK_LOOP_PLAY_ONCE;
+
+	for (int64_t n = 1; n <= 6; ++n)
+		effect.ProcessFrame(make_input_frame(n), n);
+
+	const std::vector<int64_t> expected = {2, 3, 4, 4, 4, 4};
 	CHECK(tracking->requests == expected);
 }

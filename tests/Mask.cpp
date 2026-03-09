@@ -120,6 +120,22 @@ TEST_CASE("Mask accepts legacy reader json field", "[effect][mask_effect][json]"
 	CHECK(mask.JsonValue()["mask_reader"]["type"].asString() == "QtImageReader");
 }
 
+TEST_CASE("Mask legacy start and end json load into base trim", "[effect][mask_effect][json][timing]") {
+	Json::Value root;
+	root["start"] = 0.5;
+	root["end"] = 1.25;
+	root["brightness"] = Keyframe(0.0).JsonValue();
+	root["contrast"] = Keyframe(0.0).JsonValue();
+
+	Mask mask;
+	mask.SetJsonValue(root);
+
+	CHECK(mask.Start() == Approx(0.5).margin(0.00001));
+	CHECK(mask.End() == Approx(1.25).margin(0.00001));
+	CHECK(mask.JsonValue()["start"].asDouble() == Approx(0.5).margin(0.00001));
+	CHECK(mask.JsonValue()["end"].asDouble() == Approx(1.25).margin(0.00001));
+}
+
 TEST_CASE("Mask ProcessFrame brightness 1.0 fully clears output", "[effect][mask_effect][process][brightness]") {
 	auto frame = std::make_shared<Frame>(1, 2, 1, "#000000");
 	auto image = frame->GetImage();
