@@ -113,6 +113,10 @@ namespace openshot
 		/// Determine if reader is open or closed
 		virtual bool IsOpen() = 0;
 
+		/// Return true if hardware decode successfully produced at least one frame.
+		/// Readers without hardware decode support should return false.
+		virtual bool HardwareDecodeSuccessful() const { return false; }
+
 		/// Return the type name of the class
 		virtual std::string Name() = 0;
 

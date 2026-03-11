@@ -268,7 +268,10 @@ void FFmpegReader::Open() {
 		// Initialize format context
 		pFormatCtx = NULL;
 		{
-			hw_de_on = (openshot::Settings::Instance()->HARDWARE_DECODER == 0 ? 0 : 1);
+			hw_de_on = (!force_sw_decode && openshot::Settings::Instance()->HARDWARE_DECODER != 0 ? 1 : 0);
+			hw_decode_failed = false;
+			hw_decode_error_count = 0;
+			hw_decode_succeeded = false;
 			ZmqLogger::Instance()->AppendDebugMethod("Decode hardware acceleration settings", "hw_de_on", hw_de_on, "HARDWARE_DECODER", openshot::Settings::Instance()->HARDWARE_DECODER);
 		}
 
@@ -1318,6 +1321,9 @@ std::shared_ptr<Frame> FFmpegReader::ReadStream(int64_t requested_frame) {
 			(info.has_video && !packet && !packet_status.video_eof)) {
 			// Process Video Packet
 			ProcessVideoPacket(requested_frame);
+			if (ReopenWithoutHardwareDecode(requested_frame)) {
+				continue;
+			}
 		}
 		// Audio packet
 		if ((info.has_audio && packet && packet->stream_index == audioStream) ||
@@ -1492,6 +1498,26 @@ int FFmpegReader::GetNextPacket() {
 // Get an AVFrame (if any)
 bool FFmpegReader::GetAVFrame() {
 	int frameFinished = 0;
+	auto note_hw_decode_failure = [&](int err, const char* stage) {
+#if USE_HW_ACCEL
+		if (!hw_de_on || !hw_de_supported || force_sw_decode) {
+			return;
+		}
+		if (err == AVERROR_INVALIDDATA && packet_status.video_decoded == 0) {
+			hw_decode_error_count++;
+			ZmqLogger::Instance()->AppendDebugMethod(
+				std::string("FFmpegReader::GetAVFrame (hardware decode failure candidate during ") + stage + ")",
+				"error_count", hw_decode_error_count,
+				"error", err);
+			if (hw_decode_error_count >= 3) {
+				hw_decode_failed = true;
+			}
+		}
+#else
+		(void) err;
+		(void) stage;
+#endif
+	};
 
 	// Decode video frame
 	AVFrame *next_frame = AV_ALLOCATE_FRAME();
@@ -1516,6 +1542,7 @@ bool FFmpegReader::GetAVFrame() {
 	#endif // USE_HW_ACCEL
 		if (send_packet_err < 0 && send_packet_err != AVERROR_EOF) {
 			ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::GetAVFrame (send packet: Not sent [" + av_err2string(send_packet_err) + "])", "send_packet_err", send_packet_err, "send_packet_pts", send_packet_pts);
+			note_hw_decode_failure(send_packet_err, "send_packet");
 			if (send_packet_err == AVERROR(EAGAIN)) {
 				hold_packet = true;
 				ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::GetAVFrame (send packet: AVERROR(EAGAIN): user must read output with avcodec_receive_frame()", "send_packet_pts", send_packet_pts);
@@ -1532,6 +1559,7 @@ bool FFmpegReader::GetAVFrame() {
 		// Even if the above avcodec_send_packet failed to send,
 		// we might still need to receive a packet.
 		int receive_frame_err = 0;
+		AVFrame *decoded_frame = next_frame;
 		AVFrame *next_frame2;
 #if USE_HW_ACCEL
 		if (hw_de_on && hw_de_supported) {
@@ -1548,6 +1576,7 @@ bool FFmpegReader::GetAVFrame() {
 
 			if (receive_frame_err != 0) {
 				ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::GetAVFrame (receive frame: frame not ready yet from decoder [\" + av_err2string(receive_frame_err) + \"])", "receive_frame_err", receive_frame_err, "send_packet_pts", send_packet_pts);
+				note_hw_decode_failure(receive_frame_err, "receive_frame");
 
 				if (receive_frame_err == AVERROR_EOF) {
 					ZmqLogger::Instance()->AppendDebugMethod(
@@ -1578,47 +1607,93 @@ bool FFmpegReader::GetAVFrame() {
 			if (hw_de_on && hw_de_supported) {
 				int err;
 				if (next_frame2->format == hw_de_av_pix_fmt) {
-					next_frame->format = AV_PIX_FMT_YUV420P;
-					if ((err = av_hwframe_transfer_data(next_frame,next_frame2,0)) < 0) {
-						ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::GetAVFrame (Failed to transfer data to output frame)", "hw_de_on", hw_de_on);
+					if ((err = av_hwframe_transfer_data(next_frame, next_frame2, 0)) < 0) {
+						ZmqLogger::Instance()->AppendDebugMethod(
+							"FFmpegReader::GetAVFrame (Failed to transfer data to output frame)",
+							"hw_de_on", hw_de_on,
+							"error", err);
+						note_hw_decode_failure(AVERROR_INVALIDDATA, "hwframe_transfer");
+						break;
 					}
-					if ((err = av_frame_copy_props(next_frame,next_frame2)) < 0) {
-						ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::GetAVFrame (Failed to copy props to output frame)", "hw_de_on", hw_de_on);
+					if ((err = av_frame_copy_props(next_frame, next_frame2)) < 0) {
+						ZmqLogger::Instance()->AppendDebugMethod(
+							"FFmpegReader::GetAVFrame (Failed to copy props to output frame)",
+							"hw_de_on", hw_de_on,
+							"error", err);
+						note_hw_decode_failure(AVERROR_INVALIDDATA, "hwframe_copy_props");
+						break;
 					}
+					if (next_frame->format == AV_PIX_FMT_NONE) {
+						next_frame->format = pCodecCtx->sw_pix_fmt;
+					}
+					if (next_frame->width <= 0) {
+						next_frame->width = next_frame2->width;
+					}
+					if (next_frame->height <= 0) {
+						next_frame->height = next_frame2->height;
+					}
+					decoded_frame = next_frame;
+				} else {
+					// Some hardware decoders can still return software-readable frames.
+					decoded_frame = next_frame2;
 				}
 			}
 			else
 #endif // USE_HW_ACCEL
 			{	// No hardware acceleration used -> no copy from GPU memory needed
-				next_frame = next_frame2;
+				decoded_frame = next_frame2;
+			}
+
+			if (!decoded_frame->data[0]) {
+				ZmqLogger::Instance()->AppendDebugMethod(
+					"FFmpegReader::GetAVFrame (Decoded frame missing image data)",
+					"format", decoded_frame->format,
+					"width", decoded_frame->width,
+					"height", decoded_frame->height);
+				note_hw_decode_failure(AVERROR_INVALIDDATA, "decoded_frame_empty");
+				break;
 			}
 
 			// TODO also handle possible further frames
 			// Use only the first frame like avcodec_decode_video2
 			frameFinished = 1;
+			hw_decode_error_count = 0;
+#if USE_HW_ACCEL
+			if (hw_de_on && hw_de_supported && !force_sw_decode) {
+				hw_decode_succeeded = true;
+			}
+#endif
 			packet_status.video_decoded++;
 
 			// Allocate image (align 32 for simd)
-			AVPixelFormat decoded_pix_fmt = (AVPixelFormat)(next_frame->format);
+			AVPixelFormat decoded_pix_fmt = (AVPixelFormat)(decoded_frame->format);
 			if (decoded_pix_fmt == AV_PIX_FMT_NONE)
 				decoded_pix_fmt = (AVPixelFormat)(pStream->codecpar->format);
 			if (AV_ALLOCATE_IMAGE(pFrame, decoded_pix_fmt, info.width, info.height) <= 0) {
 				throw OutOfMemory("Failed to allocate image buffer", path);
 			}
-			av_image_copy(pFrame->data, pFrame->linesize, (const uint8_t**)next_frame->data, next_frame->linesize,
+			av_image_copy(pFrame->data, pFrame->linesize, (const uint8_t**)decoded_frame->data, decoded_frame->linesize,
 										decoded_pix_fmt, info.width, info.height);
+			pFrame->format = decoded_pix_fmt;
+			pFrame->width = info.width;
+			pFrame->height = info.height;
+			pFrame->color_range = decoded_frame->color_range;
+			pFrame->colorspace = decoded_frame->colorspace;
+			pFrame->color_primaries = decoded_frame->color_primaries;
+			pFrame->color_trc = decoded_frame->color_trc;
+			pFrame->chroma_location = decoded_frame->chroma_location;
 
 			// Get display PTS from video frame, often different than packet->pts.
 			// Sending packets to the decoder (i.e. packet->pts) is async,
 			// and retrieving packets from the decoder (frame->pts) is async. In most decoders
 			// sending and retrieving are separated by multiple calls to this method.
-			if (next_frame->pts != AV_NOPTS_VALUE) {
+			if (decoded_frame->pts != AV_NOPTS_VALUE) {
 				// This is the current decoded frame (and should be the pts used) for
 				// processing this data
-				video_pts = next_frame->pts;
-			} else if (next_frame->pkt_dts != AV_NOPTS_VALUE) {
+				video_pts = decoded_frame->pts;
+			} else if (decoded_frame->pkt_dts != AV_NOPTS_VALUE) {
 				// Some videos only set this timestamp (fallback)
-				video_pts = next_frame->pkt_dts;
+				video_pts = decoded_frame->pkt_dts;
 			}
 
 			ZmqLogger::Instance()->AppendDebugMethod(
@@ -1628,7 +1703,7 @@ bool FFmpegReader::GetAVFrame() {
 			break;
 		}
 #if USE_HW_ACCEL
-		if (hw_de_on && hw_de_supported) {
+		if (hw_de_on && hw_de_supported && next_frame2 != next_frame) {
 			AV_FREE_FRAME(&next_frame2);
 		}
 	#endif // USE_HW_ACCEL
@@ -1653,6 +1728,41 @@ bool FFmpegReader::GetAVFrame() {
 
 	// Did we get a video frame?
 	return frameFinished;
+}
+
+bool FFmpegReader::ReopenWithoutHardwareDecode(int64_t requested_frame) {
+#if USE_HW_ACCEL
+	if (!hw_decode_failed || force_sw_decode) {
+		return false;
+	}
+
+	ZmqLogger::Instance()->AppendDebugMethod(
+		"FFmpegReader::ReopenWithoutHardwareDecode (falling back to software decode)",
+		"requested_frame", requested_frame,
+		"video_packets_read", packet_status.video_read,
+		"video_packets_decoded", packet_status.video_decoded,
+		"hw_decode_error_count", hw_decode_error_count);
+
+	force_sw_decode = true;
+	hw_decode_failed = false;
+	hw_decode_error_count = 0;
+
+	Close();
+	Open();
+	Seek(requested_frame);
+	return true;
+#else
+	(void) requested_frame;
+	return false;
+#endif
+}
+
+bool FFmpegReader::HardwareDecodeSuccessful() const {
+#if USE_HW_ACCEL
+	return hw_decode_succeeded;
+#else
+	return false;
+#endif
 }
 
 // Check the current seek position and determine if we need to seek again
@@ -1879,9 +1989,49 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
 	sws_setColorspaceDetails(img_convert_ctx, src_coeff, src_full_range ? 1 : 0,
 							 dst_coeff, dst_full_range, 0, 1 << 16, 1 << 16);
 
+	if (!pFrame || !pFrame->data[0] || pFrame->linesize[0] <= 0) {
+#if USE_HW_ACCEL
+		if (hw_de_on && hw_de_supported && !force_sw_decode) {
+			hw_decode_failed = true;
+			ZmqLogger::Instance()->AppendDebugMethod(
+				"FFmpegReader::ProcessVideoPacket (Invalid source frame; forcing software fallback)",
+				"requested_frame", requested_frame,
+				"current_frame", current_frame,
+				"src_pix_fmt", src_pix_fmt,
+				"src_width", src_width,
+				"src_height", src_height);
+		}
+#endif
+		if (pFrame) {
+			RemoveAVFrame(pFrame);
+			pFrame = NULL;
+		}
+		return;
+	}
+
 	// Resize / Convert to RGB
-	sws_scale(img_convert_ctx, pFrame->data, pFrame->linesize, 0,
+	const int scaled_lines = sws_scale(img_convert_ctx, pFrame->data, pFrame->linesize, 0,
 			  original_height, pFrameRGB->data, pFrameRGB->linesize);
+	if (scaled_lines <= 0) {
+#if USE_HW_ACCEL
+		if (hw_de_on && hw_de_supported && !force_sw_decode) {
+			hw_decode_failed = true;
+			ZmqLogger::Instance()->AppendDebugMethod(
+				"FFmpegReader::ProcessVideoPacket (sws_scale failed; forcing software fallback)",
+				"requested_frame", requested_frame,
+				"current_frame", current_frame,
+				"scaled_lines", scaled_lines,
+				"src_pix_fmt", src_pix_fmt,
+				"src_width", src_width,
+				"src_height", src_height);
+		}
+#endif
+		free(buffer);
+		AV_RESET_FRAME(pFrameRGB);
+		RemoveAVFrame(pFrame);
+		pFrame = NULL;
+		return;
+	}
 
 	// Create or get the existing frame object
 	std::shared_ptr<Frame> f = CreateFrame(current_frame);

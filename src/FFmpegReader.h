@@ -165,6 +165,10 @@ namespace openshot {
 		AVFrame *pFrameRGB_cached = nullptr;          ///< Temporary frame used for video conversion
 
 		int hw_de_supported = 0;	// Is set by FFmpegReader
+		bool force_sw_decode = false;
+		bool hw_decode_failed = false;
+		int hw_decode_error_count = 0;
+		bool hw_decode_succeeded = false;
 #if USE_HW_ACCEL
 		AVPixelFormat hw_de_av_pix_fmt = AV_PIX_FMT_NONE;
 		AVHWDeviceType hw_de_av_device_type = AV_HWDEVICE_TYPE_NONE;
@@ -197,6 +201,9 @@ namespace openshot {
 
 		/// Get an AVFrame (if any)
 		bool GetAVFrame();
+
+		/// Reopen the current reader with software decode after hardware decode fails
+		bool ReopenWithoutHardwareDecode(int64_t requested_frame);
 
 		/// Get the next packet (if any)
 		int GetNextPacket();
@@ -284,6 +291,9 @@ namespace openshot {
 
 		/// Determine if reader is open or closed
 		bool IsOpen() override { return is_open; };
+
+		/// Return true if hardware decode was requested and successfully produced at least one frame
+		bool HardwareDecodeSuccessful() const override;
 
 		/// Return the type name of the class
 		std::string Name() override { return "FFmpegReader"; };
