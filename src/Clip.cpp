@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <cmath>
 #include <sstream>
+#include <QPainter>
 
 #ifdef USE_IMAGEMAGICK
 	#include "MagickUtilities.h"
@@ -512,18 +513,36 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
             final_cache.Add(frame);
         }
 
-        if (!background_frame) {
-            // Create missing background_frame w/ transparent color (if needed)
-            background_frame = std::make_shared<Frame>(frame->number, frame->GetWidth(), frame->GetHeight(),
-                                                       "#00000000",  frame->GetAudioSamplesCount(),
-                                                       frame->GetAudioChannelsCount());
-        }
+		const bool has_external_background = (background_frame != nullptr);
 
-		// Apply background canvas (i.e. flatten this image onto previous layer image)
-		apply_background(frame, background_frame);
+		// Timeline path.
+		if (options) {
+			if (!background_frame) {
+				// Create a transparent background if missing.
+				background_frame = std::make_shared<Frame>(frame->number, frame->GetWidth(), frame->GetHeight(),
+														   "#00000000", frame->GetAudioSamplesCount(),
+														   frame->GetAudioChannelsCount());
+			}
+			if (options->force_safe_composite) {
+				// Edit mode: composite without mutating cached frame pixels.
+				apply_background(frame, background_frame, false);
+				return frame;
+			}
 
-		// Return processed 'frame'
-		return frame;
+			// Playback mode: keep original fast path.
+			apply_background(frame, background_frame, true);
+			return frame;
+		}
+
+		// No background: return the frame directly.
+		if (!has_external_background) {
+			return frame;
+		}
+
+		// External background: composite on a copy.
+		auto output = std::make_shared<Frame>(*frame.get());
+		apply_background(output, background_frame, true);
+		return output;
 	}
 	else
 		// Throw error if reader not initialized
@@ -1263,7 +1282,9 @@ void Clip::RemoveEffect(EffectBase* effect)
 }
 
 // Apply background image to the current clip image (i.e. flatten this image onto previous layer)
-void Clip::apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_ptr<openshot::Frame> background_frame) {
+void Clip::apply_background(std::shared_ptr<openshot::Frame> frame,
+                            std::shared_ptr<openshot::Frame> background_frame,
+                            bool update_frame_image) {
 	// Add background canvas
 	std::shared_ptr<QImage> background_canvas = background_frame->GetImage();
 	QPainter painter(background_canvas.get());
@@ -1273,8 +1294,10 @@ void Clip::apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_
 	painter.drawImage(0, 0, *frame->GetImage());
 	painter.end();
 
-	// Add new QImage to frame
-	frame->AddImage(background_canvas);
+	// Standalone clip requests update frame->image, but timeline composition
+	// draws onto the timeline-owned background frame only.
+	if (update_frame_image)
+		frame->AddImage(background_canvas);
 }
 
 // Apply effects to the source frame (if any)
@@ -1284,9 +1307,9 @@ void Clip::apply_effects(std::shared_ptr<Frame> frame, int64_t timeline_frame_nu
 	{
 		// Apply the effect to this frame
 		if (effect->info.apply_before_clip && before_keyframes) {
-			effect->GetFrame(frame, frame->number);
+			effect->ProcessFrame(frame, frame->number);
 		} else if (!effect->info.apply_before_clip && !before_keyframes) {
-			effect->GetFrame(frame, frame->number);
+			effect->ProcessFrame(frame, frame->number);
 		}
 	}
 

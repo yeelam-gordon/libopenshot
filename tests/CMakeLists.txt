@@ -54,6 +54,8 @@ set(OPENSHOT_TESTS
   Crop
   LensFlare
   AnalogTape
+  EffectMask
+  Mask
   Sharpen
   SphericalEffect
   WaveEffect

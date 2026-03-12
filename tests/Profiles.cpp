@@ -11,10 +11,10 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 #include "openshot_catch.h"
+#include <cstdlib>
 #include <sstream>
 #include <fstream>
 #include <cstdio>
-#include <cstdlib>
 
 
 #include "Exceptions.h"
@@ -37,6 +37,12 @@ static std::string get_temp_test_path(const std::string& file_name) {
     }
     return std::string(base) + "/" + file_name;
 #endif
+}
+
+static std::string test_output_profile_path(const std::string& base_name) {
+    std::stringstream file_name;
+    file_name << base_name << "_" << std::rand() << ".profile";
+    return get_temp_test_path(file_name.str());
 }
 
 TEST_CASE( "empty constructor", "[libopenshot][profile]" )
@@ -221,12 +227,11 @@ TEST_CASE( "save profiles", "[libopenshot][profile]" )
     openshot::Profile p1(profile1.str());
 
     // Save copy
-    std::stringstream profile1_copy;
-    profile1_copy << TEST_MEDIA_PATH << "example_profile1_copy";
-    p1.Save(profile1_copy.str());
+    const std::string profile1_copy = test_output_profile_path("example_profile1_copy");
+    p1.Save(profile1_copy);
 
     // Load saved copy
-    openshot::Profile p1_load_copy(profile1_copy.str());
+    openshot::Profile p1_load_copy(profile1_copy);
 
     // Default values
     CHECK(p1_load_copy.info.description == "HD 720p 24 fps");
@@ -273,12 +278,11 @@ TEST_CASE( "spherical profiles", "[libopenshot][profile]" )
     CHECK(p_json.ShortName() == "3840x1920p30 360°");
 
     // Save and reload to test file I/O
-    std::stringstream profile_path;
-    profile_path << TEST_MEDIA_PATH << "example_profile_360";
-    p.Save(profile_path.str());
+    const std::string profile_path = test_output_profile_path("example_profile_360");
+    p.Save(profile_path);
 
     // Load the saved profile
-    openshot::Profile p_loaded(profile_path.str());
+    openshot::Profile p_loaded(profile_path);
     CHECK(p_loaded.info.spherical == true);
     CHECK(p_loaded.ShortName() == "3840x1920p30 360°");
 

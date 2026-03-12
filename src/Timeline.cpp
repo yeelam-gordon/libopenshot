@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <QDir>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <unordered_map>
 #include <cmath>
 #include <cstdint>
@@ -30,7 +31,7 @@ using namespace openshot;
 
 // Default Constructor for the timeline (which sets the canvas width and height)
 Timeline::Timeline(int width, int height, Fraction fps, int sample_rate, int channels, ChannelLayout channel_layout) :
-		is_open(false), auto_map_clips(true), managed_cache(true), path(""), max_time(0.0)
+		is_open(false), auto_map_clips(true), managed_cache(true), path(""), max_time(0.0), cache_epoch(0), safe_edit_frames_remaining(0)
 {
 	// Create CrashHandler and Attach (incase of errors)
 	CrashHandler::Instance();
@@ -81,7 +82,7 @@ Timeline::Timeline(const ReaderInfo info) : Timeline::Timeline(
 
 // Constructor for the timeline (which loads a JSON structure from a file path, and initializes a timeline)
 Timeline::Timeline(const std::string& projectPath, bool convert_absolute_paths) :
-		is_open(false), auto_map_clips(true), managed_cache(true), path(projectPath), max_time(0.0) {
+		is_open(false), auto_map_clips(true), managed_cache(true), path(projectPath), max_time(0.0), cache_epoch(0), safe_edit_frames_remaining(0) {
 
 	// Create CrashHandler and Attach (incase of errors)
 	CrashHandler::Instance();
@@ -585,7 +586,7 @@ std::shared_ptr<Frame> Timeline::apply_effects(std::shared_ptr<Frame> frame, int
 				"does_effect_intersect", does_effect_intersect);
 
 			// Apply the effect to this frame
-			frame = effect->GetFrame(frame, effect_frame_number);
+			frame = effect->ProcessFrame(frame, effect_frame_number);
 		}
 
 	} // end effect loop
@@ -632,12 +633,13 @@ std::shared_ptr<Frame> Timeline::GetOrCreateFrame(std::shared_ptr<Frame> backgro
 }
 
 // Process a new layer of video or audio
-void Timeline::add_layer(std::shared_ptr<Frame> new_frame, Clip* source_clip, int64_t clip_frame_number, bool is_top_clip, float max_volume)
+void Timeline::add_layer(std::shared_ptr<Frame> new_frame, Clip* source_clip, int64_t clip_frame_number, bool is_top_clip, bool force_safe_composite, float max_volume)
 {
 	// Create timeline options (with details about this current frame request)
 	TimelineInfoStruct options{};
 	options.is_top_clip = is_top_clip;
 	options.is_before_clip_keyframes = true;
+	options.force_safe_composite = force_safe_composite;
 
 	// Get the clip's frame, composited on top of the current timeline frame
 	std::shared_ptr<Frame> source_frame;
@@ -942,10 +944,13 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 	// Adjust out of bounds frame number
 	if (requested_frame < 1)
 		requested_frame = 1;
+	const int64_t max_frame = GetMaxFrame();
+	const bool past_timeline_end = (max_frame > 0 && requested_frame > max_frame);
 
 	// Check cache
 	std::shared_ptr<Frame> frame;
-	frame = final_cache->GetFrame(requested_frame);
+	if (!past_timeline_end)
+		frame = final_cache->GetFrame(requested_frame);
 	if (frame) {
 		// Debug output
 		ZmqLogger::Instance()->AppendDebugMethod(
@@ -962,7 +967,8 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 
 		// Check cache 2nd time
 		std::shared_ptr<Frame> frame;
-		frame = final_cache->GetFrame(requested_frame);
+		if (!past_timeline_end)
+			frame = final_cache->GetFrame(requested_frame);
 		if (frame) {
 			// Debug output
 			ZmqLogger::Instance()->AppendDebugMethod(
@@ -1058,6 +1064,11 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 			}
 
 			// Compose intersecting clips in a single pass
+			const int safe_remaining = safe_edit_frames_remaining.load(std::memory_order_relaxed);
+			const bool force_safe_composite = (safe_remaining > 0);
+			if (force_safe_composite) {
+				safe_edit_frames_remaining.fetch_sub(1, std::memory_order_relaxed);
+			}
 			for (const auto& ci : clip_infos) {
 				// Debug output
 				ZmqLogger::Instance()->AppendDebugMethod(
@@ -1088,7 +1099,7 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 							"clip_frame_number", clip_frame_number);
 
 					// Add clip's frame as layer
-					add_layer(new_frame, ci.clip, clip_frame_number, is_top_clip, max_volume_sum);
+					add_layer(new_frame, ci.clip, clip_frame_number, is_top_clip, force_safe_composite, max_volume_sum);
 
 				} else {
 					// Debug output
@@ -1110,9 +1121,9 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 			// Set frame # on mapped frame
 			new_frame->SetFrameNumber(requested_frame);
 
-			// Add final frame to cache
-			final_cache->Add(new_frame);
-
+				// Add final frame to cache (only for valid timeline range)
+				if (!past_timeline_end)
+					final_cache->Add(new_frame);
 			// Return frame (or blank frame)
 			return new_frame;
 		}
@@ -1344,6 +1355,9 @@ void Timeline::SetJsonValue(const Json::Value root) {
 	// Re-open if needed
 	if (was_open)
 		Open();
+
+	// Timeline content changed: notify cache clients to rescan active window.
+	BumpCacheEpoch();
 }
 
 // Apply a special formatted JSON object, which represents a change to the timeline (insert, update, delete)
@@ -1374,12 +1388,23 @@ void Timeline::ApplyJsonDiff(std::string value) {
 				apply_json_to_timeline(change);
 
 		}
+
+		// Timeline content changed: notify cache clients to rescan active window.
+		if (!root.empty()) {
+			// After edits, force safe composition for a short window.
+			safe_edit_frames_remaining.store(240, std::memory_order_relaxed);
+			BumpCacheEpoch();
+		}
 	}
 	catch (const std::exception& e)
 	{
 		// Error parsing JSON (or missing keys)
 		throw InvalidJSON("JSON is invalid (missing keys or invalid data types)");
 	}
+}
+
+void Timeline::BumpCacheEpoch() {
+	cache_epoch.fetch_add(1, std::memory_order_relaxed);
 }
 
 // Apply JSON diff to clips
@@ -1434,6 +1459,11 @@ void Timeline::apply_json_to_clips(Json::Value change) {
 						// Apply the change to the effect directly
 						apply_json_to_effects(change, e);
 
+						// Effect-only diffs must clear the owning clip cache.
+						if (existing_clip->GetCache()) {
+							existing_clip->GetCache()->Clear();
+						}
+
 						// Calculate start and end frames that this impacts, and remove those frames from the cache
 						int64_t new_starting_frame = (existing_clip->Position() * info.fps.ToDouble()) + 1;
 						int64_t new_ending_frame = ((existing_clip->Position() + existing_clip->Duration()) * info.fps.ToDouble()) + 1;
@@ -1484,12 +1514,6 @@ void Timeline::apply_json_to_clips(Json::Value change) {
 			// Remove both the old and new ranges from the timeline cache
 			final_cache->Remove(old_starting_frame - 8, old_ending_frame + 8);
 			final_cache->Remove(new_starting_frame - 8, new_ending_frame + 8);
-
-			// Remove cache on clip's Reader (if found)
-			if (existing_clip->Reader() && existing_clip->Reader()->GetCache()) {
-				existing_clip->Reader()->GetCache()->Remove(old_starting_frame - 8, old_ending_frame + 8);
-				existing_clip->Reader()->GetCache()->Remove(new_starting_frame - 8, new_ending_frame + 8);
-			}
 
 			// Apply framemapper (or update existing framemapper)
 			if (auto_map_clips) {
@@ -1785,6 +1809,9 @@ void Timeline::ClearAllCache(bool deep) {
 	} catch (const ReaderClosed & e) {
 		// ...
 	}
+
+	// Cache content changed: notify cache clients to rebuild their window baseline.
+	BumpCacheEpoch();
 }
 
 // Set Max Image Size (used for performance optimization). Convenience function for setting

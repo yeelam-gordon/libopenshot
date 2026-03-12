@@ -14,6 +14,8 @@
 #include <sstream>
 #include <memory>
 #include <list>
+#include <vector>
+#include <cstdint>
 #include <omp.h>
 
 #include "openshot_catch.h"
@@ -21,13 +23,132 @@
 #include "FrameMapper.h"
 #include "Timeline.h"
 #include "Clip.h"
+#include "CacheMemory.h"
+#include "DummyReader.h"
 #include "Frame.h"
 #include "Fraction.h"
+#include "effects/Brightness.h"
 #include "Exceptions.h"
 #include "effects/Blur.h"
+#include "effects/Bars.h"
 #include "effects/Negate.h"
 
 using namespace openshot;
+
+static uint64_t image_fingerprint(const std::shared_ptr<QImage>& image) {
+	const uint64_t kFnvOffset = 1469598103934665603ULL;
+	const uint64_t kFnvPrime = 1099511628211ULL;
+	uint64_t hash = kFnvOffset;
+
+	if (!image) {
+		return hash;
+	}
+
+	const unsigned char* bytes = image->constBits();
+	const size_t count = static_cast<size_t>(image->sizeInBytes());
+	for (size_t i = 0; i < count; ++i) {
+		hash ^= static_cast<uint64_t>(bytes[i]);
+		hash *= kFnvPrime;
+	}
+
+	return hash;
+}
+
+class TimelineTrackingMaskReader : public ReaderBase {
+private:
+	bool is_open = false;
+	CacheMemory cache;
+	int width = 2;
+	int height = 1;
+
+public:
+	std::vector<int64_t> requests;
+
+	TimelineTrackingMaskReader(int fps_num, int fps_den, int64_t length_frames) {
+		info.has_video = true;
+		info.has_audio = false;
+		info.width = width;
+		info.height = height;
+		info.fps = Fraction(fps_num, fps_den);
+		info.video_length = length_frames;
+		info.duration = static_cast<float>(length_frames / info.fps.ToDouble());
+		info.sample_rate = 48000;
+		info.channels = 2;
+		info.audio_stream_index = -1;
+	}
+
+	openshot::CacheBase* GetCache() override { return &cache; }
+	bool IsOpen() override { return is_open; }
+	std::string Name() override { return "TimelineTrackingMaskReader"; }
+	void Open() override { is_open = true; }
+	void Close() override { is_open = false; }
+
+	std::shared_ptr<openshot::Frame> GetFrame(int64_t number) override {
+		requests.push_back(number);
+		auto frame = std::make_shared<Frame>(number, width, height, "#00000000");
+		frame->GetImage()->fill(QColor(128, 128, 128, 255));
+		return frame;
+	}
+
+	std::string Json() const override { return JsonValue().toStyledString(); }
+	Json::Value JsonValue() const override {
+		Json::Value root = ReaderBase::JsonValue();
+		root["type"] = "TimelineTrackingMaskReader";
+		root["path"] = "";
+		return root;
+	}
+	void SetJson(const std::string value) override { (void) value; }
+	void SetJsonValue(const Json::Value root) override { ReaderBase::SetJsonValue(root); }
+};
+
+class TimelineSolidColorReader : public ReaderBase {
+private:
+	bool is_open = false;
+	CacheMemory cache;
+	QColor color;
+
+public:
+	TimelineSolidColorReader(int width,
+	                         int height,
+	                         int fps_num,
+	                         int fps_den,
+	                         int64_t length_frames,
+	                         const QColor& fill_color)
+		: color(fill_color) {
+		info.has_video = true;
+		info.has_audio = false;
+		info.width = width;
+		info.height = height;
+		info.fps = Fraction(fps_num, fps_den);
+		info.video_length = length_frames;
+		info.duration = static_cast<float>(length_frames / info.fps.ToDouble());
+		info.sample_rate = 48000;
+		info.channels = 2;
+		info.audio_stream_index = -1;
+	}
+
+	openshot::CacheBase* GetCache() override { return &cache; }
+	bool IsOpen() override { return is_open; }
+	std::string Name() override { return "TimelineSolidColorReader"; }
+	void Open() override { is_open = true; }
+	void Close() override { is_open = false; }
+
+	std::shared_ptr<openshot::Frame> GetFrame(int64_t number) override {
+		auto frame = std::make_shared<Frame>(number, info.width, info.height, "#00000000");
+		frame->GetImage()->fill(color);
+		return frame;
+	}
+
+	std::string Json() const override { return JsonValue().toStyledString(); }
+	Json::Value JsonValue() const override {
+		Json::Value root = ReaderBase::JsonValue();
+		root["type"] = "TimelineSolidColorReader";
+		root["path"] = "";
+		return root;
+	}
+	void SetJson(const std::string value) override { (void) value; }
+	void SetJsonValue(const Json::Value root) override { ReaderBase::SetJsonValue(root); }
+};
 
 TEST_CASE( "constructor", "[libopenshot][timeline]" )
 {
@@ -614,6 +735,88 @@ TEST_CASE( "Effect: Blur", "[libopenshot][timeline]" )
 	t.Close();
 }
 
+TEST_CASE("Global mask effect source FPS mode follows timeline FPS mapping", "[libopenshot][timeline][effect][mask][timing]") {
+	Timeline t(320, 240, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+
+	DummyReader clip_reader(Fraction(30, 1), 320, 240, 44100, 2, 2.0f);
+	Clip clip(&clip_reader);
+	clip.Layer(0);
+	clip.Position(0.0);
+	clip.Start(0.0);
+	clip.End(1.0);
+	t.AddClip(&clip);
+
+	Brightness effect(Keyframe(0.0), Keyframe(0.0));
+	effect.Layer(0);
+	effect.Position(0.0);
+	effect.Start(0.0);
+	effect.End(1.0);
+
+	auto* tracking = new TimelineTrackingMaskReader(15, 1, 120);
+	effect.MaskReader(tracking);
+
+	Json::Value timing;
+	timing["mask_time_mode"] = 1; // Source FPS
+	timing["mask_loop_mode"] = 0; // Play Once
+	timing["start"] = 0.0;
+	timing["end"] = 1.0;
+	effect.SetJsonValue(timing);
+
+	t.AddEffect(&effect);
+	t.Open();
+
+	for (int64_t frame = 1; frame <= 5; ++frame) {
+		auto out = t.GetFrame(frame);
+		REQUIRE(out != nullptr);
+	}
+
+	const std::vector<int64_t> expected = {1, 2, 2, 3, 3};
+	CHECK(tracking->requests == expected);
+
+	t.Close();
+}
+
+TEST_CASE("Global mask effect start trims source without freezing playback", "[libopenshot][timeline][effect][mask][trim]") {
+	Timeline t(320, 240, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+
+	DummyReader clip_reader(Fraction(30, 1), 320, 240, 44100, 2, 2.0f);
+	Clip clip(&clip_reader);
+	clip.Layer(0);
+	clip.Position(0.0);
+	clip.Start(0.0);
+	clip.End(1.0);
+	t.AddClip(&clip);
+
+	Brightness effect(Keyframe(0.0), Keyframe(0.0));
+	effect.Layer(0);
+	effect.Position(0.0);
+	effect.Start(1.0 / 15.0);
+	effect.End(1.0);
+
+	auto* tracking = new TimelineTrackingMaskReader(15, 1, 120);
+	effect.MaskReader(tracking);
+
+	Json::Value timing;
+	timing["mask_time_mode"] = 1; // Source FPS
+	timing["mask_loop_mode"] = 0; // Play Once
+	timing["start"] = 1.0 / 15.0;
+	timing["end"] = 1.0;
+	effect.SetJsonValue(timing);
+
+	t.AddEffect(&effect);
+	t.Open();
+
+	for (int64_t frame = 1; frame <= 5; ++frame) {
+		auto out = t.GetFrame(frame);
+		REQUIRE(out != nullptr);
+	}
+
+	const std::vector<int64_t> expected = {2, 3, 3, 4, 4};
+	CHECK(tracking->requests == expected);
+
+	t.Close();
+}
+
 TEST_CASE( "GetMaxFrame and GetMaxTime", "[libopenshot][timeline]" )
 {
 	// Create a timeline
@@ -1081,6 +1284,223 @@ TEST_CASE( "ApplyJSONDiff insert invalidates overlapping timeline cache", "[libo
 	CHECK(!t.GetCache()->Contains(10));
 }
 
+TEST_CASE( "ApplyJSONDiff alpha updates refresh fixed-frame preview content", "[libopenshot][timeline]" )
+{
+	// Deterministic solid-color readers avoid any fixture/image ambiguity.
+	TimelineSolidColorReader base_reader(
+		/*width=*/64, /*height=*/64, /*fps_num=*/30, /*fps_den=*/1, /*length_frames=*/300,
+		QColor(10, 200, 20, 255)
+	);
+	TimelineSolidColorReader overlay_reader(
+		/*width=*/64, /*height=*/64, /*fps_num=*/30, /*fps_den=*/1, /*length_frames=*/300,
+		QColor(220, 30, 180, 255)
+	);
+
+	Clip base_clip(&base_reader);
+	base_clip.Id("BASE_ALPHA_TEST");
+	base_clip.Layer(0);
+	base_clip.Position(0.0);
+	base_clip.End(5.0);
+
+	Clip overlay_clip(&overlay_reader);
+	overlay_clip.Id("OVERLAY_ALPHA_TEST");
+	overlay_clip.Layer(1);
+	overlay_clip.Position(0.0);
+	overlay_clip.End(5.0);
+
+	Timeline t(64, 64, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	t.AddClip(&base_clip);
+	t.AddClip(&overlay_clip);
+	t.Open();
+
+	const int64_t frame_number = 1;
+
+	auto apply_alpha = [&](double alpha_value) {
+		Json::Value root(Json::arrayValue);
+		Json::Value change(Json::objectValue);
+		change["type"] = "update";
+		change["partial"] = true;
+
+		Json::Value key(Json::arrayValue);
+		key.append("clips");
+		Json::Value key_id(Json::objectValue);
+		key_id["id"] = overlay_clip.Id();
+		key.append(key_id);
+		change["key"] = key;
+
+		Json::Value alpha_json(Json::objectValue);
+		Json::Value points(Json::arrayValue);
+		Json::Value p1(Json::objectValue);
+		p1["co"]["X"] = 1.0;
+		p1["co"]["Y"] = 1.0;
+		p1["interpolation"] = 0;
+		points.append(p1);
+		Json::Value p2(Json::objectValue);
+		p2["co"]["X"] = static_cast<double>(frame_number);
+		p2["co"]["Y"] = alpha_value;
+		p2["interpolation"] = 1;
+		points.append(p2);
+		alpha_json["Points"] = points;
+
+		Json::Value value(Json::objectValue);
+		value["alpha"] = alpha_json;
+		change["value"] = value;
+
+		root.append(change);
+		t.ApplyJsonDiff(root.toStyledString());
+
+		Clip* updated = t.GetClip(overlay_clip.Id());
+		REQUIRE(updated != nullptr);
+		CHECK(updated->alpha.GetValue(frame_number) == Approx(alpha_value).margin(0.0001));
+	};
+
+	// Establish reference colors for alpha=1.0 (top) and alpha=0.0 (bottom).
+	// Prime cache at fixed frame.
+	std::shared_ptr<Frame> initial = t.GetFrame(frame_number);
+	REQUIRE(initial != nullptr);
+	REQUIRE(t.GetCache() != nullptr);
+	REQUIRE(overlay_clip.GetCache() != nullptr);
+	REQUIRE(t.GetCache()->Contains(frame_number));
+	REQUIRE(overlay_clip.GetCache()->Count() > 0);
+
+	// Repeated alpha updates at the same frame must invalidate both timeline and
+	// clip caches, preventing stale preview frames from being reused.
+	const std::vector<double> alpha_steps = {0.9, 0.8, 0.7, 0.6, 0.5};
+	for (double alpha_value : alpha_steps) {
+		apply_alpha(alpha_value);
+		CHECK(!t.GetCache()->Contains(frame_number));
+		CHECK(overlay_clip.GetCache()->Count() == 0);
+
+		// Re-request frame to repopulate caches before next update.
+		std::shared_ptr<Frame> refreshed = t.GetFrame(frame_number);
+		REQUIRE(refreshed != nullptr);
+		CHECK(t.GetCache()->Contains(frame_number));
+		CHECK(overlay_clip.GetCache()->Count() > 0);
+	}
+}
+
+TEST_CASE( "ApplyJSONDiff enables and drains edit safety window", "[libopenshot][timeline][edit]" )
+{
+	TimelineSolidColorReader reader(
+		/*width=*/64, /*height=*/64, /*fps_num=*/30, /*fps_den=*/1, /*length_frames=*/300,
+		QColor(220, 30, 180, 255)
+	);
+
+	Clip clip(&reader);
+	clip.Id("EDIT_WINDOW_CLIP");
+	clip.Layer(0);
+	clip.Position(0.0);
+	clip.End(10.0);
+
+	Timeline t(64, 64, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	t.AddClip(&clip);
+	t.Open();
+
+	CHECK(t.SafeEditFramesRemaining() == 0);
+
+	Json::Value root(Json::arrayValue);
+	Json::Value change(Json::objectValue);
+	change["type"] = "update";
+	change["partial"] = true;
+
+	Json::Value key(Json::arrayValue);
+	key.append("clips");
+	Json::Value key_id(Json::objectValue);
+	key_id["id"] = clip.Id();
+	key.append(key_id);
+	change["key"] = key;
+
+	Json::Value value(Json::objectValue);
+	value["rotation"] = Keyframe(10.0).JsonValue();
+	change["value"] = value;
+	root.append(change);
+
+	t.ApplyJsonDiff(root.toStyledString());
+	CHECK(t.SafeEditFramesRemaining() == 240);
+
+	(void)t.GetFrame(1);
+	CHECK(t.SafeEditFramesRemaining() == 239);
+
+	for (int64_t frame = 2; frame <= 240; ++frame) {
+		(void)t.GetFrame(frame);
+	}
+	CHECK(t.SafeEditFramesRemaining() == 0);
+}
+
+TEST_CASE( "ApplyJSONDiff clip Bars effect updates refresh fixed-frame preview content", "[libopenshot][timeline][effect][bars]" )
+{
+	TimelineSolidColorReader base_reader(
+		/*width=*/64, /*height=*/64, /*fps_num=*/30, /*fps_den=*/1, /*length_frames=*/300,
+		QColor(10, 200, 20, 255)
+	);
+
+	Clip clip(&base_reader);
+	clip.Id("BARS_CLIP_TEST");
+	clip.Layer(0);
+	clip.Position(0.0);
+	clip.End(5.0);
+
+	Bars bars;
+	bars.Id("BARS_EFFECT_TEST");
+	bars.Layer(0);
+	bars.Position(0.0);
+	bars.Start(0.0);
+	bars.End(5.0);
+	bars.color = Color("#000000");
+	bars.left = Keyframe(0.0);
+	bars.top = Keyframe(0.0);
+	bars.right = Keyframe(0.0);
+	bars.bottom = Keyframe(0.0);
+	clip.AddEffect(&bars);
+
+	Timeline t(64, 64, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	t.AddClip(&clip);
+	t.Open();
+
+	const int64_t frame_number = 1;
+	auto frame = t.GetFrame(frame_number);
+	REQUIRE(frame != nullptr);
+	CHECK(frame->GetImage()->pixelColor(20, 20) == QColor(10, 200, 20, 255));
+	uint64_t previous_hash = image_fingerprint(frame->GetImage());
+
+	const std::vector<double> top_steps = {0.02, 0.04, 0.06, 0.08, 0.10};
+	for (double top_value : top_steps) {
+		Keyframe top_kf(top_value);
+
+		Json::Value root(Json::arrayValue);
+		Json::Value change(Json::objectValue);
+		change["type"] = "update";
+		change["partial"] = true;
+
+		Json::Value key(Json::arrayValue);
+		key.append("clips");
+		Json::Value clip_key(Json::objectValue);
+		clip_key["id"] = clip.Id();
+		key.append(clip_key);
+		key.append("effects");
+		Json::Value effect_key(Json::objectValue);
+		effect_key["id"] = bars.Id();
+		key.append(effect_key);
+		change["key"] = key;
+
+		Json::Value value(Json::objectValue);
+		value["top"] = top_kf.JsonValue();
+		change["value"] = value;
+		root.append(change);
+
+		t.ApplyJsonDiff(root.toStyledString());
+		CHECK(bars.top.GetValue(frame_number) == Approx(top_value).margin(0.0001));
+
+		frame = t.GetFrame(frame_number);
+		REQUIRE(frame != nullptr);
+		const uint64_t current_hash = image_fingerprint(frame->GetImage());
+
+		// Regression check: every Bars update should change the rendered image.
+		CHECK(current_hash != previous_hash);
+		previous_hash = current_hash;
+	}
+}
+
 TEST_CASE( "ApplyJSONDiff Update Reader Info", "[libopenshot][timeline]" )
 {
 	// Create a timeline
@@ -1153,4 +1573,35 @@ TEST_CASE( "ApplyJSONDiff Update Reader Info", "[libopenshot][timeline]" )
 	CHECK(mapper->Reader()->info.video_timebase.den == 60);
 	CHECK(mapper->Reader()->info.duration == Approx(20.88333).margin(0.00001));
 
+}
+
+TEST_CASE("GetFrame past-end requests are not cached", "[libopenshot][timeline][cache]") {
+	TimelineSolidColorReader reader(
+		64, 64,
+		30, 1,
+		300,
+		QColor(10, 20, 30, 255));
+	Clip clip(&reader);
+	clip.Layer(1);
+	clip.Position(0.0);
+	clip.End(1.0);
+
+	Timeline t(640, 480, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	t.AddClip(&clip);
+	t.Open();
+
+	const int64_t end = t.GetMaxFrame();
+	REQUIRE(end > 1);
+	REQUIRE(t.GetCache() != nullptr);
+	const int64_t count_before = t.GetCache()->Count();
+
+	std::shared_ptr<Frame> first = t.GetFrame(end + 25);
+	REQUIRE(first != nullptr);
+	CHECK(first->number == end + 25);
+	CHECK(t.GetCache()->Count() == count_before);
+
+	std::shared_ptr<Frame> second = t.GetFrame(end + 120);
+	REQUIRE(second != nullptr);
+	CHECK(second->number == end + 120);
+	CHECK(t.GetCache()->Count() == count_before);
 }

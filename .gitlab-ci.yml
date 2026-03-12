@@ -37,6 +37,7 @@ linux-builder:
     - cmake -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON -D"CMAKE_INSTALL_PREFIX:PATH=$CI_PROJECT_DIR/build/install-x64" -D"PYTHON_MODULE_PATH=python" -D"RUBY_MODULE_PATH=ruby" -DCMAKE_BUILD_TYPE:STRING=Release -DAPPIMAGE_BUILD=1 -DUSE_SYSTEM_JSONCPP=0 ../
     - make -j 4
     - make install
+    - ctest --output-on-failure -VV
     - make doc
     - ~/auto-update-docs "$CI_PROJECT_DIR/build" "$CI_COMMIT_REF_NAME"
     - PROJECT_VERSION=$(grep -E '^set\(PROJECT_VERSION_FULL "(.*)' ../CMakeLists.txt | awk '{print $2}' | tr -d '")')
@@ -66,7 +67,7 @@ mac-builder:
     - cmake -DCMAKE_EXE_LINKER_FLAGS="-stdlib=libc++" -DCMAKE_SHARED_LINKER_FLAGS="-stdlib=libc++" -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON -D"CMAKE_INSTALL_PREFIX:PATH=$CI_PROJECT_DIR/build/install-x64" -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang -D"CMAKE_BUILD_TYPE:STRING=Release" -D"CMAKE_OSX_SYSROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.14.sdk" -D"CMAKE_OSX_DEPLOYMENT_TARGET=10.12" -DCMAKE_PREFIX_PATH=/usr/local/qt5.15.X/qt5.15/5.15.0/clang_64/ -D"CMAKE_INSTALL_RPATH_USE_LINK_PATH=1" -D"ENABLE_RUBY=0" ../
     - make -j 9
     - make install
-    - make test
+    - ctest --output-on-failure -VV
     - PROJECT_VERSION=$(grep -E '^set\(PROJECT_VERSION_FULL "(.*)' ../CMakeLists.txt | awk '{print $2}' | tr -d '")')
     - PROJECT_SO=$(grep -E '^set\(PROJECT_SO_VERSION (.*)' ../CMakeLists.txt | awk '{print $2}' | tr -d ')')
     - echo -e "CI_PROJECT_NAME:$CI_PROJECT_NAME\nCI_COMMIT_REF_NAME:$CI_COMMIT_REF_NAME\nCI_COMMIT_SHA:$CI_COMMIT_SHA\nCI_JOB_ID:$CI_JOB_ID\nCI_PIPELINE_ID:$CI_PIPELINE_ID\nVERSION:$PROJECT_VERSION\nSO:$PROJECT_SO" > "install-x64/share/$CI_PROJECT_NAME.env"
@@ -91,7 +92,7 @@ windows-builder-x64:
     - $env:MSYSTEM = "MINGW64"
     - cmake -B build -S . -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON -D"babl_DIR=C:/msys64/mingw64" -D"CMAKE_INSTALL_PREFIX:PATH=$CI_PROJECT_DIR\build\install-x64" -D"OpenShotAudio_ROOT=$CI_PROJECT_DIR\build\install-x64" -D"PYTHON_MODULE_PATH=python" -D"RUBY_MODULE_PATH=ruby" -G "MinGW Makefiles" -D"CMAKE_BUILD_TYPE:STRING=Release"
     - cmake --build build -j 4
-    - cmake --build build --target coverage
+    - ctest --test-dir build --output-on-failure -VV
     - cmake --install build
     - $PROJECT_VERSION = (Select-String -Path "CMakeLists.txt" -Pattern '^set\(PROJECT_VERSION_FULL "(.*)\"' | %{$_.Matches.Groups[1].value})
     - $PROJECT_SO = (Select-String -Path "CMakeLists.txt" -Pattern '^set\(PROJECT_SO_VERSION (.*)\)' | %{$_.Matches.Groups[1].value})

@@ -14,9 +14,11 @@
 #include <memory>
 #include <set>
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <chrono>
 
 #include "openshot_catch.h"
 
@@ -27,6 +29,62 @@
 #include "Json.h"
 
 using namespace openshot;
+
+namespace {
+
+double SampleAverageLuma(const std::shared_ptr<Frame>& frame, int sample_grid = 4) {
+	const int width = frame->GetWidth();
+	const int height = frame->GetHeight();
+	if (width <= 0 || height <= 0) {
+		return 0.0;
+	}
+
+	int64_t luma_sum = 0;
+	int64_t sample_count = 0;
+	for (int y = 0; y < sample_grid; ++y) {
+		const int row = std::min(height - 1, (y * height) / sample_grid);
+		const unsigned char* pixels = frame->GetPixels(row);
+		for (int x = 0; x < sample_grid; ++x) {
+			const int col = std::min(width - 1, (x * width) / sample_grid);
+			const int pixel_index = col * 4;
+			luma_sum += (pixels[pixel_index] + pixels[pixel_index + 1] + pixels[pixel_index + 2]) / 3;
+			++sample_count;
+		}
+	}
+
+	return sample_count > 0
+		? static_cast<double>(luma_sum) / static_cast<double>(sample_count)
+		: 0.0;
+}
+
+struct HardwareDecoderSettingsGuard {
+	int decoder = 0;
+	int device = 0;
+
+	HardwareDecoderSettingsGuard()
+		: decoder(Settings::Instance()->HARDWARE_DECODER),
+		  device(Settings::Instance()->HW_DE_DEVICE_SET) {}
+
+	~HardwareDecoderSettingsGuard() {
+		Settings::Instance()->HARDWARE_DECODER = decoder;
+		Settings::Instance()->HW_DE_DEVICE_SET = device;
+	}
+};
+
+struct TemporaryFileGuard {
+	std::string path;
+
+	explicit TemporaryFileGuard(std::string temp_path)
+		: path(std::move(temp_path)) {}
+
+	~TemporaryFileGuard() {
+		if (!path.empty()) {
+			std::remove(path.c_str());
+		}
+	}
+};
+
+}
 
 TEST_CASE( "Invalid_Path", "[libopenshot][ffmpegreader]" )
 {
@@ -420,6 +478,182 @@ TEST_CASE( "Static_Image_JPG_Reports_Single_Image", "[libopenshot][ffmpegreader]
 
 	jpg_reader.Close();
 	std::remove(jpg_path.str().c_str());
+}
+
+TEST_CASE( "Attached_Picture_Audio_Does_Not_Stall_Early_Frames", "[libopenshot][ffmpegreader]" )
+{
+	// Build a temporary fixture with audio + attached cover art at runtime.
+	// This avoids adding another binary media file to the repository.
+	if (std::system("ffmpeg -hide_banner -version >/dev/null 2>&1") != 0) {
+		WARN("Skipping attached-picture test: ffmpeg executable not available");
+		return;
+	}
+
+	std::srand(static_cast<unsigned int>(std::time(nullptr)));
+	std::stringstream fixture_path;
+	fixture_path << "libopenshot-attached-art-test-" << std::rand() << ".m4a";
+
+	std::stringstream command;
+	command << "ffmpeg -y -hide_banner -loglevel error "
+	        << "-i \"" << TEST_MEDIA_PATH << "front.png\" "
+	        << "-f lavfi -i \"anullsrc=r=44100:cl=stereo\" "
+	        << "-t 2 "
+	        << "-map 1:a:0 -map 0:v:0 "
+	        << "-c:a aac -b:a 128k "
+	        << "-c:v mjpeg -disposition:v:0 attached_pic "
+	        << "\"" << fixture_path.str() << "\"";
+	const int command_result = std::system(command.str().c_str());
+	REQUIRE(command_result == 0);
+
+	FFmpegReader r(fixture_path.str(), DurationStrategy::VideoPreferred);
+	r.Open();
+
+	CHECK(r.info.has_video);
+	CHECK(r.info.has_audio);
+	CHECK(r.info.has_single_image);
+
+	auto f1 = r.GetFrame(1);
+	CHECK(f1->has_image_data);
+	CHECK(f1->GetAudioSamplesCount() > 0);
+
+	const auto frame2_start = std::chrono::steady_clock::now();
+	auto f2 = r.GetFrame(2);
+	const auto frame2_end = std::chrono::steady_clock::now();
+	const auto frame2_ms = std::chrono::duration_cast<std::chrono::milliseconds>(frame2_end - frame2_start).count();
+	CHECK(frame2_ms < 1500);
+	CHECK(f2->has_image_data);
+	CHECK(f2->GetAudioSamplesCount() > 0);
+
+	r.Close();
+	std::remove(fixture_path.str().c_str());
+}
+
+TEST_CASE( "HardwareDecodeSuccessful_IsFalse_WhenHardwareDecodeIsDisabled", "[libopenshot][ffmpegreader][hardware]" )
+{
+	HardwareDecoderSettingsGuard guard;
+	Settings::Instance()->HARDWARE_DECODER = 0;
+	Settings::Instance()->HW_DE_DEVICE_SET = 0;
+
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "sintel_trailer-720p.mp4";
+	FFmpegReader r(path.str(), DurationStrategy::VideoPreferred);
+	r.Open();
+
+	REQUIRE(r.info.has_video);
+	auto frame = r.GetFrame(1);
+	REQUIRE(frame->has_image_data);
+	CHECK_FALSE(r.HardwareDecodeSuccessful());
+
+	r.Close();
+}
+
+TEST_CASE( "VAAPI_H264_420_Reports_HardwareDecodeSuccess", "[libopenshot][ffmpegreader][hardware]" )
+{
+#if !defined(__linux__) || !USE_HW_ACCEL
+	WARN("Skipping hardware decode success test: requires Linux build with hardware decode support");
+	return;
+#else
+	if (std::system("ffmpeg -hide_banner -version >/dev/null 2>&1") != 0) {
+		WARN("Skipping hardware decode success test: ffmpeg executable not available");
+		return;
+	}
+	if (std::system("ffmpeg -hide_banner -hwaccels 2>/dev/null | grep -q '\\<vaapi\\>'") != 0) {
+		WARN("Skipping hardware decode success test: ffmpeg does not report VAAPI support");
+		return;
+	}
+	if (std::system("sh -c 'test -e /dev/dri/renderD128 -o -e /dev/dri/renderD129 -o -e /dev/dri/renderD130' >/dev/null 2>&1") != 0) {
+		WARN("Skipping hardware decode success test: no render node available under /dev/dri");
+		return;
+	}
+
+	std::srand(static_cast<unsigned int>(std::time(nullptr)));
+	std::stringstream fixture_path;
+	fixture_path << "libopenshot-vaapi-420-test-" << std::rand() << ".mp4";
+	TemporaryFileGuard fixture_cleanup(fixture_path.str());
+
+	std::stringstream command;
+	command << "ffmpeg -y -hide_banner -loglevel error "
+	        << "-f lavfi -i \"testsrc2=size=128x72:rate=30\" "
+	        << "-t 1 "
+	        << "-c:v libx264 "
+	        << "-pix_fmt yuv420p "
+	        << "-profile:v high "
+	        << "\"" << fixture_path.str() << "\"";
+	const int command_result = std::system(command.str().c_str());
+	REQUIRE(command_result == 0);
+
+	HardwareDecoderSettingsGuard hw_guard;
+	Settings::Instance()->HARDWARE_DECODER = 1;
+	Settings::Instance()->HW_DE_DEVICE_SET = 0;
+
+	FFmpegReader r(fixture_path.str(), DurationStrategy::VideoPreferred);
+	r.Open();
+
+	REQUIRE(r.info.has_video);
+	auto frame = r.GetFrame(1);
+	REQUIRE(frame->has_image_data);
+	CHECK(r.HardwareDecodeSuccessful());
+
+	r.Close();
+#endif
+}
+
+TEST_CASE( "VAAPI_H264_422_Does_Not_Return_Black_Frames", "[libopenshot][ffmpegreader][hardware]" )
+{
+#if !defined(__linux__) || !USE_HW_ACCEL
+	WARN("Skipping VAAPI regression test: requires Linux build with hardware decode support");
+	return;
+#else
+	if (std::system("ffmpeg -hide_banner -version >/dev/null 2>&1") != 0) {
+		WARN("Skipping VAAPI regression test: ffmpeg executable not available");
+		return;
+	}
+	if (std::system("ffmpeg -hide_banner -hwaccels 2>/dev/null | grep -q '\\<vaapi\\>'") != 0) {
+		WARN("Skipping VAAPI regression test: ffmpeg does not report VAAPI support");
+		return;
+	}
+	if (std::system("sh -c 'test -e /dev/dri/renderD128 -o -e /dev/dri/renderD129 -o -e /dev/dri/renderD130' >/dev/null 2>&1") != 0) {
+		WARN("Skipping VAAPI regression test: no render node available under /dev/dri");
+		return;
+	}
+
+	std::srand(static_cast<unsigned int>(std::time(nullptr)));
+	std::stringstream fixture_path;
+	fixture_path << "libopenshot-vaapi-422-test-" << std::rand() << ".mp4";
+	TemporaryFileGuard fixture_cleanup(fixture_path.str());
+
+	std::stringstream command;
+	command << "ffmpeg -y -hide_banner -loglevel error "
+	        << "-f lavfi -i \"testsrc2=size=128x72:rate=30\" "
+	        << "-t 1 "
+	        << "-c:v libx264 "
+	        << "-pix_fmt yuvj422p "
+	        << "-profile:v high422 "
+	        << "-color_range pc "
+	        << "\"" << fixture_path.str() << "\"";
+	const int command_result = std::system(command.str().c_str());
+	REQUIRE(command_result == 0);
+
+	HardwareDecoderSettingsGuard guard;
+	Settings::Instance()->HARDWARE_DECODER = 1;
+	Settings::Instance()->HW_DE_DEVICE_SET = 0;
+
+	FFmpegReader r(fixture_path.str(), DurationStrategy::VideoPreferred);
+	r.Open();
+
+	REQUIRE(r.info.has_video);
+	REQUIRE(r.info.video_length >= 3);
+
+	const std::array<int64_t, 3> frames_to_check = {1, r.info.video_length / 2, r.info.video_length};
+	for (const int64_t frame_number : frames_to_check) {
+		auto frame = r.GetFrame(frame_number);
+		REQUIRE(frame->has_image_data);
+		INFO("frame=" << frame_number << ", avg_luma=" << SampleAverageLuma(frame));
+		CHECK(SampleAverageLuma(frame) > 8.0);
+	}
+
+	r.Close();
+#endif
 }
 
 TEST_CASE( "verify parent Timeline", "[libopenshot][ffmpegreader]" )

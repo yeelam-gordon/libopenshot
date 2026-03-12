@@ -760,6 +760,43 @@ TEST_CASE( "composite_over_opaque_background_blend", "[libopenshot][clip][pr]" )
 	CHECK(center.blue()  == Approx(127).margin(12));
 }
 
+TEST_CASE( "cached_frame_not_mutated_by_background_compositing", "[libopenshot][clip][cache]" )
+{
+	// Source clip: solid red
+	openshot::CacheMemory cache;
+	auto src = std::make_shared<openshot::Frame>(1, 64, 64, "#000000", 0, 2);
+	src->AddColor(QColor(Qt::red));
+	cache.Add(src);
+
+	openshot::DummyReader dummy(openshot::Fraction(30,1), 64, 64, 44100, 2, 1.0, &cache);
+	dummy.Open();
+
+	openshot::Clip clip;
+	clip.Reader(&dummy);
+	clip.Open();
+	clip.display = openshot::FRAME_DISPLAY_NONE;
+	clip.alpha.AddPoint(1, 0.5); // semi-transparent source to reveal background
+
+	// First composite over blue background (expect purple-ish)
+	auto bg_blue = std::make_shared<openshot::Frame>(1, 64, 64, "#000000", 0, 2);
+	bg_blue->AddColor(QColor(Qt::blue));
+	auto out_blue = clip.GetFrame(bg_blue, 1);
+	QColor c1 = out_blue->GetImage()->pixelColor(32, 32);
+	CHECK(c1.red()   == Approx(127).margin(14));
+	CHECK(c1.green() == Approx(0).margin(8));
+	CHECK(c1.blue()  == Approx(127).margin(14));
+
+	// Second composite of same clip frame over green background should be yellow-ish.
+	// If cached frame was mutated by the first call, this will incorrectly remain purple-ish.
+	auto bg_green = std::make_shared<openshot::Frame>(1, 64, 64, "#000000", 0, 2);
+	bg_green->AddColor(QColor(Qt::green));
+	auto out_green = clip.GetFrame(bg_green, 1);
+	QColor c2 = out_green->GetImage()->pixelColor(32, 32);
+	CHECK(c2.red()   == Approx(127).margin(14));
+	CHECK(c2.green() == Approx(127).margin(14));
+	CHECK(c2.blue()  == Approx(0).margin(8));
+}
+
 TEST_CASE("all_composite_modes_simple_colors", "[libopenshot][clip][composite]")
 {
 	// Source clip: solid red

@@ -168,7 +168,8 @@ enum ChromaKeyMethod
     CHROMAKEY_CIE_LCH_H,    ///< Difference between CIE LCH(ab) hues
     CHROMAKEY_CIE_DISTANCE, ///< CIEDE2000 perceptual difference
     CHROMAKEY_YCBCR,        ///< YCbCr vector difference of CbCr
-    CHROMAKEY_LAST_METHOD = CHROMAKEY_YCBCR
+    CHROMAKEY_BASIC_SOFT,   ///< BASIC metric + optional halo feathering
+    CHROMAKEY_LAST_METHOD = CHROMAKEY_BASIC_SOFT
 };
 
 }  // namespace openshot

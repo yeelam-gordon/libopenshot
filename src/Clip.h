@@ -128,7 +128,9 @@ namespace openshot {
 		int64_t adjust_frame_number_minimum(int64_t frame_number);
 
 		/// Apply background image to the current clip image (i.e. flatten this image onto previous layer)
-		void apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_ptr<openshot::Frame> background_frame);
+		void apply_background(std::shared_ptr<openshot::Frame> frame,
+		                      std::shared_ptr<openshot::Frame> background_frame,
+		                      bool update_frame_image = true);
 
 		/// Apply effects to the source frame (if any)
 		void apply_effects(std::shared_ptr<openshot::Frame> frame, int64_t timeline_frame_number, TimelineInfoStruct* options, bool before_keyframes);
