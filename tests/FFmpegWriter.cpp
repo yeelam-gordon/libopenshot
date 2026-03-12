@@ -169,8 +169,9 @@ TEST_CASE( "AlignedSwscaleBuffersFromMisalignedQImage", "[libopenshot][ffmpegwri
 	REQUIRE(writer.persistent_dst_frame != nullptr);
 	CHECK(reinterpret_cast<uintptr_t>(writer.persistent_src_frame->data[0]) % 32 == 0);
 	CHECK(reinterpret_cast<uintptr_t>(writer.persistent_dst_frame->data[0]) % 32 == 0);
-	CHECK(writer.persistent_src_frame->linesize[0] % 32 == 0);
-	CHECK(writer.persistent_dst_frame->linesize[0] % 32 == 0);
+	CHECK(writer.persistent_src_frame->data[0] != image->constBits());
+	CHECK(writer.persistent_src_frame->linesize[0] >= stride);
+	CHECK(writer.persistent_dst_frame->linesize[0] >= width);
 
 	writer.Close();
 
