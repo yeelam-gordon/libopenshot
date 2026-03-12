@@ -971,8 +971,20 @@ void FFmpegWriter::Close() {
 		close_audio(oc, audio_st);
 
 	// Remove single software scaler
-	if (img_convert_ctx)
+	if (img_convert_ctx) {
 		sws_freeContext(img_convert_ctx);
+		img_convert_ctx = NULL;
+	}
+
+	if (persistent_src_frame) {
+		av_freep(&persistent_src_frame->data[0]);
+		AV_FREE_FRAME(&persistent_src_frame);
+	}
+
+	if (persistent_dst_frame) {
+		av_freep(&persistent_dst_frame->data[0]);
+		AV_FREE_FRAME(&persistent_dst_frame);
+	}
 
 	if (!(oc->oformat->flags & AVFMT_NOFILE)) {
 		/* close the output file */
@@ -2062,26 +2074,59 @@ AVFrame *FFmpegWriter::allocate_avframe(PixelFormat pix_fmt, int width, int heig
 // process video frame
 void FFmpegWriter::process_video_packet(std::shared_ptr<Frame> frame) {
 	// Source dimensions (RGBA)
-	int src_w = frame->GetWidth();
-	int src_h = frame->GetHeight();
+	auto source_image = frame->GetImage();
+	int src_w = source_image->width();
+	int src_h = source_image->height();
 
 	// Skip empty frames (1×1)
 	if (src_w == 1 && src_h == 1)
 		return;
 
-	// Point persistent_src_frame->data to RGBA pixels
-	const uchar* pixels = frame->GetPixels();
-	if (!persistent_src_frame) {
+	// Keep swscale source data in an FFmpeg-aligned RGBA buffer.
+	if (!persistent_src_frame ||
+		persistent_src_frame->width != src_w ||
+		persistent_src_frame->height != src_h) {
+		if (persistent_src_frame) {
+			av_freep(&persistent_src_frame->data[0]);
+			AV_FREE_FRAME(&persistent_src_frame);
+		}
+
 		persistent_src_frame = av_frame_alloc();
 		if (!persistent_src_frame)
 			throw OutOfMemory("Could not allocate persistent_src_frame", path);
-		persistent_src_frame->format      = AV_PIX_FMT_RGBA;
-		persistent_src_frame->width       = src_w;
-		persistent_src_frame->height      = src_h;
-		persistent_src_frame->linesize[0] = src_w * 4;
+
+		persistent_src_frame->format = AV_PIX_FMT_RGBA;
+		persistent_src_frame->width = src_w;
+		persistent_src_frame->height = src_h;
+		if (av_image_alloc(
+				persistent_src_frame->data,
+				persistent_src_frame->linesize,
+				src_w,
+				src_h,
+				AV_PIX_FMT_RGBA,
+				32
+			) < 0) {
+			AV_FREE_FRAME(&persistent_src_frame);
+			throw OutOfMemory("Could not allocate persistent_src_frame image buffer", path);
+		}
 	}
-	persistent_src_frame->data[0] = const_cast<uint8_t*>(
-		reinterpret_cast<const uint8_t*>(pixels)
+
+	uint8_t *qt_src_data[4] = {
+		const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(source_image->constBits())),
+		nullptr, nullptr, nullptr
+	};
+	int qt_src_linesize[4] = {
+		source_image->bytesPerLine(),
+		0, 0, 0
+	};
+	av_image_copy(
+		persistent_src_frame->data,
+		persistent_src_frame->linesize,
+		(const uint8_t * const *) qt_src_data,
+		qt_src_linesize,
+		AV_PIX_FMT_RGBA,
+		src_w,
+		src_h
 	);
 
 	// Prepare persistent_dst_frame + buffer on first use
@@ -2101,31 +2146,21 @@ void FFmpegWriter::process_video_packet(std::shared_ptr<Frame> frame) {
 		persistent_dst_frame->width  = info.width;
 		persistent_dst_frame->height = info.height;
 
-		persistent_dst_size = av_image_get_buffer_size(
-			dst_fmt, info.width, info.height, 1
-		);
-		if (persistent_dst_size < 0)
-			throw ErrorEncodingVideo("Invalid destination image size", -1);
-
-		persistent_dst_buffer = static_cast<uint8_t*>(
-			av_malloc(persistent_dst_size)
-		);
-		if (!persistent_dst_buffer)
-			throw OutOfMemory("Could not allocate persistent_dst_buffer", path);
-
-		av_image_fill_arrays(
+		if (av_image_alloc(
 			persistent_dst_frame->data,
 			persistent_dst_frame->linesize,
-			persistent_dst_buffer,
-			dst_fmt,
 			info.width,
 			info.height,
-			1
-		);
+			dst_fmt,
+			32
+		) < 0) {
+			AV_FREE_FRAME(&persistent_dst_frame);
+			throw OutOfMemory("Could not allocate persistent_dst_frame image buffer", path);
+		}
 	}
 
-	// Initialize SwsContext (RGBA → dst_fmt) on first use
-	if (!img_convert_ctx) {
+	// Initialize or update SwsContext (RGBA → dst_fmt).
+	{
 		int flags = SWS_FAST_BILINEAR;
 		if (openshot::Settings::Instance()->HIGH_QUALITY_SCALING) {
 			flags = SWS_BICUBIC;
@@ -2136,7 +2171,8 @@ void FFmpegWriter::process_video_packet(std::shared_ptr<Frame> frame) {
 			dst_fmt = AV_PIX_FMT_NV12;
 		}
 #endif
-		img_convert_ctx = sws_getContext(
+		img_convert_ctx = sws_getCachedContext(
+			img_convert_ctx,
 			src_w, src_h, AV_PIX_FMT_RGBA,
 			info.width, info.height, dst_fmt,
 			flags, NULL, NULL, NULL
@@ -2174,11 +2210,15 @@ void FFmpegWriter::process_video_packet(std::shared_ptr<Frame> frame) {
 	if (!new_frame)
 		throw OutOfMemory("Could not allocate new_frame via allocate_avframe", path);
 
-	// Copy persistent_dst_buffer → new_frame buffer
-	memcpy(
-		new_frame->data[0],
-		persistent_dst_buffer,
-		static_cast<size_t>(bytes_final)
+	// Copy the aligned staging frame into the encoder-owned frame layout.
+	av_image_copy(
+		new_frame->data,
+		new_frame->linesize,
+		(const uint8_t * const *) persistent_dst_frame->data,
+		persistent_dst_frame->linesize,
+		dst_fmt,
+		info.width,
+		info.height
 	);
 
 	// Queue the deep‐copied frame for encoding
