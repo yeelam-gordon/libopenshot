@@ -2111,8 +2111,8 @@ void FFmpegWriter::process_video_packet(std::shared_ptr<Frame> frame) {
 		}
 	}
 
-	uint8_t *qt_src_data[4] = {
-		const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(source_image->constBits())),
+	const uint8_t *qt_src_data[4] = {
+		reinterpret_cast<const uint8_t*>(source_image->constBits()),
 		nullptr, nullptr, nullptr
 	};
 	int qt_src_linesize[4] = {
@@ -2122,7 +2122,7 @@ void FFmpegWriter::process_video_packet(std::shared_ptr<Frame> frame) {
 	av_image_copy(
 		persistent_src_frame->data,
 		persistent_src_frame->linesize,
-		(const uint8_t * const *) qt_src_data,
+		qt_src_data,
 		qt_src_linesize,
 		AV_PIX_FMT_RGBA,
 		src_w,
@@ -2211,10 +2211,16 @@ void FFmpegWriter::process_video_packet(std::shared_ptr<Frame> frame) {
 		throw OutOfMemory("Could not allocate new_frame via allocate_avframe", path);
 
 	// Copy the aligned staging frame into the encoder-owned frame layout.
+	const uint8_t *dst_src_data[4] = {
+		persistent_dst_frame->data[0],
+		persistent_dst_frame->data[1],
+		persistent_dst_frame->data[2],
+		persistent_dst_frame->data[3]
+	};
 	av_image_copy(
 		new_frame->data,
 		new_frame->linesize,
-		(const uint8_t * const *) persistent_dst_frame->data,
+		dst_src_data,
 		persistent_dst_frame->linesize,
 		dst_fmt,
 		info.width,
