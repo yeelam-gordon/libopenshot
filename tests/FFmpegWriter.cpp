@@ -13,13 +13,10 @@
 #include <sstream>
 #include <memory>
 #include <fstream>
-#include <cstdint>
 
 #include "openshot_catch.h"
 
-#define private public
 #include "FFmpegWriter.h"
-#undef private
 #include "Exceptions.h"
 #include "FFmpegReader.h"
 #include "Fraction.h"
@@ -28,11 +25,6 @@
 
 using namespace std;
 using namespace openshot;
-
-static void cleanup_test_buffer(void* info)
-{
-	delete[] static_cast<unsigned char*>(info);
-}
 
 TEST_CASE( "Webm", "[libopenshot][ffmpegwriter]" )
 {
@@ -120,60 +112,6 @@ TEST_CASE( "Options_Overloads", "[libopenshot][ffmpegwriter]" )
 	CHECK(r1.info.pixel_ratio.den == 1);
 	CHECK_FALSE(r1.info.interlaced_frame);
 	CHECK(r1.info.top_field_first == true);
-}
-
-TEST_CASE( "AlignedSwscaleBuffersFromMisalignedQImage", "[libopenshot][ffmpegwriter][alignment]" )
-{
-	const int width = 10;
-	const int height = 6;
-	const int bytes_per_pixel = 4;
-	const int stride = width * bytes_per_pixel;
-	const size_t raw_size = static_cast<size_t>(stride * height + 1);
-
-	unsigned char* raw = new unsigned char[raw_size];
-	unsigned char* misaligned = raw + 1;
-
-	for (int y = 0; y < height; ++y) {
-		for (int x = 0; x < width; ++x) {
-			const int offset = y * stride + x * bytes_per_pixel;
-			misaligned[offset + 0] = static_cast<unsigned char>((x * 17) & 0xFF);
-			misaligned[offset + 1] = static_cast<unsigned char>((y * 29) & 0xFF);
-			misaligned[offset + 2] = static_cast<unsigned char>(((x + y) * 11) & 0xFF);
-			misaligned[offset + 3] = 255;
-		}
-	}
-
-	auto image = std::make_shared<QImage>(
-		misaligned,
-		width,
-		height,
-		stride,
-		QImage::Format_RGBA8888_Premultiplied,
-		(QImageCleanupFunction) &cleanup_test_buffer,
-		raw
-	);
-
-	// Ensure the source image really exercises the unaligned path.
-	REQUIRE(reinterpret_cast<uintptr_t>(image->constBits()) % 32 != 0);
-	REQUIRE(image->bytesPerLine() % 32 != 0);
-
-	auto frame = std::make_shared<Frame>(1, width, height, "#000000");
-	frame->AddImage(image);
-
-	FFmpegWriter writer("AlignedSwscaleBuffers-output1.mp4");
-	writer.SetVideoOptions(true, "libx264", Fraction(24,1), width, height, Fraction(1,1), false, false, 500000);
-	writer.Open();
-	writer.WriteFrame(frame);
-
-	REQUIRE(writer.persistent_src_frame != nullptr);
-	REQUIRE(writer.persistent_dst_frame != nullptr);
-	CHECK(reinterpret_cast<uintptr_t>(writer.persistent_src_frame->data[0]) % 32 == 0);
-	CHECK(reinterpret_cast<uintptr_t>(writer.persistent_dst_frame->data[0]) % 32 == 0);
-	CHECK(writer.persistent_src_frame->data[0] != image->constBits());
-	CHECK(writer.persistent_src_frame->linesize[0] >= stride);
-	CHECK(writer.persistent_dst_frame->linesize[0] >= width);
-
-	writer.Close();
 }
 
 

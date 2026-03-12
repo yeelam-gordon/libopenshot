@@ -137,6 +137,8 @@ namespace openshot {
 
 		AVFrame *persistent_src_frame = nullptr;
 		AVFrame *persistent_dst_frame = nullptr;
+		uint8_t *persistent_dst_buffer = nullptr;
+		int persistent_dst_size = 0;
 
 		int audio_outbuf_size;
 		int audio_input_frame_size;
