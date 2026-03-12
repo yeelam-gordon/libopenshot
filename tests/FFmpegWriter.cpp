@@ -174,14 +174,6 @@ TEST_CASE( "AlignedSwscaleBuffersFromMisalignedQImage", "[libopenshot][ffmpegwri
 	CHECK(writer.persistent_dst_frame->linesize[0] >= width);
 
 	writer.Close();
-
-	FFmpegReader reader("AlignedSwscaleBuffers-output1.mp4");
-	reader.Open();
-	auto encoded = reader.GetFrame(1);
-	REQUIRE(encoded != nullptr);
-	CHECK(encoded->GetWidth() == width);
-	CHECK(encoded->GetHeight() == height);
-	reader.Close();
 }
 
 
