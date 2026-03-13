@@ -128,6 +128,30 @@ inline static bool ffmpeg_has_alpha(PixelFormat pix_fmt) {
     return bool(fmt_desc->flags & AV_PIX_FMT_FLAG_ALPHA);
 }
 
+#if HAVE_CH_LAYOUT
+inline static bool ffmpeg_has_usable_channel_layout(const AVChannelLayout *layout) {
+    if (!layout || layout->nb_channels <= 0 || !av_channel_layout_check(layout)) {
+        return false;
+    }
+
+    if (layout->order == AV_CHANNEL_ORDER_UNSPEC) {
+        return false;
+    }
+
+    if (layout->order == AV_CHANNEL_ORDER_NATIVE && layout->u.mask == 0) {
+        return false;
+    }
+
+    return true;
+}
+
+inline static AVChannelLayout ffmpeg_default_channel_layout(int channels) {
+    AVChannelLayout layout = {};
+    av_channel_layout_default(&layout, channels);
+    return layout;
+}
+#endif
+
 // FFmpeg's libavutil/common.h defines an RSHIFT incompatible with Ruby's
 // definition in ruby/config.h, so we move it to FF_RSHIFT
 #ifdef RSHIFT

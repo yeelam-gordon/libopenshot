@@ -934,8 +934,9 @@ void FFmpegReader::UpdateAudioInfo() {
 	// Set default audio channel layout (if needed)
 #if HAVE_CH_LAYOUT
 	if (codec_channels > 0 &&
-		!av_channel_layout_check(&(AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout)))
-		AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout = (AVChannelLayout) AV_CHANNEL_LAYOUT_STEREO;
+		!ffmpeg_has_usable_channel_layout(&(AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout))) {
+		AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout = ffmpeg_default_channel_layout(codec_channels);
+	}
 #else
 	if (codec_channels > 0 && AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channel_layout == 0)
 		AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channel_layout = av_get_default_channel_layout(AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channels);
@@ -2204,20 +2205,24 @@ void FFmpegReader::ProcessAudioPacket(int64_t requested_frame) {
 	if (!avr) {
 		avr = SWR_ALLOC();
 #if HAVE_CH_LAYOUT
-	av_opt_set_chlayout(avr, "in_chlayout", &AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout, 0);
-	av_opt_set_chlayout(avr, "out_chlayout", &AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout, 0);
+		AVChannelLayout codec_layout = AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout;
+		if (!ffmpeg_has_usable_channel_layout(&codec_layout)) {
+			codec_layout = ffmpeg_default_channel_layout(info.channels);
+		}
+		av_opt_set_chlayout(avr, "in_chlayout", &codec_layout, 0);
+		av_opt_set_chlayout(avr, "out_chlayout", &codec_layout, 0);
 #else
-	av_opt_set_int(avr, "in_channel_layout", AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channel_layout, 0);
-	av_opt_set_int(avr, "out_channel_layout", AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channel_layout, 0);
-	av_opt_set_int(avr, "in_channels", info.channels, 0);
-	av_opt_set_int(avr, "out_channels", info.channels, 0);
+		av_opt_set_int(avr, "in_channel_layout", AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channel_layout, 0);
+		av_opt_set_int(avr, "out_channel_layout", AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channel_layout, 0);
+		av_opt_set_int(avr, "in_channels", info.channels, 0);
+		av_opt_set_int(avr, "out_channels", info.channels, 0);
 #endif
-	av_opt_set_int(avr, "in_sample_fmt", AV_GET_SAMPLE_FORMAT(aStream, aCodecCtx), 0);
-	av_opt_set_int(avr, "out_sample_fmt", AV_SAMPLE_FMT_FLTP, 0);
-	av_opt_set_int(avr, "in_sample_rate", info.sample_rate, 0);
-	av_opt_set_int(avr, "out_sample_rate", info.sample_rate, 0);
-	SWR_INIT(avr);
-	avr_ctx = avr;
+		av_opt_set_int(avr, "in_sample_fmt", AV_GET_SAMPLE_FORMAT(aStream, aCodecCtx), 0);
+		av_opt_set_int(avr, "out_sample_fmt", AV_SAMPLE_FMT_FLTP, 0);
+		av_opt_set_int(avr, "in_sample_rate", info.sample_rate, 0);
+		av_opt_set_int(avr, "out_sample_rate", info.sample_rate, 0);
+		SWR_INIT(avr);
+		avr_ctx = avr;
 	}
 
 	// Convert audio samples

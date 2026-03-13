@@ -936,14 +936,27 @@ void FrameMapper::ResampleMappedAudio(std::shared_ptr<Frame> frame, int64_t orig
 	// setup resample context
 	if (!avr) {
 		avr = SWR_ALLOC();
+#if HAVE_CH_LAYOUT
+		AVChannelLayout in_chlayout = ffmpeg_default_channel_layout(channels_in_frame);
+		AVChannelLayout out_chlayout = ffmpeg_default_channel_layout(info.channels);
+		if (channel_layout_in_frame > 0) {
+			av_channel_layout_from_mask(&in_chlayout, channel_layout_in_frame);
+		}
+		if (info.channel_layout > 0) {
+			av_channel_layout_from_mask(&out_chlayout, info.channel_layout);
+		}
+		av_opt_set_chlayout(avr, "in_chlayout", &in_chlayout, 0);
+		av_opt_set_chlayout(avr, "out_chlayout", &out_chlayout, 0);
+#else
 		av_opt_set_int(avr, "in_channel_layout",  channel_layout_in_frame, 0);
 		av_opt_set_int(avr, "out_channel_layout", info.channel_layout,	 0);
+		av_opt_set_int(avr, "in_channels",		channels_in_frame,	   0);
+		av_opt_set_int(avr, "out_channels",	   info.channels,		   0);
+#endif
 		av_opt_set_int(avr, "in_sample_fmt",	  AV_SAMPLE_FMT_S16,	   0);
 		av_opt_set_int(avr, "out_sample_fmt",	 AV_SAMPLE_FMT_S16,	   0);
 		av_opt_set_int(avr, "in_sample_rate",	 sample_rate_in_frame,	0);
 		av_opt_set_int(avr, "out_sample_rate",	info.sample_rate,		0);
-		av_opt_set_int(avr, "in_channels",		channels_in_frame,	   0);
-		av_opt_set_int(avr, "out_channels",	   info.channels,		   0);
 		SWR_INIT(avr);
 	}
 
