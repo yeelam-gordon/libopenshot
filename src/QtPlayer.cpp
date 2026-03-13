@@ -165,10 +165,15 @@ namespace openshot
 
     void QtPlayer::Seek(int64_t new_frame)
     {
+        Seek(new_frame, true);
+    }
+
+    void QtPlayer::Seek(int64_t new_frame, bool start_preroll)
+    {
     	// Check for seek
     	if (reader && threads_started && new_frame > 0) {
     		// Notify cache thread that seek has occurred
-    		p->videoCache->Seek(new_frame, true);
+    		p->videoCache->Seek(new_frame, start_preroll);
 
             // Notify audio thread that seek has occurred
             p->audioPlayback->Seek(new_frame);

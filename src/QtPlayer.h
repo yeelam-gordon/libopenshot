@@ -78,6 +78,9 @@ namespace openshot
   /// Seek to a specific frame in the player
 	void Seek(int64_t new_frame);
 
+  /// Seek to a specific frame, optionally triggering preroll cache rebuild.
+	void Seek(int64_t new_frame, bool start_preroll);
+
 	/// Set the source URL/path of this player (which will create an internal Reader)
 	void SetSource(const std::string &source);
 

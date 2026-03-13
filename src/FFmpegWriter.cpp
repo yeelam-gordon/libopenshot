@@ -79,7 +79,7 @@ FFmpegWriter::FFmpegWriter(const std::string& path) :
 		initial_audio_input_frame_size(0), img_convert_ctx(NULL),
 		video_codec_ctx(NULL), audio_codec_ctx(NULL), is_writing(false), video_timestamp(0), audio_timestamp(0),
 		original_sample_rate(0), original_channels(0), avr(NULL), avr_planar(NULL), is_open(false), prepare_streams(false),
-		write_header(false), write_trailer(false), audio_encoder_buffer_size(0), audio_encoder_buffer(NULL) {
+		write_header(false), write_trailer(false), allow_b_frames(false), audio_encoder_buffer_size(0), audio_encoder_buffer(NULL) {
 
 	// Disable audio & video (so they can be independently enabled)
 	info.has_audio = false;
@@ -368,7 +368,7 @@ void FFmpegWriter::SetOption(StreamType stream, std::string name, std::string va
 	// Was option found?
 	if (option || (name == "g" || name == "qmin" || name == "qmax" || name == "max_b_frames" || name == "mb_decision" ||
 				   name == "level" || name == "profile" || name == "slices" || name == "rc_min_rate" || name == "rc_max_rate" ||
-				   name == "rc_buffer_size" || name == "crf" || name == "cqp" || name == "qp")) {
+				   name == "rc_buffer_size" || name == "crf" || name == "cqp" || name == "qp" || name == "allow_b_frames")) {
 		// Check for specific named options
 		if (name == "g")
 			// Set gop_size
@@ -385,6 +385,11 @@ void FFmpegWriter::SetOption(StreamType stream, std::string name, std::string va
 		else if (name == "max_b_frames")
 			// Maximum number of B-frames between non-B-frames
 			convert >> c->max_b_frames;
+
+		else if (name == "allow_b_frames")
+			// Preserve configured B-frames for codecs that support them.
+			// Values: 1/true/yes/on to enable, everything else disables.
+			allow_b_frames = (value == "1" || value == "true" || value == "yes" || value == "on");
 
 		else if (name == "mb_decision")
 			// Macroblock decision mode
@@ -1468,8 +1473,12 @@ void FFmpegWriter::open_video(AVFormatContext *oc, AVStream *st) {
 	if (!codec)
 		throw InvalidCodec("Could not find codec", path);
 
-	/* Force max_b_frames to 0 in some cases (i.e. for mjpeg image sequences */
-	if (video_codec_ctx->max_b_frames && video_codec_ctx->codec_id != AV_CODEC_ID_MPEG4 && video_codec_ctx->codec_id != AV_CODEC_ID_MPEG1VIDEO && video_codec_ctx->codec_id != AV_CODEC_ID_MPEG2VIDEO)
+	/* Legacy behavior: force max_b_frames to 0 for many codecs.
+	 * This can be disabled via SetOption(VIDEO_STREAM, "allow_b_frames", "1"). */
+	if (!allow_b_frames && video_codec_ctx->max_b_frames &&
+		video_codec_ctx->codec_id != AV_CODEC_ID_MPEG4 &&
+		video_codec_ctx->codec_id != AV_CODEC_ID_MPEG1VIDEO &&
+		video_codec_ctx->codec_id != AV_CODEC_ID_MPEG2VIDEO)
 		video_codec_ctx->max_b_frames = 0;
 
 	// Init options

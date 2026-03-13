@@ -124,6 +124,7 @@ namespace openshot {
 		bool prepare_streams;
 		bool write_header;
 		bool write_trailer;
+		bool allow_b_frames;
 
 		AVFormatContext* oc;
 		AVStream *audio_st, *video_st;

@@ -18,6 +18,7 @@
 #include <AppConfig.h>
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <memory>
 
@@ -61,7 +62,7 @@ namespace openshot
         /// @return The current speed (1=normal, 2=fast, –1=rewind, etc.)
         int getSpeed() const { return speed.load(); }
 
-        /// Seek to a specific frame (no preroll).
+        /// Backward-compatible alias for playback position updates (no seek side effects).
         void Seek(int64_t new_position);
 
         /**
@@ -70,6 +71,9 @@ namespace openshot
          * @param start_preroll If true, forces cache to rebuild around new_position.
          */
         void Seek(int64_t new_position, bool start_preroll);
+
+        /// Update playback position without triggering seek behavior or cache invalidation.
+        void NotifyPlaybackPosition(int64_t new_position);
 
         /// Start the cache thread at high priority. Returns true if it’s actually running.
         bool StartThread();
@@ -81,7 +85,7 @@ namespace openshot
          * @brief Attach a ReaderBase (e.g. Timeline, FFmpegReader) and begin caching.
          * @param new_reader
          */
-        void Reader(ReaderBase* new_reader) { reader = new_reader; Play(); }
+        void Reader(ReaderBase* new_reader);
 
     protected:
         /// Thread entry point: loops until threadShouldExit() is true.
@@ -124,6 +128,12 @@ namespace openshot
 
         /// @brief Compute preroll frame count from settings.
         int64_t computePrerollFrames(const Settings* settings) const;
+
+        /// @brief Resolve timeline end frame from reader/timeline metadata.
+        int64_t resolveTimelineEnd() const;
+
+        /// @brief Clamp frame index to [1, timeline_end] when timeline_end is valid.
+        int64_t clampToTimelineRange(int64_t frame, int64_t timeline_end) const;
 
         /**
          * @brief When paused and playhead is outside current cache, clear all frames.
@@ -171,7 +181,8 @@ namespace openshot
                             int64_t window_begin,
                             int64_t window_end,
                             int dir,
-                            ReaderBase* reader);
+                            ReaderBase* reader,
+                            int64_t max_frames_to_fetch = -1);
 
         //---------- Internal state ----------
 
@@ -182,6 +193,8 @@ namespace openshot
         std::atomic<int> last_dir;         ///< Last direction sign (+1 forward, –1 backward).
         std::atomic<bool> userSeeked;      ///< True if Seek(..., true) was called (forces a cache reset).
         std::atomic<bool> preroll_on_next_fill; ///< True if next cache rebuild should include preroll offset.
+        std::atomic<bool> clear_cache_on_next_fill; ///< True if next cache loop should clear existing cache ranges.
+        std::atomic<bool> scrub_active;    ///< True while user is dragging/scrubbing the playhead.
 
         std::atomic<int64_t> requested_display_frame; ///< Frame index the user requested.
         int64_t current_display_frame;   ///< Currently displayed frame (unused here, reserved).
@@ -192,6 +205,8 @@ namespace openshot
 
         ReaderBase* reader;              ///< The source reader (e.g., Timeline, FFmpegReader).
         bool force_directional_cache;    ///< (Reserved for future use).
+        uint64_t seen_timeline_cache_epoch; ///< Last observed Timeline cache invalidation epoch.
+        bool timeline_cache_epoch_initialized; ///< True once an initial epoch snapshot has been taken.
 
         std::atomic<int64_t> last_cached_index;       ///< Index of the most recently cached frame.
         mutable std::mutex seek_state_mutex;          ///< Protects coherent seek state updates/consumption.

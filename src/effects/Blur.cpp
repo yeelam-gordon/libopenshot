@@ -16,7 +16,8 @@
 using namespace openshot;
 
 /// Blank constructor, useful when using Json to load the effect properties
-Blur::Blur() : horizontal_radius(6.0), vertical_radius(6.0), sigma(3.0), iterations(3.0) {
+Blur::Blur() : horizontal_radius(6.0), vertical_radius(6.0), sigma(3.0), iterations(3.0),
+	mask_mode(BLUR_MASK_POST_BLEND) {
 	// Init effect properties
 	init_effect_details();
 }
@@ -24,7 +25,7 @@ Blur::Blur() : horizontal_radius(6.0), vertical_radius(6.0), sigma(3.0), iterati
 // Default constructor
 Blur::Blur(Keyframe new_horizontal_radius, Keyframe new_vertical_radius, Keyframe new_sigma, Keyframe new_iterations) :
 		horizontal_radius(new_horizontal_radius), vertical_radius(new_vertical_radius),
-		sigma(new_sigma), iterations(new_iterations)
+		sigma(new_sigma), iterations(new_iterations), mask_mode(BLUR_MASK_POST_BLEND)
 {
 	// Init effect properties
 	init_effect_details();
@@ -56,6 +57,7 @@ std::shared_ptr<openshot::Frame> Blur::GetFrame(std::shared_ptr<openshot::Frame>
 	int vertical_radius_value = vertical_radius.GetValue(frame_number);
 	float sigma_value = sigma.GetValue(frame_number);
 	int iteration_value = iterations.GetInt(frame_number);
+	(void) sigma_value;
 
 	int w = frame_image->width();
 	int h = frame_image->height();
@@ -88,6 +90,45 @@ std::shared_ptr<openshot::Frame> Blur::GetFrame(std::shared_ptr<openshot::Frame>
 
 	// return the modified frame
 	return frame;
+}
+
+bool Blur::UseCustomMaskBlend(int64_t frame_number) const {
+	(void) frame_number;
+	return mask_mode == BLUR_MASK_DRIVE_AMOUNT;
+}
+
+void Blur::ApplyCustomMaskBlend(std::shared_ptr<QImage> original_image, std::shared_ptr<QImage> effected_image,
+								std::shared_ptr<QImage> mask_image, int64_t frame_number) const {
+	(void) frame_number;
+	if (!original_image || !effected_image || !mask_image)
+		return;
+	if (original_image->size() != effected_image->size() || effected_image->size() != mask_image->size())
+		return;
+
+	unsigned char* original_pixels = reinterpret_cast<unsigned char*>(original_image->bits());
+	unsigned char* effected_pixels = reinterpret_cast<unsigned char*>(effected_image->bits());
+	unsigned char* mask_pixels = reinterpret_cast<unsigned char*>(mask_image->bits());
+	const int pixel_count = effected_image->width() * effected_image->height();
+
+	#pragma omp parallel for schedule(static)
+	for (int i = 0; i < pixel_count; ++i) {
+		const int idx = i * 4;
+		float factor = static_cast<float>(qGray(mask_pixels[idx], mask_pixels[idx + 1], mask_pixels[idx + 2])) / 255.0f;
+		if (mask_invert)
+			factor = 1.0f - factor;
+		// Use a non-linear response curve for custom blur drive mode.
+		factor = factor * factor;
+		const float inverse = 1.0f - factor;
+
+		// Drive blur amount with the grayscale mask while preserving source alpha.
+		effected_pixels[idx] = static_cast<unsigned char>(
+			(original_pixels[idx] * inverse) + (effected_pixels[idx] * factor));
+		effected_pixels[idx + 1] = static_cast<unsigned char>(
+			(original_pixels[idx + 1] * inverse) + (effected_pixels[idx + 1] * factor));
+		effected_pixels[idx + 2] = static_cast<unsigned char>(
+			(original_pixels[idx + 2] * inverse) + (effected_pixels[idx + 2] * factor));
+		effected_pixels[idx + 3] = original_pixels[idx + 3];
+	}
 }
 
 // Credit: http://blog.ivank.net/fastest-gaussian-blur.html (MIT License)
@@ -168,6 +209,7 @@ Json::Value Blur::JsonValue() const {
 	root["vertical_radius"] = vertical_radius.JsonValue();
 	root["sigma"] = sigma.JsonValue();
 	root["iterations"] = iterations.JsonValue();
+	root["mask_mode"] = mask_mode;
 
 	// return JsonValue
 	return root;
@@ -205,6 +247,8 @@ void Blur::SetJsonValue(const Json::Value root) {
 		sigma.SetJsonValue(root["sigma"]);
 	if (!root["iterations"].isNull())
 		iterations.SetJsonValue(root["iterations"]);
+	if (!root["mask_mode"].isNull())
+		mask_mode = root["mask_mode"].asInt();
 }
 
 // Get all properties for a specific frame
@@ -218,6 +262,9 @@ std::string Blur::PropertiesJSON(int64_t requested_frame) const {
 	root["vertical_radius"] = add_property_json("Vertical Radius", vertical_radius.GetValue(requested_frame), "float", "", &vertical_radius, 0, 100, false, requested_frame);
 	root["sigma"] = add_property_json("Sigma", sigma.GetValue(requested_frame), "float", "", &sigma, 0, 100, false, requested_frame);
 	root["iterations"] = add_property_json("Iterations", iterations.GetValue(requested_frame), "float", "", &iterations, 0, 100, false, requested_frame);
+	root["mask_mode"] = add_property_json("Mask Mode", mask_mode, "int", "", NULL, 0, 1, false, requested_frame);
+	root["mask_mode"]["choices"].append(add_property_choice_json("Limit to Mask", BLUR_MASK_POST_BLEND, mask_mode));
+	root["mask_mode"]["choices"].append(add_property_choice_json("Vary Strength", BLUR_MASK_DRIVE_AMOUNT, mask_mode));
 
 	// Return formatted string
 	return root.toStyledString();

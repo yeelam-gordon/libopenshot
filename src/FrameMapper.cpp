@@ -800,13 +800,6 @@ void FrameMapper::SetJsonValue(const Json::Value root) {
 
 	// Set parent data
 	ReaderBase::SetJsonValue(root);
-
-	// Re-Open path, and re-init everything (if needed)
-	if (reader) {
-
-		Close();
-		Open();
-	}
 }
 
 // Change frame rate or audio mapping details
