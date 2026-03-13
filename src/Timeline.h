@@ -18,6 +18,7 @@
 #include <set>
 #include <atomic>
 #include <cstdint>
+#include <utility>
 
 #include "TimelineBase.h"
 #include "ReaderBase.h"
@@ -172,6 +173,9 @@ namespace openshot {
 
 		/// Process a new layer of video or audio
 		void add_layer(std::shared_ptr<openshot::Frame> new_frame, openshot::Clip* source_clip, int64_t clip_frame_number, bool is_top_clip, bool force_safe_composite, float max_volume);
+
+		/// Resolve equal-power audio gains for one clip under a transition on the current timeline frame.
+		std::pair<float, float> ResolveTransitionAudioGains(openshot::Clip* source_clip, int64_t timeline_frame_number, bool is_top_clip) const;
 
 		/// Apply a FrameMapper to a clip which matches the settings of this timeline
 		void apply_mapper_to_clip(openshot::Clip* clip);

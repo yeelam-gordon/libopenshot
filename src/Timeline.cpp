@@ -18,6 +18,7 @@
 #include "CrashHandler.h"
 #include "FrameMapper.h"
 #include "Exceptions.h"
+#include "effects/Mask.h"
 
 #include <algorithm>
 #include <QDir>
@@ -672,11 +673,16 @@ void Timeline::add_layer(std::shared_ptr<Frame> new_frame, Clip* source_clip, in
 				new_frame->ResizeAudio(info.channels, source_frame->GetAudioSamplesCount(), info.sample_rate, info.channel_layout);
 			}
 
+			// Apply transition-driven equal-power audio fades for clips covered by a Mask transition.
+			const auto transition_audio_gains = ResolveTransitionAudioGains(source_clip, new_frame->number, is_top_clip);
+
 			for (int channel = 0; channel < source_frame->GetAudioChannelsCount(); channel++)
 			{
 				// Get volume from previous frame and this frame
 				float previous_volume = source_clip->volume.GetValue(clip_frame_number - 1);
 				float volume = source_clip->volume.GetValue(clip_frame_number);
+				previous_volume *= transition_audio_gains.first;
+				volume *= transition_audio_gains.second;
 				int channel_filter = source_clip->channel_filter.GetInt(clip_frame_number); // optional channel to filter (if not -1)
 				int channel_mapping = source_clip->channel_mapping.GetInt(clip_frame_number); // optional channel to map this channel to (if not -1)
 
@@ -1827,4 +1833,123 @@ void Timeline::SetMaxSize(int width, int height) {
 	// Update preview settings
 	preview_width = display_ratio_size.width();
 	preview_height = display_ratio_size.height();
+}
+
+// Resolve equal-power audio gains from transition placement relative to the clip edges.
+std::pair<float, float> Timeline::ResolveTransitionAudioGains(Clip* source_clip, int64_t timeline_frame_number, bool is_top_clip) const
+{
+	constexpr double half_pi = 1.57079632679489661923;
+
+	if (!source_clip)
+		return {1.0f, 1.0f};
+
+	const double fpsD = info.fps.ToDouble();
+	Mask* active_mask = nullptr;
+	int64_t effect_start_position = 0;
+	int64_t effect_end_position = 0;
+
+	// Find the single active transition on this layer that requested overlapping audio fades.
+	for (auto effect : effects) {
+		if (effect->Layer() != source_clip->Layer())
+			continue;
+
+		auto* mask = dynamic_cast<Mask*>(effect);
+		if (!mask || !mask->fade_audio_hint)
+			continue;
+
+		const int64_t start_pos = static_cast<int64_t>(std::llround(effect->Position() * fpsD)) + 1;
+		const int64_t end_pos = static_cast<int64_t>(std::llround((effect->Position() + effect->Duration()) * fpsD));
+		if (start_pos > timeline_frame_number || end_pos < timeline_frame_number)
+			continue;
+
+		if (active_mask)
+			return {1.0f, 1.0f};
+
+		active_mask = mask;
+		effect_start_position = start_pos;
+		effect_end_position = end_pos;
+	}
+
+	if (!active_mask)
+		return {1.0f, 1.0f};
+
+	struct AudibleClipInfo {
+		Clip* clip;
+		int64_t start_pos;
+		int64_t end_pos;
+	};
+
+	std::vector<AudibleClipInfo> audible_clips;
+	audible_clips.reserve(2);
+
+	// Collect the audible clips covered by this transition on the current layer.
+	for (auto clip : clips) {
+		if (clip->Layer() != source_clip->Layer())
+			continue;
+		if (!clip->Reader() || !clip->Reader()->info.has_audio)
+			continue;
+
+		const int64_t clip_start_pos = static_cast<int64_t>(std::llround(clip->Position() * fpsD)) + 1;
+		const int64_t clip_end_pos = static_cast<int64_t>(std::llround((clip->Position() + clip->Duration()) * fpsD));
+		if (clip_start_pos > timeline_frame_number || clip_end_pos < timeline_frame_number)
+			continue;
+
+		const int64_t clip_start_frame = static_cast<int64_t>(std::llround(clip->Start() * fpsD)) + 1;
+		const int64_t clip_frame_number = timeline_frame_number - clip_start_pos + clip_start_frame;
+		if (clip->has_audio.GetInt(clip_frame_number) == 0)
+			continue;
+
+		audible_clips.push_back({clip, clip_start_pos, clip_end_pos});
+		if (audible_clips.size() > 2)
+			return {1.0f, 1.0f};
+	}
+
+	if (audible_clips.empty())
+		return {1.0f, 1.0f};
+
+	// Skip clips that are not actually participating in this transition audio decision.
+	const auto source_it = std::find_if(
+		audible_clips.begin(),
+		audible_clips.end(),
+		[source_clip](const AudibleClipInfo& info) {
+			return info.clip == source_clip;
+		});
+	if (source_it == audible_clips.end())
+		return {1.0f, 1.0f};
+
+	// Keep the current top/non-top clip routing intact when two clips overlap.
+	if (audible_clips.size() == 2) {
+		auto top_it = std::max_element(
+			audible_clips.begin(),
+			audible_clips.end(),
+			[](const AudibleClipInfo& lhs, const AudibleClipInfo& rhs) {
+				if (lhs.start_pos != rhs.start_pos)
+					return lhs.start_pos < rhs.start_pos;
+				return std::less<Clip*>()(lhs.clip, rhs.clip);
+			});
+		if ((is_top_clip && source_clip != top_it->clip) || (!is_top_clip && source_clip == top_it->clip))
+			return {1.0f, 1.0f};
+	}
+
+	// Infer fade direction from which transition edge is closer to this clip.
+	const int64_t left_distance = std::llabs(effect_start_position - source_it->start_pos);
+	const int64_t right_distance = std::llabs(effect_end_position - source_it->end_pos);
+	const bool clip_fades_in = left_distance <= right_distance;
+
+	// Evaluate the current frame and previous frame so Timeline can preserve per-frame gain ramps.
+	const auto compute_gain = [&](int64_t frame_number) -> float {
+		if (effect_end_position <= effect_start_position)
+			return 1.0f;
+
+		const double span = static_cast<double>(effect_end_position - effect_start_position);
+		double t = static_cast<double>(frame_number - effect_start_position) / span;
+		if (t < 0.0)
+			t = 0.0;
+		else if (t > 1.0)
+			t = 1.0;
+
+		return static_cast<float>(clip_fades_in ? std::sin(t * half_pi) : std::cos(t * half_pi));
+	};
+
+	return {compute_gain(timeline_frame_number - 1), compute_gain(timeline_frame_number)};
 }

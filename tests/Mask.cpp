@@ -136,6 +136,28 @@ TEST_CASE("Mask legacy start and end json load into base trim", "[effect][mask_e
 	CHECK(mask.JsonValue()["end"].asDouble() == Approx(1.25).margin(0.00001));
 }
 
+TEST_CASE("Mask fade_audio_hint json and properties round-trip", "[effect][mask_effect][json][audio]") {
+	Mask mask;
+	mask.fade_audio_hint = true;
+
+	const Json::Value json = mask.JsonValue();
+	CHECK(json["fade_audio_hint"].asBool());
+
+	Mask loaded;
+	loaded.SetJsonValue(json);
+	CHECK(loaded.fade_audio_hint);
+
+	const Json::Value properties = openshot::stringToJson(loaded.PropertiesJSON(1));
+	CHECK(properties["fade_audio_hint"]["value"].asBool());
+}
+
+TEST_CASE("Mask fade_audio_hint defaults to false when omitted", "[effect][mask_effect][json][audio][default]") {
+	Mask mask;
+	mask.SetJsonValue(Json::Value(Json::objectValue));
+
+	CHECK_FALSE(mask.fade_audio_hint);
+}
+
 TEST_CASE("Mask ProcessFrame brightness 1.0 fully clears output", "[effect][mask_effect][process][brightness]") {
 	auto frame = std::make_shared<Frame>(1, 2, 1, "#000000");
 	auto image = frame->GetImage();
