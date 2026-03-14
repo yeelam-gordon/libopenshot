@@ -144,6 +144,43 @@ TEST_CASE( "Track_BoundingBoxClipping", "[libopenshot][opencv][tracker]" )
     CHECK(tracker_pc.GetError() == false);
 }
 
+TEST_CASE( "Track_FrameSizeChangeDoesNotCrash", "[libopenshot][opencv][tracker]" )
+{
+    std::string json_data = R"proto(
+    {
+        "tracker-type": "KCF",
+        "region": {
+            "normalized_x": 0.2,
+            "normalized_y": 0.2,
+            "normalized_width": 0.3,
+            "normalized_height": 0.3,
+            "first-frame": 1
+        }
+    } )proto";
+
+    ProcessingController tracker_pc;
+    CVTracker tracker(json_data, tracker_pc);
+
+    cv::Mat frame1(360, 640, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::rectangle(frame1, cv::Rect(128, 72, 160, 108), cv::Scalar(255, 255, 255), cv::FILLED);
+
+    cv::Mat frame2 = frame1.clone();
+
+    cv::Mat frame3(180, 320, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::rectangle(frame3, cv::Rect(64, 36, 80, 54), cv::Scalar(255, 255, 255), cv::FILLED);
+
+    REQUIRE_NOTHROW(tracker.initTracker(frame1, 1));
+    REQUIRE_NOTHROW(tracker.trackFrame(frame2, 2));
+    REQUIRE_NOTHROW(tracker.trackFrame(frame3, 3));
+
+    FrameData fd = tracker.GetTrackedData(3);
+    CHECK(fd.frame_id == 3);
+    CHECK(fd.x1 >= 0.0f);
+    CHECK(fd.y1 >= 0.0f);
+    CHECK(fd.x2 <= 1.0f);
+    CHECK(fd.y2 <= 1.0f);
+}
+
 
 TEST_CASE( "SaveLoad_Protobuf", "[libopenshot][opencv][tracker]" )
 {

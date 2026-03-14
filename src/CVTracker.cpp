@@ -185,11 +185,25 @@ bool CVTracker::trackFrame(cv::Mat &frame, size_t frameId)
     cv::Mat gray;
     cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
 
+    const bool prevGrayMatches =
+        !prevGray.empty() &&
+        prevGray.size() == gray.size() &&
+        prevGray.type() == gray.type();
+    const bool fullPrevGrayMatches =
+        !fullPrevGray.empty() &&
+        fullPrevGray.size() == gray.size() &&
+        fullPrevGray.type() == gray.type();
+
+    if (!prevGray.empty() && !prevGrayMatches) {
+        prevPts.clear();
+        lostCount = 0;
+    }
+
     cv::Rect2d cand;
     bool didKLT = false;
 
     // Try KLT-based drift
-    if (!prevGray.empty() && !prevPts.empty()) {
+    if (prevGrayMatches && !prevPts.empty()) {
         std::vector<cv::Point2f> currPts;
         std::vector<uchar> status;
         std::vector<float> err;
@@ -233,7 +247,7 @@ bool CVTracker::trackFrame(cv::Mat &frame, size_t frameId)
     if (!didKLT) {
         ++lostCount;
         cand = lastBox;
-        if (!fullPrevGray.empty()) {
+        if (fullPrevGrayMatches) {
             cv::Mat flow;
             cv::calcOpticalFlowFarneback(
                 fullPrevGray, gray, flow,
