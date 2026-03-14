@@ -561,9 +561,8 @@ std::shared_ptr<Frame> FrameMapper::GetFrame(int64_t requested_frame)
 		// Determine if the wrapped reader actually supplied audio on this frame.
 		// Video-only readers can still be mapped onto an audio-enabled timeline,
 		// which yields frames with default audio metadata but no sample data.
-		const bool reader_has_audio = reader->info.has_audio &&
-			frame->SampleRate() > 0 &&
-			frame->GetAudioChannelsCount() > 0 &&
+		const bool reader_has_audio = mapped_frame->SampleRate() > 0 &&
+			mapped_frame->GetAudioChannelsCount() > 0 &&
 			mapped_frame->GetAudioSamplesCount() > 0;
 
 		// Resample audio on frame (if needed)
