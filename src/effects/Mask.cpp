@@ -21,14 +21,14 @@
 using namespace openshot;
 
 /// Blank constructor, useful when using Json to load the effect properties
-Mask::Mask() : replace_image(false) {
+Mask::Mask() : replace_image(false), fade_audio_hint(false) {
 	// Init effect properties
 	init_effect_details();
 }
 
 // Default constructor
 Mask::Mask(ReaderBase *mask_reader, Keyframe mask_brightness, Keyframe mask_contrast) :
-		brightness(mask_brightness), contrast(mask_contrast), replace_image(false)
+		brightness(mask_brightness), contrast(mask_contrast), replace_image(false), fade_audio_hint(false)
 {
 	// Init effect properties
 	init_effect_details();
@@ -180,6 +180,7 @@ Json::Value Mask::JsonValue() const {
 	root["brightness"] = brightness.JsonValue();
 	root["contrast"] = contrast.JsonValue();
 	root["replace_image"] = replace_image;
+	root["fade_audio_hint"] = fade_audio_hint;
 
 	// return JsonValue
 	return root;
@@ -215,6 +216,8 @@ void Mask::SetJsonValue(const Json::Value root) {
 	// Set data from Json (if key is found)
 	if (!normalized_root["replace_image"].isNull())
 		replace_image = normalized_root["replace_image"].asBool();
+	if (!normalized_root["fade_audio_hint"].isNull())
+		fade_audio_hint = normalized_root["fade_audio_hint"].asBool();
 	if (!normalized_root["brightness"].isNull())
 		brightness.SetJsonValue(normalized_root["brightness"]);
 	if (!normalized_root["contrast"].isNull())
@@ -232,6 +235,10 @@ std::string Mask::PropertiesJSON(int64_t requested_frame) const {
 	root["replace_image"] = add_property_json("Replace Image", replace_image, "int", "", NULL, 0, 1, false, requested_frame);
 	root["replace_image"]["choices"].append(add_property_choice_json("Yes", true, replace_image));
 	root["replace_image"]["choices"].append(add_property_choice_json("No", false, replace_image));
+
+	root["fade_audio_hint"] = add_property_json("Fade Audio", fade_audio_hint, "int", "", NULL, 0, 1, false, requested_frame);
+	root["fade_audio_hint"]["choices"].append(add_property_choice_json("Yes", true, fade_audio_hint));
+	root["fade_audio_hint"]["choices"].append(add_property_choice_json("No", false, fade_audio_hint));
 
 	// Keyframes
 	root["brightness"] = add_property_json("Brightness", brightness.GetValue(requested_frame), "float", "", &brightness, -1.0, 1.0, false, requested_frame);

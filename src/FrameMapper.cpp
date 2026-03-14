@@ -558,8 +558,12 @@ std::shared_ptr<Frame> FrameMapper::GetFrame(int64_t requested_frame)
 				frame->AddImage(std::make_shared<QImage>(*even_frame->GetImage()), false);
 		}
 
-		// Determine if reader contains audio samples
-		bool reader_has_audio = frame->SampleRate() > 0 && frame->GetAudioChannelsCount() > 0;
+		// Determine if the wrapped reader actually supplied audio on this frame.
+		// Video-only readers can still be mapped onto an audio-enabled timeline,
+		// which yields frames with default audio metadata but no sample data.
+		const bool reader_has_audio = mapped_frame->SampleRate() > 0 &&
+			mapped_frame->GetAudioChannelsCount() > 0 &&
+			mapped_frame->GetAudioSamplesCount() > 0;
 
 		// Resample audio on frame (if needed)
 		bool need_resampling = false;
@@ -603,7 +607,7 @@ std::shared_ptr<Frame> FrameMapper::GetFrame(int64_t requested_frame)
 		// Copy the samples
 		int samples_copied = 0;
 		int64_t starting_frame = copy_samples.frame_start;
-		while (info.has_audio && samples_copied < copy_samples.total)
+		while (reader_has_audio && samples_copied < copy_samples.total)
 		{
 			// Init number of samples to copy this iteration
 			int remaining_samples = copy_samples.total - samples_copied;
@@ -616,6 +620,8 @@ std::shared_ptr<Frame> FrameMapper::GetFrame(int64_t requested_frame)
 			}
 
 			int original_samples = original_frame->GetAudioSamplesCount();
+			if (original_samples <= 0)
+				break;
 
 			// Loop through each channel
 			for (int channel = 0; channel < channels_in_frame; channel++)
