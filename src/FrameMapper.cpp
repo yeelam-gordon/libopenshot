@@ -561,7 +561,7 @@ std::shared_ptr<Frame> FrameMapper::GetFrame(int64_t requested_frame)
 		// Only treat the reader as audio-capable when the wrapped reader reports
 		// audio. Individual source frames can still be empty near boundaries, but
 		// those cases should pad with silence instead of dropping this mapped frame.
-		const bool reader_has_audio = reader->info.has_audio &&
+		const bool reader_has_audio = info.has_audio &&
 			mapped_frame->SampleRate() > 0 &&
 			mapped_frame->GetAudioChannelsCount() > 0;
 
