@@ -558,12 +558,12 @@ std::shared_ptr<Frame> FrameMapper::GetFrame(int64_t requested_frame)
 				frame->AddImage(std::make_shared<QImage>(*even_frame->GetImage()), false);
 		}
 
-		// Determine if the wrapped reader actually supplied audio on this frame.
-		// Video-only readers can still be mapped onto an audio-enabled timeline,
-		// which yields frames with default audio metadata but no sample data.
-		const bool reader_has_audio = mapped_frame->SampleRate() > 0 &&
-			mapped_frame->GetAudioChannelsCount() > 0 &&
-			mapped_frame->GetAudioSamplesCount() > 0;
+		// Only treat the reader as audio-capable when the wrapped reader reports
+		// audio. Individual source frames can still be empty near boundaries, but
+		// those cases should pad with silence instead of dropping this mapped frame.
+		const bool reader_has_audio = reader->info.has_audio &&
+			mapped_frame->SampleRate() > 0 &&
+			mapped_frame->GetAudioChannelsCount() > 0;
 
 		// Resample audio on frame (if needed)
 		bool need_resampling = false;
@@ -604,6 +604,10 @@ std::shared_ptr<Frame> FrameMapper::GetFrame(int64_t requested_frame)
 			}
 		}
 
+		// Preserve the target frame duration even when a source frame has no samples.
+		if (reader_has_audio && samples_in_frame > 0)
+			frame->AddAudioSilence(samples_in_frame);
+
 		// Copy the samples
 		int samples_copied = 0;
 		int64_t starting_frame = copy_samples.frame_start;
@@ -620,8 +624,28 @@ std::shared_ptr<Frame> FrameMapper::GetFrame(int64_t requested_frame)
 			}
 
 			int original_samples = original_frame->GetAudioSamplesCount();
-			if (original_samples <= 0)
-				break;
+			if (original_samples <= 0) {
+				if (starting_frame >= copy_samples.frame_end)
+					break;
+				starting_frame++;
+				continue;
+			}
+
+			if (starting_frame == copy_samples.frame_start)
+				number_to_copy = original_samples - copy_samples.sample_start;
+			else if (starting_frame > copy_samples.frame_start && starting_frame < copy_samples.frame_end)
+				number_to_copy = original_samples;
+			else
+				number_to_copy = copy_samples.sample_end + 1;
+
+			if (number_to_copy <= 0) {
+				if (starting_frame >= copy_samples.frame_end)
+					break;
+				starting_frame++;
+				continue;
+			}
+			if (number_to_copy > remaining_samples)
+				number_to_copy = remaining_samples;
 
 			// Loop through each channel
 			for (int channel = 0; channel < channels_in_frame; channel++)
@@ -629,31 +653,16 @@ std::shared_ptr<Frame> FrameMapper::GetFrame(int64_t requested_frame)
 				if (starting_frame == copy_samples.frame_start)
 				{
 					// Starting frame (take the ending samples)
-					number_to_copy = original_samples - copy_samples.sample_start;
-					if (number_to_copy > remaining_samples)
-						number_to_copy = remaining_samples;
-
-					// Add samples to new frame
 					frame->AddAudio(true, channel, samples_copied, original_frame->GetAudioSamples(channel) + copy_samples.sample_start, number_to_copy, 1.0);
 				}
 				else if (starting_frame > copy_samples.frame_start && starting_frame < copy_samples.frame_end)
 				{
 					// Middle frame (take all samples)
-					number_to_copy = original_samples;
-					if (number_to_copy > remaining_samples)
-						number_to_copy = remaining_samples;
-
-					// Add samples to new frame
 					frame->AddAudio(true, channel, samples_copied, original_frame->GetAudioSamples(channel), number_to_copy, 1.0);
 				}
 				else
 				{
 					// Ending frame (take the beginning samples)
-					number_to_copy = copy_samples.sample_end + 1;
-					if (number_to_copy > remaining_samples)
-						number_to_copy = remaining_samples;
-
-					// Add samples to new frame
 					frame->AddAudio(false, channel, samples_copied, original_frame->GetAudioSamples(channel), number_to_copy, 1.0);
 				}
 			}
