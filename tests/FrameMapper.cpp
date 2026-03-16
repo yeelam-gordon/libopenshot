@@ -62,6 +62,47 @@ TEST_CASE( "Invalid_Frame_Too_Small", "[libopenshot][framemapper]" )
 
 }
 
+TEST_CASE( "zero_sample_source_frame_preserves_mapped_audio_duration", "[libopenshot][framemapper][audio]" )
+{
+	CacheMemory cache;
+	const Fraction fps(24, 1);
+	const int sample_rate = 48000;
+	const int channels = 2;
+	const int samples_per_frame = Frame::GetSamplesPerFrame(1, fps, sample_rate, channels);
+
+	auto empty_frame = std::make_shared<Frame>(1, 1, 1, "#000000", 0, channels);
+	empty_frame->SampleRate(sample_rate);
+	empty_frame->ChannelsLayout(LAYOUT_STEREO);
+	cache.Add(empty_frame);
+
+	auto audio_frame = std::make_shared<Frame>(2, 1, 1, "#000000", samples_per_frame, channels);
+	audio_frame->SampleRate(sample_rate);
+	audio_frame->ChannelsLayout(LAYOUT_STEREO);
+	std::vector<float> samples(samples_per_frame, 0.5f);
+	for (int channel = 0; channel < channels; ++channel)
+		audio_frame->AddAudio(true, channel, 0, samples.data(), samples_per_frame, 1.0f);
+	cache.Add(audio_frame);
+
+	DummyReader reader(fps, 1, 1, sample_rate, channels, 2.0 / fps.ToDouble(), &cache);
+	reader.info.has_audio = true;
+	reader.Open();
+
+	FrameMapper map(&reader, fps, PULLDOWN_NONE, sample_rate, channels, LAYOUT_STEREO);
+	map.Open();
+
+	auto first = map.GetFrame(1);
+	CHECK(first->GetAudioSamplesCount() == samples_per_frame);
+	for (int i = 0; i < samples_per_frame; ++i)
+		CHECK(first->GetAudioSample(0, i, 1.0) == Approx(0.0f).margin(0.0001f));
+
+	auto second = map.GetFrame(2);
+	CHECK(second->GetAudioSamplesCount() == samples_per_frame);
+	CHECK(second->GetAudioSample(0, 0, 1.0) == Approx(0.5f).margin(0.0001f));
+
+	map.Close();
+	reader.Close();
+}
+
 TEST_CASE( "24_fps_to_30_fps_Pulldown_Classic", "[libopenshot][framemapper]" )
 {
 	// Create a reader
