@@ -2827,6 +2827,28 @@ void FFmpegReader::CheckWorkingFrames(int64_t requested_frame) {
 				}
 			}
 
+			// If both streams have advanced past this frame but the decoder never
+			// produced image data for it, reuse the most recent non-future image.
+			// This avoids stalling indefinitely on sparse/missing decoded frames.
+			if (!f->has_image_data && is_video_ready && is_audio_ready) {
+				std::shared_ptr<Frame> previous_frame_instance = final_cache.GetFrame(f->number - 1);
+				if (previous_frame_instance && previous_frame_instance->has_image_data) {
+					f->AddImage(std::make_shared<QImage>(previous_frame_instance->GetImage()->copy()));
+				}
+				if (!f->has_image_data
+					&& last_final_video_frame
+					&& last_final_video_frame->has_image_data
+					&& last_final_video_frame->number <= f->number) {
+					f->AddImage(std::make_shared<QImage>(last_final_video_frame->GetImage()->copy()));
+				}
+				if (!f->has_image_data
+					&& last_video_frame
+					&& last_video_frame->has_image_data
+					&& last_video_frame->number <= f->number) {
+					f->AddImage(std::make_shared<QImage>(last_video_frame->GetImage()->copy()));
+				}
+			}
+
 			// Do not finalize non-EOF video frames without decoded image data.
 			// This prevents repeated previous-frame fallbacks being cached as real frames.
 			if (!f->has_image_data) {
