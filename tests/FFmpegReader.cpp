@@ -22,7 +22,9 @@
 
 #include "openshot_catch.h"
 
+#define private public
 #include "FFmpegReader.h"
+#undef private
 #include "Exceptions.h"
 #include "Frame.h"
 #include "Timeline.h"
@@ -526,6 +528,54 @@ TEST_CASE( "Attached_Picture_Audio_Does_Not_Stall_Early_Frames", "[libopenshot][
 
 	r.Close();
 	std::remove(fixture_path.str().c_str());
+}
+
+TEST_CASE( "Missing_Image_Frame_Finalizes_Using_Previous_Image", "[libopenshot][ffmpegreader]" )
+{
+	FFmpegReader r("synthetic-missing-image", DurationStrategy::VideoPreferred, false);
+
+	r.info.has_video = true;
+	r.info.has_audio = true;
+	r.info.has_single_image = false;
+	r.info.width = 320;
+	r.info.height = 240;
+	r.info.fps = Fraction(30, 1);
+	r.info.sample_rate = 48000;
+	r.info.channels = 2;
+	r.info.channel_layout = LAYOUT_STEREO;
+	r.info.video_length = 120;
+	r.info.video_timebase = Fraction(1, 30);
+	r.info.audio_timebase = Fraction(1, 48000);
+
+	r.pts_offset_seconds = 0.0;
+	r.last_frame = 58;
+	r.video_pts_seconds = 2.233333;
+	r.audio_pts_seconds = 3.100000;
+	r.packet_status.video_eof = false;
+	r.packet_status.audio_eof = false;
+	r.packet_status.packets_eof = false;
+	r.packet_status.end_of_file = false;
+
+	const int samples_per_frame = Frame::GetSamplesPerFrame(
+		58, r.info.fps, r.info.sample_rate, r.info.channels);
+	auto previous = std::make_shared<Frame>(
+		58, r.info.width, r.info.height, "#112233", samples_per_frame, r.info.channels);
+	previous->AddColor(r.info.width, r.info.height, "#112233");
+	r.final_cache.Add(previous);
+	r.last_final_video_frame = previous;
+
+	auto missing = r.CreateFrame(59);
+	r.working_cache.Add(missing);
+	REQUIRE(missing != nullptr);
+	REQUIRE_FALSE(missing->has_image_data);
+
+	r.CheckWorkingFrames(59);
+
+	auto finalized = r.final_cache.GetFrame(59);
+	REQUIRE(finalized != nullptr);
+	CHECK(finalized->has_image_data);
+	CHECK(finalized->CheckPixel(0, 0, 17, 34, 51, 255, 0));
+	CHECK(r.final_cache.GetFrame(58) != nullptr);
 }
 
 TEST_CASE( "HardwareDecodeSuccessful_IsFalse_WhenHardwareDecodeIsDisabled", "[libopenshot][ffmpegreader][hardware]" )
