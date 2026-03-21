@@ -103,15 +103,14 @@ FFmpegReader::FFmpegReader(const std::string &path, bool inspect_reader)
 		: FFmpegReader(path, DurationStrategy::VideoPreferred, inspect_reader) {}
 
 FFmpegReader::FFmpegReader(const std::string &path, DurationStrategy duration_strategy, bool inspect_reader)
-		: last_frame(0), is_seeking(0), seeking_pts(0), seeking_frame(0), seek_count(0), NO_PTS_OFFSET(-99999),
-		  path(path), is_video_seek(true), check_interlace(false), check_fps(false), enable_seek(true), is_open(false),
-		  seek_audio_frame_found(0), seek_video_frame_found(0),
-		  last_seek_max_frame(-1), seek_stagnant_count(0),
-		  is_duration_known(false), largest_frame_processed(0),
-		  current_video_frame(0), packet(NULL), duration_strategy(duration_strategy),
-		  audio_pts(0), video_pts(0), pFormatCtx(NULL), videoStream(-1), audioStream(-1), pCodecCtx(NULL), aCodecCtx(NULL),
-		pStream(NULL), aStream(NULL), pFrame(NULL), previous_packet_location{-1,0},
-		hold_packet(false) {
+		: path(path), pFormatCtx(NULL), videoStream(-1), audioStream(-1), pCodecCtx(NULL), aCodecCtx(NULL),
+		  pStream(NULL), aStream(NULL), packet(NULL), pFrame(NULL), is_open(false), is_duration_known(false),
+		  check_interlace(false), check_fps(false), duration_strategy(duration_strategy), previous_packet_location{-1, 0},
+		  is_seeking(false), seeking_pts(0), seeking_frame(0), is_video_seek(true), seek_count(0),
+		  seek_audio_frame_found(0), seek_video_frame_found(0), last_seek_max_frame(-1), seek_stagnant_count(0),
+		  last_frame(0), largest_frame_processed(0), current_video_frame(0), audio_pts(0), video_pts(0),
+		  hold_packet(false), pts_offset_seconds(0.0), audio_pts_seconds(0.0), video_pts_seconds(0.0),
+		  NO_PTS_OFFSET(-99999), enable_seek(true) {
 
 	// Initialize FFMpeg, and register all formats and codecs
 	AV_REGISTER_ALL
@@ -681,43 +680,35 @@ void FFmpegReader::Open() {
 		for (unsigned int i = 0; i < pFormatCtx->nb_streams; i++) {
 			AVStream* st = pFormatCtx->streams[i];
 			if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-				// Only inspect the first video stream
-				for (int j = 0; j < st->nb_side_data; j++) {
-					AVPacketSideData *sd = &st->side_data[j];
+				size_t side_data_size = 0;
+				const uint8_t *displaymatrix = ffmpeg_stream_get_side_data(
+					st, AV_PKT_DATA_DISPLAYMATRIX, &side_data_size);
+				if (displaymatrix &&
+					side_data_size >= 9 * sizeof(int32_t) &&
+					!info.metadata.count("rotate")) {
+					double rotation = -av_display_rotation_get(
+						reinterpret_cast<const int32_t *>(displaymatrix));
+					if (std::isnan(rotation))
+						rotation = 0;
+					info.metadata["rotate"] = std::to_string(rotation);
+				}
 
-					// Handle rotation metadata (unchanged)
-					if (sd->type == AV_PKT_DATA_DISPLAYMATRIX &&
-						sd->size >= 9 * sizeof(int32_t) &&
-						!info.metadata.count("rotate"))
-					{
-						double rotation = -av_display_rotation_get(
-							reinterpret_cast<int32_t *>(sd->data));
-						if (std::isnan(rotation)) rotation = 0;
-						info.metadata["rotate"] = std::to_string(rotation);
-					}
-					// Handle spherical video metadata
-					else if (sd->type == AV_PKT_DATA_SPHERICAL) {
-						// Always mark as spherical
-						info.metadata["spherical"] = "1";
+				const uint8_t *spherical = ffmpeg_stream_get_side_data(
+					st, AV_PKT_DATA_SPHERICAL, &side_data_size);
+				if (spherical && side_data_size >= sizeof(AVSphericalMapping)) {
+					info.metadata["spherical"] = "1";
 
-						// Cast the raw bytes to an AVSphericalMapping
-						const AVSphericalMapping* map =
-							reinterpret_cast<const AVSphericalMapping*>(sd->data);
+					const AVSphericalMapping *map =
+						reinterpret_cast<const AVSphericalMapping *>(spherical);
+					const char *proj_name = av_spherical_projection_name(map->projection);
+					info.metadata["spherical_projection"] = proj_name ? proj_name : "unknown";
 
-						// Projection enum → string
-						const char* proj_name = av_spherical_projection_name(map->projection);
-						info.metadata["spherical_projection"] = proj_name
-							? proj_name
-							: "unknown";
-
-						// Convert 16.16 fixed-point to float degrees
-						auto to_deg = [](int32_t v){
-							return (double)v / 65536.0;
-						};
-						info.metadata["spherical_yaw"]   = std::to_string(to_deg(map->yaw));
-						info.metadata["spherical_pitch"] = std::to_string(to_deg(map->pitch));
-						info.metadata["spherical_roll"]  = std::to_string(to_deg(map->roll));
-					}
+					auto to_deg = [](int32_t v) {
+						return static_cast<double>(v) / 65536.0;
+					};
+					info.metadata["spherical_yaw"] = std::to_string(to_deg(map->yaw));
+					info.metadata["spherical_pitch"] = std::to_string(to_deg(map->pitch));
+					info.metadata["spherical_roll"] = std::to_string(to_deg(map->roll));
 				}
 				break;
 			}
@@ -1874,8 +1865,6 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
 	int src_height = (pFrame && pFrame->height > 0) ? pFrame->height : info.height;
 	int height = src_height;
 	int width = src_width;
-	int64_t video_length = info.video_length;
-
 	// Create or reuse a RGB Frame (since most videos are not in RGB, we must convert it)
 	AVFrame *pFrameRGB = pFrameRGB_cached;
 	if (!pFrameRGB) {

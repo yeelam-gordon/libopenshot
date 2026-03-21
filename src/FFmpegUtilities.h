@@ -128,6 +128,43 @@ inline static bool ffmpeg_has_alpha(PixelFormat pix_fmt) {
     return bool(fmt_desc->flags & AV_PIX_FMT_FLAG_ALPHA);
 }
 
+// Allocate and populate an AVCodecContext from stream codec parameters.
+inline static AVCodecContext* ffmpeg_get_codec_context(AVStream *av_stream, const AVCodec *av_codec) {
+    AVCodecContext *context = avcodec_alloc_context3(av_codec);
+    if (context)
+        avcodec_parameters_to_context(context, av_stream->codecpar);
+    return context;
+}
+
+// Access stream side data across FFmpeg API changes.
+inline static const uint8_t* ffmpeg_stream_get_side_data(
+        const AVStream *stream, enum AVPacketSideDataType type, size_t *size) {
+#if (LIBAVFORMAT_VERSION_MAJOR >= 62)
+    const AVPacketSideData *side_data = av_packet_side_data_get(
+            stream->codecpar->coded_side_data,
+            stream->codecpar->nb_coded_side_data,
+            type);
+    if (!side_data) {
+        if (size)
+            *size = 0;
+        return nullptr;
+    }
+    if (size)
+        *size = side_data->size;
+    return side_data->data;
+#else
+    #if defined(__GNUC__) || defined(__clang__)
+        #pragma GCC diagnostic push
+        #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    #endif
+    const uint8_t *data = av_stream_get_side_data(stream, type, size);
+    #if defined(__GNUC__) || defined(__clang__)
+        #pragma GCC diagnostic pop
+    #endif
+    return data;
+#endif
+}
+
 // FFmpeg's libavutil/common.h defines an RSHIFT incompatible with Ruby's
 // definition in ruby/config.h, so we move it to FF_RSHIFT
 #ifdef RSHIFT
@@ -171,10 +208,7 @@ inline static bool ffmpeg_has_alpha(PixelFormat pix_fmt) {
     #define AV_FREE_CONTEXT(av_context) avcodec_free_context(&av_context)
     #define AV_GET_CODEC_TYPE(av_stream) av_stream->codecpar->codec_type
     #define AV_FIND_DECODER_CODEC_ID(av_stream) av_stream->codecpar->codec_id
-    #define AV_GET_CODEC_CONTEXT(av_stream, av_codec) \
-            ({ AVCodecContext *context = avcodec_alloc_context3(av_codec); \
-               avcodec_parameters_to_context(context, av_stream->codecpar); \
-               context; })
+    #define AV_GET_CODEC_CONTEXT(av_stream, av_codec) ffmpeg_get_codec_context(av_stream, av_codec)
     #define AV_GET_CODEC_PAR_CONTEXT(av_stream, av_codec) av_codec;
     #define AV_GET_CODEC_FROM_STREAM(av_stream,codec_in)
     #define AV_GET_CODEC_ATTRIBUTES(av_stream, av_context) av_stream->codecpar
@@ -209,10 +243,7 @@ inline static bool ffmpeg_has_alpha(PixelFormat pix_fmt) {
     #define AV_FREE_CONTEXT(av_context) avcodec_free_context(&av_context)
     #define AV_GET_CODEC_TYPE(av_stream) av_stream->codecpar->codec_type
     #define AV_FIND_DECODER_CODEC_ID(av_stream) av_stream->codecpar->codec_id
-    #define AV_GET_CODEC_CONTEXT(av_stream, av_codec) \
-            ({ AVCodecContext *context = avcodec_alloc_context3(av_codec); \
-               avcodec_parameters_to_context(context, av_stream->codecpar); \
-               context; })
+    #define AV_GET_CODEC_CONTEXT(av_stream, av_codec) ffmpeg_get_codec_context(av_stream, av_codec)
     #define AV_GET_CODEC_PAR_CONTEXT(av_stream, av_codec) av_codec;
     #define AV_GET_CODEC_FROM_STREAM(av_stream,codec_in)
     #define AV_GET_CODEC_ATTRIBUTES(av_stream, av_context) av_stream->codecpar
