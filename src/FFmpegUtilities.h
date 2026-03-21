@@ -157,7 +157,14 @@ inline static const uint8_t* ffmpeg_stream_get_side_data(
         #pragma GCC diagnostic push
         #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     #endif
-    const uint8_t *data = av_stream_get_side_data(stream, type, size);
+    #if (LIBAVFORMAT_VERSION_MAJOR >= 59)
+        const uint8_t *data = av_stream_get_side_data(stream, type, size);
+    #else
+        int old_size = 0;
+        const uint8_t *data = av_stream_get_side_data(stream, type, &old_size);
+        if (size)
+            *size = old_size >= 0 ? static_cast<size_t>(old_size) : 0;
+    #endif
     #if defined(__GNUC__) || defined(__clang__)
         #pragma GCC diagnostic pop
     #endif
