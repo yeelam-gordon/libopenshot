@@ -1032,6 +1032,11 @@ void Clip::SetJson(const std::string value) {
 
 // Load Json::Value into this object
 void Clip::SetJsonValue(const Json::Value root) {
+	auto ensure_default_keyframe = [](Keyframe& kf, double default_value) {
+		if (kf.GetCount() == 0) {
+			kf = Keyframe(default_value);
+		}
+	};
 
 	// Set parent data
 	ClipBase::SetJsonValue(root);
@@ -1110,6 +1115,16 @@ void Clip::SetJsonValue(const Json::Value root) {
 		perspective_c4_x.SetJsonValue(root["perspective_c4_x"]);
 	if (!root["perspective_c4_y"].isNull())
 		perspective_c4_y.SetJsonValue(root["perspective_c4_y"]);
+
+	// Core clip transforms should never remain empty after load. Empty JSON
+	// point arrays can be produced by editing flows that remove every keyframe.
+	ensure_default_keyframe(scale_x, 1.0);
+	ensure_default_keyframe(scale_y, 1.0);
+	ensure_default_keyframe(location_x, 0.0);
+	ensure_default_keyframe(location_y, 0.0);
+	ensure_default_keyframe(origin_x, 0.5);
+	ensure_default_keyframe(origin_y, 0.5);
+	ensure_default_keyframe(rotation, 0.0);
 	if (!root["effects"].isNull()) {
 
 		// Clear existing effects
