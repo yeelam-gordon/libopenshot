@@ -951,15 +951,45 @@ void FrameMapper::ResampleMappedAudio(std::shared_ptr<Frame> frame, int64_t orig
 	// setup resample context
 	if (!avr) {
 		avr = SWR_ALLOC();
+#if HAVE_CH_LAYOUT
+		AVChannelLayout input_layout = {};
+		AVChannelLayout output_layout = {};
+		if (channel_layout_in_frame != 0)
+			av_channel_layout_from_mask(&input_layout, channel_layout_in_frame);
+		else
+			input_layout = ffmpeg_default_channel_layout(channels_in_frame);
+		if (info.channel_layout != 0)
+			av_channel_layout_from_mask(&output_layout, info.channel_layout);
+		else
+			output_layout = ffmpeg_default_channel_layout(info.channels);
+		int in_layout_err = av_opt_set_chlayout(avr, "in_chlayout", &input_layout, 0);
+		int out_layout_err = av_opt_set_chlayout(avr, "out_chlayout", &output_layout, 0);
+#else
 		av_opt_set_int(avr, "in_channel_layout",  channel_layout_in_frame, 0);
 		av_opt_set_int(avr, "out_channel_layout", info.channel_layout,	 0);
+#endif
 		av_opt_set_int(avr, "in_sample_fmt",	  AV_SAMPLE_FMT_S16,	   0);
 		av_opt_set_int(avr, "out_sample_fmt",	 AV_SAMPLE_FMT_S16,	   0);
 		av_opt_set_int(avr, "in_sample_rate",	 sample_rate_in_frame,	0);
 		av_opt_set_int(avr, "out_sample_rate",	info.sample_rate,		0);
+#if !HAVE_CH_LAYOUT
 		av_opt_set_int(avr, "in_channels",		channels_in_frame,	   0);
 		av_opt_set_int(avr, "out_channels",	   info.channels,		   0);
-		SWR_INIT(avr);
+#endif
+		int swr_init_err = SWR_INIT(avr);
+#if HAVE_CH_LAYOUT
+		av_channel_layout_uninit(&input_layout);
+		av_channel_layout_uninit(&output_layout);
+		if (in_layout_err < 0 || out_layout_err < 0 || swr_init_err < 0) {
+			SWR_FREE(&avr);
+			throw ErrorEncodingVideo("Error while initializing audio resampler in frame mapper", frame->number);
+		}
+#else
+		if (swr_init_err < 0) {
+			SWR_FREE(&avr);
+			throw ErrorEncodingVideo("Error while initializing audio resampler in frame mapper", frame->number);
+		}
+#endif
 	}
 
 	// Convert audio samples

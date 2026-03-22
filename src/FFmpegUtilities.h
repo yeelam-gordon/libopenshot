@@ -121,6 +121,23 @@ inline static const std::string av_err2string(int errnum)
 #ifndef PIX_FMT_YUV444P
     #define PIX_FMT_YUV444P AV_PIX_FMT_YUV444P
 #endif
+#ifndef AV_PROFILE_H264_BASELINE
+    #ifdef FF_PROFILE_H264_BASELINE
+        #define AV_PROFILE_H264_BASELINE FF_PROFILE_H264_BASELINE
+    #endif
+#endif
+#ifndef AV_PROFILE_H264_CONSTRAINED
+    #ifdef FF_PROFILE_H264_CONSTRAINED
+        #define AV_PROFILE_H264_CONSTRAINED FF_PROFILE_H264_CONSTRAINED
+    #endif
+#endif
+#ifndef AV_PROFILE_H264_CONSTRAINED_BASELINE
+    #if defined(AV_PROFILE_H264_BASELINE) && defined(AV_PROFILE_H264_CONSTRAINED)
+        #define AV_PROFILE_H264_CONSTRAINED_BASELINE (AV_PROFILE_H264_BASELINE | AV_PROFILE_H264_CONSTRAINED)
+    #elif defined(FF_PROFILE_H264_CONSTRAINED_BASELINE)
+        #define AV_PROFILE_H264_CONSTRAINED_BASELINE FF_PROFILE_H264_CONSTRAINED_BASELINE
+    #endif
+#endif
 
 // Does ffmpeg pixel format contain an alpha channel?
 inline static bool ffmpeg_has_alpha(PixelFormat pix_fmt) {
@@ -136,10 +153,33 @@ inline static AVCodecContext* ffmpeg_get_codec_context(AVStream *av_stream, cons
     return context;
 }
 
+#if HAVE_CH_LAYOUT
+inline static AVChannelLayout ffmpeg_default_channel_layout(int channels) {
+    AVChannelLayout layout = {};
+    if (channels > 0)
+        av_channel_layout_default(&layout, channels);
+    return layout;
+}
+
+inline static AVChannelLayout ffmpeg_get_valid_channel_layout(
+        const AVChannelLayout &layout, int fallback_channels) {
+    AVChannelLayout normalized = {};
+    if (layout.nb_channels > 0 && av_channel_layout_check(&layout) == 1) {
+        av_channel_layout_copy(&normalized, &layout);
+        return normalized;
+    }
+    return ffmpeg_default_channel_layout(fallback_channels);
+}
+
+inline static uint64_t ffmpeg_channel_layout_mask(const AVChannelLayout &layout) {
+    return layout.order == AV_CHANNEL_ORDER_NATIVE ? layout.u.mask : 0;
+}
+#endif
+
 // Access stream side data across FFmpeg API changes.
 inline static const uint8_t* ffmpeg_stream_get_side_data(
         const AVStream *stream, enum AVPacketSideDataType type, size_t *size) {
-#if (LIBAVFORMAT_VERSION_MAJOR >= 62)
+#if (LIBAVFORMAT_VERSION_MAJOR >= 61)
     const AVPacketSideData *side_data = av_packet_side_data_get(
             stream->codecpar->coded_side_data,
             stream->codecpar->nb_coded_side_data,
@@ -169,6 +209,31 @@ inline static const uint8_t* ffmpeg_stream_get_side_data(
         #pragma GCC diagnostic pop
     #endif
     return data;
+#endif
+}
+
+// Add stream side data across FFmpeg API changes.
+inline static int ffmpeg_stream_add_side_data(
+        AVStream *stream, enum AVPacketSideDataType type, uint8_t *data, size_t size) {
+#if (LIBAVFORMAT_VERSION_MAJOR >= 61)
+    AVPacketSideData *side_data = av_packet_side_data_add(
+            &stream->codecpar->coded_side_data,
+            &stream->codecpar->nb_coded_side_data,
+            type,
+            data,
+            size,
+            0);
+    return side_data ? 0 : AVERROR(ENOMEM);
+#else
+    #if defined(__GNUC__) || defined(__clang__)
+        #pragma GCC diagnostic push
+        #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    #endif
+    int result = av_stream_add_side_data(stream, type, data, size);
+    #if defined(__GNUC__) || defined(__clang__)
+        #pragma GCC diagnostic pop
+    #endif
+    return result;
 #endif
 }
 

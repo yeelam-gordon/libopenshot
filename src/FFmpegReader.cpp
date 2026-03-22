@@ -915,7 +915,7 @@ void FFmpegReader::ApplyDurationStrategy() {
 }
 
 void FFmpegReader::UpdateAudioInfo() {
-	const int codec_channels =
+	int codec_channels =
 #if HAVE_CH_LAYOUT
 		AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout.nb_channels;
 #else
@@ -924,9 +924,13 @@ void FFmpegReader::UpdateAudioInfo() {
 
 	// Set default audio channel layout (if needed)
 #if HAVE_CH_LAYOUT
-	if (codec_channels > 0 &&
-		!av_channel_layout_check(&(AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout)))
-		AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout = (AVChannelLayout) AV_CHANNEL_LAYOUT_STEREO;
+	AVChannelLayout audio_ch_layout = ffmpeg_get_valid_channel_layout(
+		AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout, codec_channels);
+	if (audio_ch_layout.nb_channels > 0) {
+		av_channel_layout_uninit(&(AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout));
+		av_channel_layout_copy(&(AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout), &audio_ch_layout);
+		codec_channels = audio_ch_layout.nb_channels;
+	}
 #else
 	if (codec_channels > 0 && AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channel_layout == 0)
 		AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channel_layout = av_get_default_channel_layout(AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channels);
@@ -947,8 +951,8 @@ void FFmpegReader::UpdateAudioInfo() {
 	info.file_size = pFormatCtx->pb ? avio_size(pFormatCtx->pb) : -1;
 	info.acodec = aCodecCtx->codec->name;
 #if HAVE_CH_LAYOUT
-	info.channels = AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout.nb_channels;
-	info.channel_layout = (ChannelLayout) AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout.u.mask;
+	info.channels = audio_ch_layout.nb_channels;
+	info.channel_layout = static_cast<ChannelLayout>(ffmpeg_channel_layout_mask(audio_ch_layout));
 #else
 	info.channels = AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channels;
 	info.channel_layout = (ChannelLayout) AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channel_layout;
@@ -1019,6 +1023,9 @@ void FFmpegReader::UpdateAudioInfo() {
 		QString str_value = tag->value;
 		info.metadata[str_key.toStdString()] = str_value.trimmed().toStdString();
 	}
+#if HAVE_CH_LAYOUT
+	av_channel_layout_uninit(&audio_ch_layout);
+#endif
 }
 
 void FFmpegReader::UpdateVideoInfo() {
@@ -2193,8 +2200,12 @@ void FFmpegReader::ProcessAudioPacket(int64_t requested_frame) {
 	if (!avr) {
 		avr = SWR_ALLOC();
 #if HAVE_CH_LAYOUT
-	av_opt_set_chlayout(avr, "in_chlayout", &AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout, 0);
-	av_opt_set_chlayout(avr, "out_chlayout", &AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout, 0);
+		AVChannelLayout input_layout = ffmpeg_get_valid_channel_layout(
+			AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout, info.channels);
+		AVChannelLayout output_layout = ffmpeg_get_valid_channel_layout(
+			input_layout, info.channels);
+		int in_layout_err = av_opt_set_chlayout(avr, "in_chlayout", &input_layout, 0);
+		int out_layout_err = av_opt_set_chlayout(avr, "out_chlayout", &output_layout, 0);
 #else
 	av_opt_set_int(avr, "in_channel_layout", AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channel_layout, 0);
 	av_opt_set_int(avr, "out_channel_layout", AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channel_layout, 0);
@@ -2205,8 +2216,21 @@ void FFmpegReader::ProcessAudioPacket(int64_t requested_frame) {
 	av_opt_set_int(avr, "out_sample_fmt", AV_SAMPLE_FMT_FLTP, 0);
 	av_opt_set_int(avr, "in_sample_rate", info.sample_rate, 0);
 	av_opt_set_int(avr, "out_sample_rate", info.sample_rate, 0);
-	SWR_INIT(avr);
-	avr_ctx = avr;
+		int swr_init_err = SWR_INIT(avr);
+#if HAVE_CH_LAYOUT
+		av_channel_layout_uninit(&input_layout);
+		av_channel_layout_uninit(&output_layout);
+		if (in_layout_err < 0 || out_layout_err < 0 || swr_init_err < 0) {
+			SWR_FREE(&avr);
+			throw InvalidChannels("Could not initialize FFmpeg audio channel layout or resampler.", path);
+		}
+#else
+		if (swr_init_err < 0) {
+			SWR_FREE(&avr);
+			throw InvalidChannels("Could not initialize FFmpeg audio resampler.", path);
+		}
+#endif
+		avr_ctx = avr;
 	}
 
 	// Convert audio samples
