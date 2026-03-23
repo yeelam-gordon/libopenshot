@@ -225,6 +225,74 @@ TEST_CASE( "Metadata rotation scales only default clips", "[libopenshot][clip]" 
 	CHECK(custom_clip.scale_y.GetPoint(0).co.Y == Approx(0.5).margin(0.00001));
 }
 
+TEST_CASE( "SetJsonValue restores defaults for empty core transform keyframes", "[libopenshot][clip][json]" )
+{
+	Clip clip;
+	clip.scale_x = Keyframe(2.0);
+	clip.scale_y = Keyframe(3.0);
+	clip.location_x = Keyframe(0.25);
+	clip.location_y = Keyframe(-0.5);
+	clip.origin_x = Keyframe(0.2);
+	clip.origin_y = Keyframe(0.8);
+	clip.rotation = Keyframe(45.0);
+
+	Json::Value root = clip.JsonValue();
+	root["scale_x"]["Points"] = Json::Value(Json::arrayValue);
+	root["scale_y"]["Points"] = Json::Value(Json::arrayValue);
+	root["location_x"]["Points"] = Json::Value(Json::arrayValue);
+	root["location_y"]["Points"] = Json::Value(Json::arrayValue);
+	root["origin_x"]["Points"] = Json::Value(Json::arrayValue);
+	root["origin_y"]["Points"] = Json::Value(Json::arrayValue);
+	root["rotation"]["Points"] = Json::Value(Json::arrayValue);
+
+	clip.SetJsonValue(root);
+
+	REQUIRE(clip.scale_x.GetCount() == 1);
+	REQUIRE(clip.scale_y.GetCount() == 1);
+	REQUIRE(clip.location_x.GetCount() == 1);
+	REQUIRE(clip.location_y.GetCount() == 1);
+	REQUIRE(clip.origin_x.GetCount() == 1);
+	REQUIRE(clip.origin_y.GetCount() == 1);
+	REQUIRE(clip.rotation.GetCount() == 1);
+
+	CHECK(clip.scale_x.GetValue(1) == Approx(1.0).margin(0.00001));
+	CHECK(clip.scale_y.GetValue(1) == Approx(1.0).margin(0.00001));
+	CHECK(clip.location_x.GetValue(1) == Approx(0.0).margin(0.00001));
+	CHECK(clip.location_y.GetValue(1) == Approx(0.0).margin(0.00001));
+	CHECK(clip.origin_x.GetValue(1) == Approx(0.5).margin(0.00001));
+	CHECK(clip.origin_y.GetValue(1) == Approx(0.5).margin(0.00001));
+	CHECK(clip.rotation.GetValue(1) == Approx(0.0).margin(0.00001));
+}
+
+TEST_CASE( "Timeline render remains visible after loading clip with empty core transform keyframes", "[libopenshot][clip][json][timeline]" )
+{
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "front3.png";
+
+	Clip clip(path.str());
+	Json::Value root = clip.JsonValue();
+	root["scale_x"]["Points"] = Json::Value(Json::arrayValue);
+	root["scale_y"]["Points"] = Json::Value(Json::arrayValue);
+	root["location_x"]["Points"] = Json::Value(Json::arrayValue);
+	root["location_y"]["Points"] = Json::Value(Json::arrayValue);
+	root["rotation"]["Points"] = Json::Value(Json::arrayValue);
+	clip.SetJsonValue(root);
+
+	Timeline timeline(1280, 720, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	timeline.AddClip(&clip);
+	timeline.Open();
+
+	auto frame = timeline.GetFrame(1);
+	REQUIRE(frame != nullptr);
+	REQUIRE(frame->GetImage() != nullptr);
+
+	// Regression guard: the clip should still render into the timeline after
+	// loading empty transform keyframes from JSON.
+	CHECK(frame->GetImage()->pixelColor(200, 200).alpha() > 0);
+
+	timeline.Close();
+}
+
 TEST_CASE( "effects", "[libopenshot][clip]" )
 {
 	// Load clip with video
