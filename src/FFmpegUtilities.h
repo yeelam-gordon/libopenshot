@@ -201,7 +201,8 @@ inline static const uint8_t* ffmpeg_stream_get_side_data(
         const uint8_t *data = av_stream_get_side_data(stream, type, size);
     #else
         int old_size = 0;
-        const uint8_t *data = av_stream_get_side_data(stream, type, &old_size);
+        const uint8_t *data = av_stream_get_side_data(
+                const_cast<AVStream*>(stream), type, &old_size);
         if (size)
             *size = old_size >= 0 ? static_cast<size_t>(old_size) : 0;
     #endif
