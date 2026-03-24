@@ -1432,6 +1432,9 @@ std::shared_ptr<Frame> FFmpegReader::ReadStream(int64_t requested_frame) {
 		if (frame) {
 			// Copy and return the largest processed frame (assuming it was the last in the video file)
 			std::shared_ptr<Frame> f = CreateFrame(largest_frame_processed);
+			if (frame->has_image_data) {
+				f->AddImage(std::make_shared<QImage>(frame->GetImage()->copy()));
+			}
 
 			// Use solid color (if no image data found)
 			if (!frame->has_image_data) {
@@ -1439,9 +1442,9 @@ std::shared_ptr<Frame> FFmpegReader::ReadStream(int64_t requested_frame) {
 				f->AddColor(info.width, info.height, "#000");
 			}
 			// Silence audio data (if any), since we are repeating the last frame
-			frame->AddAudioSilence(samples_in_frame);
+			f->AddAudioSilence(samples_in_frame);
 
-			return frame;
+			return f;
 		} else {
 			// The largest processed frame is no longer in cache. Prefer the most recent
 			// finalized image first, then decoded image, to avoid black flashes.

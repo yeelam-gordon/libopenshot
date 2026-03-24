@@ -513,6 +513,18 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
             final_cache.Add(frame);
         }
 
+		// Timeline composition can paint directly into the timeline-owned background
+		// without mutating the cached clip frame.
+		if (options) {
+			if (!background_frame) {
+				background_frame = std::make_shared<Frame>(frame->number, frame->GetWidth(), frame->GetHeight(),
+														   "#00000000", frame->GetAudioSamplesCount(),
+														   frame->GetAudioChannelsCount());
+			}
+			apply_background(frame, background_frame, false);
+			return frame;
+		}
+
 		// No background: return the frame directly.
 		if (!background_frame) {
 			return frame;
