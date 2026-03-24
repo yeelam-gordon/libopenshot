@@ -111,7 +111,7 @@ namespace openshot {
 		std::shared_ptr<openshot::TrackedObjectBase> parentTrackedObject; ///< Tracked object this clip is attached to
 		openshot::Clip* parentClipObject; ///< Clip object this clip is attached to
 
-		/// Final cache object used to hold final frames
+		/// Final cache object used to hold final frames (currently unused for clip frame caching)
 		CacheMemory final_cache;
 		
 		// Audio resampler (if time mapping)
