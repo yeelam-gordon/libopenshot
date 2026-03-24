@@ -478,40 +478,33 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 		// Get frame object
 		std::shared_ptr<Frame> frame = NULL;
 
-		// Check cache
-		frame = final_cache.GetFrame(clip_frame_number);
-		if (!frame) {
-            // Generate clip frame
-            frame = GetOrCreateFrame(clip_frame_number);
+		// Generate clip frame
+		frame = GetOrCreateFrame(clip_frame_number);
 
-            // Get frame size and frame #
-            int64_t timeline_frame_number = clip_frame_number;
-            QSize timeline_size(frame->GetWidth(), frame->GetHeight());
-            if (background_frame) {
-                // If a background frame is provided, use it instead
-                timeline_frame_number = background_frame->number;
-                timeline_size.setWidth(background_frame->GetWidth());
-                timeline_size.setHeight(background_frame->GetHeight());
-            }
+		// Get frame size and frame #
+		int64_t timeline_frame_number = clip_frame_number;
+		QSize timeline_size(frame->GetWidth(), frame->GetHeight());
+		if (background_frame) {
+			// If a background frame is provided, use it instead
+			timeline_frame_number = background_frame->number;
+			timeline_size.setWidth(background_frame->GetWidth());
+			timeline_size.setHeight(background_frame->GetHeight());
+		}
 
-            // Get time mapped frame object (used to increase speed, change direction, etc...)
-            apply_timemapping(frame);
+		// Get time mapped frame object (used to increase speed, change direction, etc...)
+		apply_timemapping(frame);
 
-            // Apply waveform image (if any)
-            apply_waveform(frame, timeline_size);
+		// Apply waveform image (if any)
+		apply_waveform(frame, timeline_size);
 
-            // Apply effects BEFORE applying keyframes (if any local or global effects are used)
-            apply_effects(frame, timeline_frame_number, options, true);
+		// Apply effects BEFORE applying keyframes (if any local or global effects are used)
+		apply_effects(frame, timeline_frame_number, options, true);
 
-            // Apply keyframe / transforms to current clip image
-            apply_keyframes(frame, timeline_size);
+		// Apply keyframe / transforms to current clip image
+		apply_keyframes(frame, timeline_size);
 
-            // Apply effects AFTER applying keyframes (if any local or global effects are used)
-            apply_effects(frame, timeline_frame_number, options, false);
-
-            // Add final frame to cache (before flattening into background_frame)
-            final_cache.Add(frame);
-        }
+		// Apply effects AFTER applying keyframes (if any local or global effects are used)
+		apply_effects(frame, timeline_frame_number, options, false);
 
 		// Timeline composition can paint directly into the timeline-owned background
 		// without mutating the cached clip frame.
