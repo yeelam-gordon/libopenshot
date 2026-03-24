@@ -513,33 +513,12 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
             final_cache.Add(frame);
         }
 
-		const bool has_external_background = (background_frame != nullptr);
-
-		// Timeline path.
-		if (options) {
-			if (!background_frame) {
-				// Create a transparent background if missing.
-				background_frame = std::make_shared<Frame>(frame->number, frame->GetWidth(), frame->GetHeight(),
-														   "#00000000", frame->GetAudioSamplesCount(),
-														   frame->GetAudioChannelsCount());
-			}
-			if (options->force_safe_composite) {
-				// Edit mode: composite without mutating cached frame pixels.
-				apply_background(frame, background_frame, false);
-				return frame;
-			}
-
-			// Playback mode: keep original fast path.
-			apply_background(frame, background_frame, true);
-			return frame;
-		}
-
 		// No background: return the frame directly.
-		if (!has_external_background) {
+		if (!background_frame) {
 			return frame;
 		}
 
-		// External background: composite on a copy.
+		// Always composite on a copy so cached frame pixels remain immutable.
 		auto output = std::make_shared<Frame>(*frame.get());
 		apply_background(output, background_frame, true);
 		return output;
