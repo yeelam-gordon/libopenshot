@@ -1595,23 +1595,23 @@ TEST_CASE( "ApplyJSONDiff alpha updates refresh fixed-frame preview content", "[
 	std::shared_ptr<Frame> initial = t.GetFrame(frame_number);
 	REQUIRE(initial != nullptr);
 	REQUIRE(t.GetCache() != nullptr);
-	REQUIRE(overlay_clip.GetCache() != nullptr);
 	REQUIRE(t.GetCache()->Contains(frame_number));
-	REQUIRE(overlay_clip.GetCache()->Count() > 0);
+	QColor previous_color = initial->GetImage()->pixelColor(20, 20);
 
-	// Repeated alpha updates at the same frame must invalidate both timeline and
-	// clip caches, preventing stale preview frames from being reused.
+	// Repeated alpha updates at the same frame must invalidate the timeline cache
+	// and refresh the composited preview content.
 	const std::vector<double> alpha_steps = {0.9, 0.8, 0.7, 0.6, 0.5};
 	for (double alpha_value : alpha_steps) {
 		apply_alpha(alpha_value);
 		CHECK(!t.GetCache()->Contains(frame_number));
-		CHECK(overlay_clip.GetCache()->Count() == 0);
 
-		// Re-request frame to repopulate caches before next update.
+		// Re-request frame to repopulate the timeline cache before next update.
 		std::shared_ptr<Frame> refreshed = t.GetFrame(frame_number);
 		REQUIRE(refreshed != nullptr);
 		CHECK(t.GetCache()->Contains(frame_number));
-		CHECK(overlay_clip.GetCache()->Count() > 0);
+		QColor refreshed_color = refreshed->GetImage()->pixelColor(20, 20);
+		CHECK(refreshed_color != previous_color);
+		previous_color = refreshed_color;
 	}
 }
 
