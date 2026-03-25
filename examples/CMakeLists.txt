@@ -29,6 +29,43 @@ target_link_libraries(openshot-example openshot)
 add_executable(openshot-html-example ExampleHtml.cpp)
 target_link_libraries(openshot-html-example openshot Qt5::Gui)
 
+if(ENABLE_VULKAN_BENCHMARK)
+  find_package(Vulkan QUIET)
+  find_package(FFmpeg QUIET COMPONENTS avfilter)
+  find_program(GLSLANG_VALIDATOR glslangValidator)
+
+  if(Vulkan_FOUND AND TARGET FFmpeg::avfilter AND GLSLANG_VALIDATOR)
+    set(VULKAN_BENCHMARK_SHADER_DIR "${CMAKE_CURRENT_BINARY_DIR}/vulkan")
+    file(MAKE_DIRECTORY "${VULKAN_BENCHMARK_SHADER_DIR}")
+    set(VULKAN_DIRECT_PREVIEW_SHADER "${VULKAN_BENCHMARK_SHADER_DIR}/direct_preview.comp.spv")
+    add_custom_command(
+      OUTPUT "${VULKAN_DIRECT_PREVIEW_SHADER}"
+      COMMAND "${GLSLANG_VALIDATOR}" -V -S comp
+              -o "${VULKAN_DIRECT_PREVIEW_SHADER}"
+              "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/direct_preview.comp"
+      DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/direct_preview.comp"
+      VERBATIM
+    )
+    add_custom_target(openshot-vulkan-benchmark-shaders DEPENDS "${VULKAN_DIRECT_PREVIEW_SHADER}")
+
+    add_executable(openshot-vulkan-benchmark VulkanBenchmark.cpp)
+    add_dependencies(openshot-vulkan-benchmark openshot-vulkan-benchmark-shaders)
+    target_compile_definitions(openshot-vulkan-benchmark PRIVATE
+      -DTEST_MEDIA_PATH="${TEST_MEDIA_PATH}"
+      -DUSE_VULKAN_BENCHMARK=1
+      -DVULKAN_DIRECT_PREVIEW_SHADER_PATH="${VULKAN_DIRECT_PREVIEW_SHADER}"
+    )
+    target_link_libraries(openshot-vulkan-benchmark
+      openshot
+      Qt5::Gui
+      Vulkan::Vulkan
+      FFmpeg::avfilter
+    )
+  else()
+    message(WARNING "ENABLE_VULKAN_BENCHMARK was requested, but Vulkan, FFmpeg avfilter, or glslangValidator was not found. Skipping openshot-vulkan-benchmark.")
+  endif()
+endif()
+
 ############### PLAYER EXECUTABLE ################
 # Create test executable
 add_executable(openshot-player qt-demo/main.cpp)
