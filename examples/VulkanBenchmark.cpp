@@ -466,6 +466,13 @@ public:
 		CheckAv(avcodec_parameters_to_context(codec_context_, stream_->codecpar),
 				"avcodec_parameters_to_context");
 		codec_context_->thread_count = std::min(8, std::max(1, static_cast<int>(std::thread::hardware_concurrency())));
+		if (decode_kind_ == DecodeKind::Vulkan) {
+			// Frame-threaded decode has shown stalls with Vulkan hw surfaces on some drivers.
+			// Keep multi-threading enabled via slice threads while disabling frame threading.
+			codec_context_->thread_type &= ~FF_THREAD_FRAME;
+			if (codec_context_->thread_type == 0)
+				codec_context_->thread_type = FF_THREAD_SLICE;
+		}
 		codec_context_->pkt_timebase = stream_->time_base;
 
 		AVHWDeviceType hw_device_type = AV_HWDEVICE_TYPE_NONE;
@@ -999,6 +1006,8 @@ static void CheckVk(VkResult result, const std::string& context) {
 
 class DirectVulkanPreviewCompositor {
 public:
+	static constexpr uint64_t kQueueWaitTimeoutNs = 10ull * 1000ull * 1000ull * 1000ull;
+
 	DirectVulkanPreviewCompositor(const BenchmarkOptions& options,
 								  const QImage& overlay_image,
 								  AVBufferRef* hw_frames_context)
@@ -1242,12 +1251,8 @@ public:
 		submit_info.signalSemaphoreCount = static_cast<uint32_t>(signal_semaphores.size());
 		submit_info.pSignalSemaphores = signal_semaphores.data();
 
-		vulkan_device_context_->lock_queue(device_context_, static_cast<uint32_t>(compute_queue_family_), 0);
-		DebugLog("direct compositor: queue submit");
-		CheckVk(vkQueueSubmit(compute_queue_, 1, &submit_info, VK_NULL_HANDLE), "vkQueueSubmit direct compositor");
-		DebugLog("direct compositor: queue wait idle");
-		CheckVk(vkQueueWaitIdle(compute_queue_), "vkQueueWaitIdle direct compositor");
-		vulkan_device_context_->unlock_queue(device_context_, static_cast<uint32_t>(compute_queue_family_), 0);
+		DebugLog("direct compositor: queue submit + wait");
+		SubmitAndWait(submit_info, "direct compositor");
 
 		for (int i = 0; i < plane_count; ++i) {
 			vk_frame->layout[i] = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -1814,11 +1819,42 @@ private:
 		submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 		submit_info.commandBufferCount = 1;
 		submit_info.pCommandBuffers = &command_buffer;
-		vulkan_device_context_->lock_queue(device_context_, static_cast<uint32_t>(compute_queue_family_), 0);
-		CheckVk(vkQueueSubmit(compute_queue_, 1, &submit_info, VK_NULL_HANDLE), "vkQueueSubmit setup");
-		CheckVk(vkQueueWaitIdle(compute_queue_), "vkQueueWaitIdle setup");
-		vulkan_device_context_->unlock_queue(device_context_, static_cast<uint32_t>(compute_queue_family_), 0);
+		SubmitAndWait(submit_info, "setup");
 		vkFreeCommandBuffers(device_, command_pool_, 1, &command_buffer);
+	}
+
+	void SubmitAndWait(const VkSubmitInfo& submit_info, const std::string& context) {
+		VkFenceCreateInfo fence_info{};
+		fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+		VkFence fence = VK_NULL_HANDLE;
+		CheckVk(vkCreateFence(device_, &fence_info, nullptr, &fence), "vkCreateFence " + context);
+		bool queue_locked = false;
+
+		try {
+			// Hold FFmpeg's Vulkan queue lock only around queue submission.
+			// Keeping the lock during vkWaitForFences can deadlock with decoder threads
+			// that need to submit work which advances our waited timeline semaphores.
+			vulkan_device_context_->lock_queue(device_context_, static_cast<uint32_t>(compute_queue_family_), 0);
+			queue_locked = true;
+			CheckVk(vkQueueSubmit(compute_queue_, 1, &submit_info, fence), "vkQueueSubmit " + context);
+			vulkan_device_context_->unlock_queue(device_context_, static_cast<uint32_t>(compute_queue_family_), 0);
+			queue_locked = false;
+
+			const VkResult wait_result = vkWaitForFences(device_, 1, &fence, VK_TRUE, kQueueWaitTimeoutNs);
+			if (wait_result == VK_TIMEOUT) {
+				throw std::runtime_error("Vulkan queue wait timeout in " + context +
+										 "; possible GPU sync deadlock in direct Vulkan path");
+			}
+			CheckVk(wait_result, "vkWaitForFences " + context);
+		} catch (...) {
+			// Best-effort unlock in case an exception occurred before normal unlock.
+			if (queue_locked)
+				vulkan_device_context_->unlock_queue(device_context_, static_cast<uint32_t>(compute_queue_family_), 0);
+			vkDestroyFence(device_, fence, nullptr);
+			throw;
+		}
+
+		vkDestroyFence(device_, fence, nullptr);
 	}
 
 	const BenchmarkOptions& options_;

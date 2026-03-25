@@ -33,6 +33,10 @@ if(ENABLE_VULKAN_BENCHMARK)
   find_package(Vulkan QUIET)
   find_package(FFmpeg QUIET COMPONENTS avfilter)
   find_program(GLSLANG_VALIDATOR glslangValidator)
+  find_package(PkgConfig QUIET)
+  if(PKG_CONFIG_FOUND)
+    pkg_check_modules(VULKAN_PC QUIET vulkan)
+  endif()
 
   if(Vulkan_FOUND AND TARGET FFmpeg::avfilter AND GLSLANG_VALIDATOR)
     set(VULKAN_BENCHMARK_SHADER_DIR "${CMAKE_CURRENT_BINARY_DIR}/vulkan")
@@ -55,6 +59,12 @@ if(ENABLE_VULKAN_BENCHMARK)
       -DUSE_VULKAN_BENCHMARK=1
       -DVULKAN_DIRECT_PREVIEW_SHADER_PATH="${VULKAN_DIRECT_PREVIEW_SHADER}"
     )
+    if(VULKAN_PC_FOUND)
+      # Prefer Vulkan headers from pkg-config when available (e.g. local headers
+      # used by custom FFmpeg builds), to avoid header/API mismatches.
+      target_include_directories(openshot-vulkan-benchmark PRIVATE ${VULKAN_PC_INCLUDE_DIRS})
+      target_compile_options(openshot-vulkan-benchmark PRIVATE ${VULKAN_PC_CFLAGS_OTHER})
+    endif()
     target_link_libraries(openshot-vulkan-benchmark
       openshot
       Qt5::Gui
