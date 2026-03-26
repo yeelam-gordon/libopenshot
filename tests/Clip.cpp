@@ -865,6 +865,57 @@ TEST_CASE( "cached_frame_not_mutated_by_background_compositing", "[libopenshot][
 	CHECK(c2.blue()  == Approx(0).margin(8));
 }
 
+TEST_CASE( "timeline_background_compositing_mutates_only_timeline_canvas", "[libopenshot][clip][timeline][cache]" )
+{
+	openshot::CacheMemory cache;
+	auto src = std::make_shared<openshot::Frame>(1, 64, 64, "#000000", 0, 2);
+	src->AddColor(QColor(Qt::red));
+	cache.Add(src);
+
+	openshot::DummyReader dummy(openshot::Fraction(30,1), 64, 64, 44100, 2, 1.0, &cache);
+	dummy.Open();
+
+	openshot::Clip clip;
+	clip.Reader(&dummy);
+	clip.Open();
+	clip.display = openshot::FRAME_DISPLAY_NONE;
+	clip.alpha.AddPoint(1, 0.5);
+
+	openshot::TimelineInfoStruct options{};
+	options.is_top_clip = true;
+	options.is_before_clip_keyframes = true;
+
+	auto bg_blue = std::make_shared<openshot::Frame>(1, 64, 64, "#000000", 0, 2);
+	bg_blue->AddColor(QColor(Qt::blue));
+	auto out_blue = clip.GetFrame(bg_blue, 1, &options);
+
+	QColor cached_pixel = out_blue->GetImage()->pixelColor(32, 32);
+	CHECK(cached_pixel.alpha() == Approx(127).margin(10));
+	CHECK(cached_pixel.red()   == Approx(255).margin(2));
+	CHECK(cached_pixel.green() == Approx(0).margin(2));
+	CHECK(cached_pixel.blue()  == Approx(0).margin(2));
+
+	QColor blue_canvas = bg_blue->GetImage()->pixelColor(32, 32);
+	CHECK(blue_canvas.red()   == Approx(127).margin(14));
+	CHECK(blue_canvas.green() == Approx(0).margin(8));
+	CHECK(blue_canvas.blue()  == Approx(127).margin(14));
+
+	auto bg_green = std::make_shared<openshot::Frame>(1, 64, 64, "#000000", 0, 2);
+	bg_green->AddColor(QColor(Qt::green));
+	auto out_green = clip.GetFrame(bg_green, 1, &options);
+
+	QColor cached_pixel_again = out_green->GetImage()->pixelColor(32, 32);
+	CHECK(cached_pixel_again.alpha() == Approx(127).margin(10));
+	CHECK(cached_pixel_again.red()   == Approx(255).margin(2));
+	CHECK(cached_pixel_again.green() == Approx(0).margin(2));
+	CHECK(cached_pixel_again.blue()  == Approx(0).margin(2));
+
+	QColor green_canvas = bg_green->GetImage()->pixelColor(32, 32);
+	CHECK(green_canvas.red()   == Approx(127).margin(14));
+	CHECK(green_canvas.green() == Approx(127).margin(14));
+	CHECK(green_canvas.blue()  == Approx(0).margin(8));
+}
+
 TEST_CASE("all_composite_modes_simple_colors", "[libopenshot][clip][composite]")
 {
 	// Source clip: solid red

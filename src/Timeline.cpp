@@ -32,7 +32,7 @@ using namespace openshot;
 
 // Default Constructor for the timeline (which sets the canvas width and height)
 Timeline::Timeline(int width, int height, Fraction fps, int sample_rate, int channels, ChannelLayout channel_layout) :
-		is_open(false), auto_map_clips(true), managed_cache(true), path(""), max_time(0.0), cache_epoch(0), safe_edit_frames_remaining(0)
+		is_open(false), auto_map_clips(true), managed_cache(true), path(""), max_time(0.0), cache_epoch(0)
 {
 	// Create CrashHandler and Attach (incase of errors)
 	CrashHandler::Instance();
@@ -83,7 +83,7 @@ Timeline::Timeline(const ReaderInfo info) : Timeline::Timeline(
 
 // Constructor for the timeline (which loads a JSON structure from a file path, and initializes a timeline)
 Timeline::Timeline(const std::string& projectPath, bool convert_absolute_paths) :
-		is_open(false), auto_map_clips(true), managed_cache(true), path(projectPath), max_time(0.0), cache_epoch(0), safe_edit_frames_remaining(0) {
+		is_open(false), auto_map_clips(true), managed_cache(true), path(projectPath), max_time(0.0), cache_epoch(0) {
 
 	// Create CrashHandler and Attach (incase of errors)
 	CrashHandler::Instance();
@@ -634,13 +634,12 @@ std::shared_ptr<Frame> Timeline::GetOrCreateFrame(std::shared_ptr<Frame> backgro
 }
 
 // Process a new layer of video or audio
-void Timeline::add_layer(std::shared_ptr<Frame> new_frame, Clip* source_clip, int64_t clip_frame_number, bool is_top_clip, bool force_safe_composite, float max_volume)
+void Timeline::add_layer(std::shared_ptr<Frame> new_frame, Clip* source_clip, int64_t clip_frame_number, bool is_top_clip, float max_volume)
 {
 	// Create timeline options (with details about this current frame request)
 	TimelineInfoStruct options{};
 	options.is_top_clip = is_top_clip;
 	options.is_before_clip_keyframes = true;
-	options.force_safe_composite = force_safe_composite;
 
 	// Get the clip's frame, composited on top of the current timeline frame
 	std::shared_ptr<Frame> source_frame;
@@ -1070,11 +1069,6 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 			}
 
 			// Compose intersecting clips in a single pass
-			const int safe_remaining = safe_edit_frames_remaining.load(std::memory_order_relaxed);
-			const bool force_safe_composite = (safe_remaining > 0);
-			if (force_safe_composite) {
-				safe_edit_frames_remaining.fetch_sub(1, std::memory_order_relaxed);
-			}
 			for (const auto& ci : clip_infos) {
 				// Debug output
 				ZmqLogger::Instance()->AppendDebugMethod(
@@ -1105,7 +1099,7 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 							"clip_frame_number", clip_frame_number);
 
 					// Add clip's frame as layer
-					add_layer(new_frame, ci.clip, clip_frame_number, is_top_clip, force_safe_composite, max_volume_sum);
+					add_layer(new_frame, ci.clip, clip_frame_number, is_top_clip, max_volume_sum);
 
 				} else {
 					// Debug output
@@ -1397,8 +1391,6 @@ void Timeline::ApplyJsonDiff(std::string value) {
 
 		// Timeline content changed: notify cache clients to rescan active window.
 		if (!root.empty()) {
-			// After edits, force safe composition for a short window.
-			safe_edit_frames_remaining.store(240, std::memory_order_relaxed);
 			BumpCacheEpoch();
 		}
 	}
