@@ -990,11 +990,13 @@ static std::vector<uint32_t> LoadSpirvFile(const std::string& path) {
 	if (!stream.is_open())
 		throw std::runtime_error("Unable to open SPIR-V shader: " + path);
 	const std::streamsize size = stream.tellg();
-	if (size <= 0 || (size % 4) != 0)
+	constexpr std::streamsize kMaxShaderBytes = 16 * 1024 * 1024;
+	if (size <= 0 || size > kMaxShaderBytes || (size % 4) != 0)
 		throw std::runtime_error("Invalid SPIR-V shader size: " + path);
 	stream.seekg(0, std::ios::beg);
 	std::vector<uint32_t> code(static_cast<size_t>(size) / 4);
-	if (!stream.read(reinterpret_cast<char*>(code.data()), size))
+	char* byte_ptr = reinterpret_cast<char*>(code.data());
+	if (!byte_ptr || !stream.read(byte_ptr, size))
 		throw std::runtime_error("Unable to read SPIR-V shader: " + path);
 	return code;
 }
@@ -1121,6 +1123,10 @@ public:
 			vkDestroyCommandPool(device_, command_pool_, nullptr);
 	}
 
+	struct PushConstantBlock {
+		int values[7];
+	};
+
 	void Composite(const AVFrame* frame) {
 		if (software_input_)
 			throw std::runtime_error("Composite(AVFrame) called on software-input compositor");
@@ -1201,17 +1207,15 @@ public:
 		vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
 		vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout_, 0, 1, &descriptor_set_, 0, nullptr);
 
-		struct PushConstants {
-			int output_size[2];
-			int overlay_origin[2];
-			int overlay_size[2];
-			int chroma_mode;
-		} push_constants = {
-			{output_width_, output_height_},
-			{layout_.overlay_x, layout_.overlay_y},
-			{prepared_overlay_.width(), prepared_overlay_.height()},
+		const PushConstantBlock push_constants = {{
+			output_width_,
+			output_height_,
+			layout_.overlay_x,
+			layout_.overlay_y,
+			prepared_overlay_.width(),
+			prepared_overlay_.height(),
 			chroma_mode_
-		};
+		}};
 		vkCmdPushConstants(command_buffer, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_constants), &push_constants);
 		vkCmdDispatch(command_buffer,
 					  static_cast<uint32_t>((output_width_ + 15) / 16),
@@ -1279,17 +1283,15 @@ public:
 		VkCommandBuffer command_buffer = BeginOneTimeCommands();
 		vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
 		vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout_, 0, 1, &descriptor_set_, 0, nullptr);
-		struct PushConstants {
-			int output_size[2];
-			int overlay_origin[2];
-			int overlay_size[2];
-			int chroma_mode;
-		} push_constants = {
-			{output_width_, output_height_},
-			{layout_.overlay_x, layout_.overlay_y},
-			{prepared_overlay_.width(), prepared_overlay_.height()},
+		const PushConstantBlock push_constants = {{
+			output_width_,
+			output_height_,
+			layout_.overlay_x,
+			layout_.overlay_y,
+			prepared_overlay_.width(),
+			prepared_overlay_.height(),
 			chroma_mode_
-		};
+		}};
 		vkCmdPushConstants(command_buffer, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_constants), &push_constants);
 		vkCmdDispatch(command_buffer,
 					  static_cast<uint32_t>((output_width_ + 15) / 16),
