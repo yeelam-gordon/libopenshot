@@ -1090,6 +1090,7 @@ public:
 	~DirectVulkanPreviewCompositor() {
 		if (device_ == VK_NULL_HANDLE)
 			return;
+		WaitForPendingSubmission("compositor shutdown");
 		vkDeviceWaitIdle(device_);
 		if (descriptor_pool_ != VK_NULL_HANDLE)
 			vkDestroyDescriptorPool(device_, descriptor_pool_, nullptr);
@@ -1128,6 +1129,13 @@ public:
 	};
 
 	void Composite(const AVFrame* frame) {
+		Submit(frame);
+		WaitForPendingSubmission("direct compositor");
+	}
+
+	void Submit(const AVFrame* frame) {
+		if (pending_submission_)
+			throw std::runtime_error("Direct Vulkan compositor submission called while previous frame is still pending");
 		if (software_input_)
 			throw std::runtime_error("Composite(AVFrame) called on software-input compositor");
 		auto* vk_frame = reinterpret_cast<AVVkFrame*>(frame->data[0]);
@@ -1255,8 +1263,11 @@ public:
 		submit_info.signalSemaphoreCount = static_cast<uint32_t>(signal_semaphores.size());
 		submit_info.pSignalSemaphores = signal_semaphores.data();
 
-		DebugLog("direct compositor: queue submit + wait");
-		SubmitAndWait(submit_info, "direct compositor");
+		DebugLog("direct compositor: queue submit");
+		pending_fence_ = Submit(submit_info, "direct compositor");
+		pending_submission_ = true;
+		pending_command_buffer_ = command_buffer;
+		pending_video_views_ = video_views;
 
 		for (int i = 0; i < plane_count; ++i) {
 			vk_frame->layout[i] = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -1264,11 +1275,6 @@ public:
 			vk_frame->queue_family[i] = static_cast<uint32_t>(compute_queue_family_);
 			vk_frame->sem_value[i] += 1;
 		}
-		for (VkImageView view : video_views) {
-			if (view != VK_NULL_HANDLE)
-				vkDestroyImageView(device_, view, nullptr);
-		}
-		vkFreeCommandBuffers(device_, command_pool_, 1, &command_buffer);
 	}
 
 	void CompositeSoftwareRgba(const AVFrame* frame) {
@@ -1298,6 +1304,26 @@ public:
 					  static_cast<uint32_t>((output_height_ + 15) / 16),
 					  1);
 		EndOneTimeCommands(command_buffer);
+	}
+
+	void WaitForPendingSubmission(const std::string& context) {
+		if (!pending_submission_)
+			return;
+		WaitForFence(pending_fence_, context);
+		if (pending_fence_ != VK_NULL_HANDLE) {
+			vkDestroyFence(device_, pending_fence_, nullptr);
+			pending_fence_ = VK_NULL_HANDLE;
+		}
+		for (VkImageView view : pending_video_views_) {
+			if (view != VK_NULL_HANDLE)
+				vkDestroyImageView(device_, view, nullptr);
+		}
+		pending_video_views_.fill(VK_NULL_HANDLE);
+		if (pending_command_buffer_ != VK_NULL_HANDLE) {
+			vkFreeCommandBuffers(device_, command_pool_, 1, &pending_command_buffer_);
+			pending_command_buffer_ = VK_NULL_HANDLE;
+		}
+		pending_submission_ = false;
 	}
 
 	QImage ReadbackOutput() {
@@ -1821,11 +1847,13 @@ private:
 		submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 		submit_info.commandBufferCount = 1;
 		submit_info.pCommandBuffers = &command_buffer;
-		SubmitAndWait(submit_info, "setup");
+		VkFence fence = Submit(submit_info, "setup");
+		WaitForFence(fence, "setup");
+		vkDestroyFence(device_, fence, nullptr);
 		vkFreeCommandBuffers(device_, command_pool_, 1, &command_buffer);
 	}
 
-	void SubmitAndWait(const VkSubmitInfo& submit_info, const std::string& context) {
+	VkFence Submit(const VkSubmitInfo& submit_info, const std::string& context) {
 		VkFenceCreateInfo fence_info{};
 		fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 		VkFence fence = VK_NULL_HANDLE;
@@ -1841,13 +1869,6 @@ private:
 			CheckVk(vkQueueSubmit(compute_queue_, 1, &submit_info, fence), "vkQueueSubmit " + context);
 			vulkan_device_context_->unlock_queue(device_context_, static_cast<uint32_t>(compute_queue_family_), 0);
 			queue_locked = false;
-
-			const VkResult wait_result = vkWaitForFences(device_, 1, &fence, VK_TRUE, kQueueWaitTimeoutNs);
-			if (wait_result == VK_TIMEOUT) {
-				throw std::runtime_error("Vulkan queue wait timeout in " + context +
-										 "; possible GPU sync deadlock in direct Vulkan path");
-			}
-			CheckVk(wait_result, "vkWaitForFences " + context);
 		} catch (...) {
 			// Best-effort unlock in case an exception occurred before normal unlock.
 			if (queue_locked)
@@ -1855,8 +1876,18 @@ private:
 			vkDestroyFence(device_, fence, nullptr);
 			throw;
 		}
+		return fence;
+	}
 
-		vkDestroyFence(device_, fence, nullptr);
+	void WaitForFence(VkFence fence, const std::string& context) {
+		if (fence == VK_NULL_HANDLE)
+			return;
+		const VkResult wait_result = vkWaitForFences(device_, 1, &fence, VK_TRUE, kQueueWaitTimeoutNs);
+		if (wait_result == VK_TIMEOUT) {
+			throw std::runtime_error("Vulkan queue wait timeout in " + context +
+									 "; possible GPU sync deadlock in direct Vulkan path");
+		}
+		CheckVk(wait_result, "vkWaitForFences " + context);
 	}
 
 	const BenchmarkOptions& options_;
@@ -1890,6 +1921,10 @@ private:
 	VkImage source_image_ = VK_NULL_HANDLE;
 	VkDeviceMemory source_memory_ = VK_NULL_HANDLE;
 	VkImageView source_view_ = VK_NULL_HANDLE;
+	VkFence pending_fence_ = VK_NULL_HANDLE;
+	VkCommandBuffer pending_command_buffer_ = VK_NULL_HANDLE;
+	std::array<VkImageView, 3> pending_video_views_{};
+	bool pending_submission_ = false;
 };
 
 static TimingStats RunVulkanUploadBenchmark(const BenchmarkOptions& options, const QImage& overlay_image,
@@ -2021,25 +2056,28 @@ static TimingStats RunVulkanDirectBenchmark(const BenchmarkOptions& options, con
 			if (!main_input_frame)
 				throw std::runtime_error("Unable to clone direct Vulkan frame");
 
-			const auto composite_start = Clock::now();
-			compositor.Composite(main_input_frame.get());
-			const auto composite_end = Clock::now();
-			stats.composite_ms += std::chrono::duration<double, std::milli>(composite_end - composite_start).count();
+			const auto submit_start = Clock::now();
+			compositor.Submit(main_input_frame.get());
+			const auto submit_end = Clock::now();
+			stats.composite_ms += std::chrono::duration<double, std::milli>(submit_end - submit_start).count();
+
+			ScopedFrame next_frame;
+			double next_decode_ms = 0.0;
+			if (frame_index + 1 < frame_limit && decoder.NextFrame(next_frame, next_decode_ms)) {
+				stats.decode_ms += next_decode_ms;
+				used_hw_decode = used_hw_decode || decoder.UsingHwDecode();
+			}
+
+			const auto wait_start = Clock::now();
+			compositor.WaitForPendingSubmission("direct compositor");
+			const auto wait_end = Clock::now();
+			stats.composite_ms += std::chrono::duration<double, std::milli>(wait_end - wait_start).count();
 			if (ShouldDumpFrame(options, frame_index + 1)) {
 				SaveDumpImage(options, "VulkanDirect->Vk", frame_index + 1, compositor.ReadbackOutput());
 			}
 			stats.frames++;
 			frame_index++;
-
-			if (frame_index >= frame_limit)
-				break;
-
-			current_frame = ScopedFrame();
-			double next_decode_ms = 0.0;
-			if (!decoder.NextFrame(current_frame, next_decode_ms))
-				break;
-			stats.decode_ms += next_decode_ms;
-			used_hw_decode = used_hw_decode || decoder.UsingHwDecode();
+			current_frame = std::move(next_frame);
 		}
 	} catch (...) {
 		decoder.Close();
