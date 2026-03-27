@@ -995,8 +995,12 @@ static std::vector<uint32_t> LoadSpirvFile(const std::string& path) {
 		throw std::runtime_error("Invalid SPIR-V shader size: " + path);
 	stream.seekg(0, std::ios::beg);
 	std::vector<uint32_t> code(static_cast<size_t>(size) / 4);
+	const size_t byte_count = code.size() * sizeof(uint32_t);
+	if (byte_count != static_cast<size_t>(size))
+		throw std::runtime_error("SPIR-V shader size overflow: " + path);
 	char* byte_ptr = reinterpret_cast<char*>(code.data());
-	if (!byte_ptr || !stream.read(byte_ptr, size))
+	if (!stream.read(byte_ptr, static_cast<std::streamsize>(byte_count)) ||
+		stream.gcount() != static_cast<std::streamsize>(byte_count))
 		throw std::runtime_error("Unable to read SPIR-V shader: " + path);
 	return code;
 }
@@ -1087,11 +1091,17 @@ public:
 		AllocateDescriptorSet();
 	}
 
-	~DirectVulkanPreviewCompositor() {
+	~DirectVulkanPreviewCompositor() noexcept {
 		if (device_ == VK_NULL_HANDLE)
 			return;
-		WaitForPendingSubmission("compositor shutdown");
-		vkDeviceWaitIdle(device_);
+		try {
+			WaitForPendingSubmission("compositor shutdown");
+			vkDeviceWaitIdle(device_);
+		} catch (const std::exception& e) {
+			DebugLog(std::string("direct compositor: shutdown cleanup failed: ") + e.what());
+		} catch (...) {
+			DebugLog("direct compositor: shutdown cleanup failed with unknown exception");
+		}
 		if (descriptor_pool_ != VK_NULL_HANDLE)
 			vkDestroyDescriptorPool(device_, descriptor_pool_, nullptr);
 		if (pipeline_ != VK_NULL_HANDLE)
@@ -1125,7 +1135,13 @@ public:
 	}
 
 	struct PushConstantBlock {
-		int values[7];
+		int output_width;
+		int output_height;
+		int overlay_x;
+		int overlay_y;
+		int overlay_width;
+		int overlay_height;
+		int chroma_mode;
 	};
 
 	void Composite(const AVFrame* frame) {
@@ -1215,7 +1231,7 @@ public:
 		vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
 		vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout_, 0, 1, &descriptor_set_, 0, nullptr);
 
-		const PushConstantBlock push_constants = {{
+		const PushConstantBlock push_constants{
 			output_width_,
 			output_height_,
 			layout_.overlay_x,
@@ -1223,7 +1239,7 @@ public:
 			prepared_overlay_.width(),
 			prepared_overlay_.height(),
 			chroma_mode_
-		}};
+		};
 		vkCmdPushConstants(command_buffer, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_constants), &push_constants);
 		vkCmdDispatch(command_buffer,
 					  static_cast<uint32_t>((output_width_ + 15) / 16),
@@ -1289,7 +1305,7 @@ public:
 		VkCommandBuffer command_buffer = BeginOneTimeCommands();
 		vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
 		vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout_, 0, 1, &descriptor_set_, 0, nullptr);
-		const PushConstantBlock push_constants = {{
+		const PushConstantBlock push_constants{
 			output_width_,
 			output_height_,
 			layout_.overlay_x,
@@ -1297,7 +1313,7 @@ public:
 			prepared_overlay_.width(),
 			prepared_overlay_.height(),
 			chroma_mode_
-		}};
+		};
 		vkCmdPushConstants(command_buffer, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_constants), &push_constants);
 		vkCmdDispatch(command_buffer,
 					  static_cast<uint32_t>((output_width_ + 15) / 16),
@@ -1448,7 +1464,7 @@ private:
 		VkPushConstantRange push_constant{};
 		push_constant.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 		push_constant.offset = 0;
-		push_constant.size = sizeof(int) * 7;
+		push_constant.size = sizeof(PushConstantBlock);
 
 		VkPipelineLayoutCreateInfo info{};
 		info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
