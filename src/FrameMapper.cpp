@@ -820,6 +820,10 @@ void FrameMapper::SetJsonValue(const Json::Value root) {
 // Change frame rate or audio mapping details
 void FrameMapper::ChangeMapping(Fraction target_fps, PulldownType target_pulldown,  int target_sample_rate, int target_channels, ChannelLayout target_channel_layout)
 {
+	// Prevent concurrent GetFrame()/Init()/Close() calls from using or freeing
+	// the resampler while this mapping update is in progress.
+	const std::lock_guard<std::recursive_mutex> lock(getFrameMutex);
+
 	ZmqLogger::Instance()->AppendDebugMethod(
 		"FrameMapper::ChangeMapping",
 		"target_fps.num", target_fps.num,
@@ -861,6 +865,13 @@ void FrameMapper::ChangeMapping(Fraction target_fps, PulldownType target_pulldow
 		SWR_FREE(&avr);
 		avr = NULL;
 	}
+
+	// Reset direction/resampler continuity after a mapping change.
+	previous_frame = 0;
+	const std::lock_guard<std::recursive_mutex> direction_lock(directionMutex);
+	have_hint = false;
+	last_dir_initialized = false;
+	last_is_increasing = true;
 }
 
 // Resample audio and map channels (if needed)

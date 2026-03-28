@@ -500,6 +500,9 @@ double Timeline::GetMinTime() {
 // Apply a FrameMapper to a clip which matches the settings of this timeline
 void Timeline::apply_mapper_to_clip(Clip* clip)
 {
+	// Serialize mapper replacement/reconfiguration with active frame generation.
+	const std::lock_guard<std::recursive_mutex> guard(getFrameMutex);
+
 	// Determine type of reader
 	ReaderBase* clip_reader = NULL;
 	if (clip->Reader()->Name() == "FrameMapper")
