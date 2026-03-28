@@ -21,7 +21,9 @@
 #include "Frame.h"
 #include "FrameMapper.h"
 #include "Timeline.h"
+#include <atomic>
 #include <sstream>
+#include <thread>
 
 using namespace openshot;
 
@@ -244,6 +246,53 @@ TEST_CASE( "resample_audio_48000_to_41000", "[libopenshot][framemapper]" )
 
 	// Close mapper
 	map.Close();
+}
+
+TEST_CASE( "concurrent_change_mapping_and_getframe_is_safe", "[libopenshot][framemapper][audio][threading]" )
+{
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "sintel_trailer-720p.mp4";
+	FFmpegReader reader(path.str());
+
+	FrameMapper map(&reader, Fraction(30, 1), PULLDOWN_NONE, 44100, 2, LAYOUT_STEREO);
+	map.Open();
+
+	std::atomic<bool> failed{false};
+
+	std::thread frame_thread([&]() {
+		try {
+			for (int i = 0; i < 120; ++i) {
+				const int64_t frame_number = (i % 60) + 1;
+				auto frame = map.GetFrame(frame_number);
+				REQUIRE(frame != nullptr);
+				REQUIRE(frame->GetAudioChannelsCount() >= 1);
+				REQUIRE(frame->GetAudioSamplesCount() >= 0);
+			}
+		} catch (...) {
+			failed = true;
+		}
+	});
+
+	std::thread remap_thread([&]() {
+		try {
+			for (int i = 0; i < 60; ++i) {
+				if (i % 2 == 0)
+					map.ChangeMapping(Fraction(30, 1), PULLDOWN_NONE, 44100, 2, LAYOUT_STEREO);
+				else
+					map.ChangeMapping(Fraction(24, 1), PULLDOWN_NONE, 48000, 2, LAYOUT_STEREO);
+			}
+		} catch (...) {
+			failed = true;
+		}
+	});
+
+	frame_thread.join();
+	remap_thread.join();
+
+	CHECK(failed == false);
+
+	map.Close();
+	reader.Close();
 }
 
 TEST_CASE( "resample_audio_mapper", "[libopenshot][framemapper]" ) {
