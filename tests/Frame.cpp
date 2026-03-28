@@ -13,8 +13,10 @@
 
 #include <sstream>
 #include <memory>
+#include <cstdio>
 
 #include <QImage>
+#include <QColor>
 
 #ifdef USE_OPENCV
 #define int64 opencv_broken_int
@@ -31,6 +33,46 @@
 #include "Frame.h"
 
 using namespace openshot;
+
+namespace {
+
+std::shared_ptr<Frame> make_vertical_stripe_frame() {
+	auto frame = std::make_shared<Frame>(1, 100, 300, "#000000");
+	auto image = std::make_shared<QImage>(100, 300, QImage::Format_RGBA8888);
+
+	for (int y = 0; y < image->height(); ++y) {
+		QColor color = Qt::red;
+		if (y >= 100 && y < 200)
+			color = Qt::green;
+		else if (y >= 200)
+			color = Qt::blue;
+
+		for (int x = 0; x < image->width(); ++x)
+			image->setPixelColor(x, y, color);
+	}
+
+	frame->AddImage(image);
+	return frame;
+}
+
+QImage write_thumbnail(
+	const std::shared_ptr<Frame>& frame,
+	const std::string& path,
+	bool ignore_aspect,
+	ScaleType scale_mode = SCALE_FIT) {
+	frame->Thumbnail(path, 98, 64, "", "", "#000000", ignore_aspect, "PNG", 100, 0.0f, scale_mode);
+	QImage result(QString::fromStdString(path));
+	std::remove(path.c_str());
+	return result;
+}
+
+void check_thumbnail_dimensions(const QImage& image) {
+	REQUIRE_FALSE(image.isNull());
+	CHECK(image.width() == 98);
+	CHECK(image.height() == 64);
+}
+
+}
 
 TEST_CASE( "Default_Constructor", "[libopenshot][frame]" )
 {
@@ -144,6 +186,57 @@ TEST_CASE( "GetSamplesPerFrame invalid rate inputs", "[libopenshot][frame]" )
 	CHECK(Frame::GetSamplesPerFrame(/*frame_number=*/1, Fraction(30, 0), /*sample_rate=*/44100, /*channels=*/2) == 0);
 	CHECK(Frame::GetSamplesPerFrame(/*frame_number=*/1, Fraction(30, 1), /*sample_rate=*/0, /*channels=*/2) == 0);
 	CHECK(Frame::GetSamplesPerFrame(/*frame_number=*/1, Fraction(30, 1), /*sample_rate=*/44100, /*channels=*/0) == 0);
+}
+
+TEST_CASE( "Thumbnail preserves legacy fit behavior without scale mode", "[libopenshot][frame][thumbnail]" )
+{
+	std::stringstream thumb_path;
+	thumb_path << TEST_MEDIA_PATH << "thumbnail-fit-default-test.png";
+	auto result = write_thumbnail(make_vertical_stripe_frame(), thumb_path.str(), false);
+
+	check_thumbnail_dimensions(result);
+
+	QColor left = result.pixelColor(0, result.height() / 2);
+	QColor center = result.pixelColor(result.width() / 2, result.height() / 2);
+	QColor right = result.pixelColor(result.width() - 1, result.height() / 2);
+
+	CHECK(left == QColor(Qt::black));
+	CHECK(center == QColor(Qt::green));
+	CHECK(right == QColor(Qt::black));
+}
+
+TEST_CASE( "Thumbnail explicit fit scale mode matches legacy behavior", "[libopenshot][frame][thumbnail]" )
+{
+	std::stringstream thumb_path;
+	thumb_path << TEST_MEDIA_PATH << "thumbnail-fit-explicit-test.png";
+	auto result = write_thumbnail(make_vertical_stripe_frame(), thumb_path.str(), false, SCALE_FIT);
+
+	check_thumbnail_dimensions(result);
+
+	QColor left = result.pixelColor(0, result.height() / 2);
+	QColor center = result.pixelColor(result.width() / 2, result.height() / 2);
+	QColor right = result.pixelColor(result.width() - 1, result.height() / 2);
+
+	CHECK(left == QColor(Qt::black));
+	CHECK(center == QColor(Qt::green));
+	CHECK(right == QColor(Qt::black));
+}
+
+TEST_CASE( "Thumbnail scale mode supports crop", "[libopenshot][frame][thumbnail]" )
+{
+	std::stringstream thumb_path;
+	thumb_path << TEST_MEDIA_PATH << "thumbnail-crop-test.png";
+	auto result = write_thumbnail(make_vertical_stripe_frame(), thumb_path.str(), false, SCALE_CROP);
+
+	check_thumbnail_dimensions(result);
+
+	QColor left = result.pixelColor(0, result.height() / 2);
+	QColor center = result.pixelColor(result.width() / 2, result.height() / 2);
+	QColor right = result.pixelColor(result.width() - 1, result.height() / 2);
+
+	CHECK(left == QColor(Qt::green));
+	CHECK(center == QColor(Qt::green));
+	CHECK(right == QColor(Qt::green));
 }
 
 #ifdef USE_OPENCV
