@@ -43,20 +43,21 @@ TEST_CASE( "Change settings", "[libopenshot][settings]" )
 	int original_runtime_threads = omp_get_max_threads();
 	int original_omp_threads = s->OMP_THREADS;
 	int original_ff_threads = s->FF_THREADS;
-	s->OMP_THREADS = 13;
+	const int requested_omp_threads = std::min(13, s->MaxAllowedThreads());
+	s->OMP_THREADS = requested_omp_threads;
 	s->FF_THREADS = 12;
 	s->HIGH_QUALITY_SCALING = true;
 	Settings::Instance();
 
-	CHECK(s->OMP_THREADS == 13);
+	CHECK(s->OMP_THREADS == requested_omp_threads);
 	CHECK(s->FF_THREADS == 12);
-	CHECK(s->EffectiveOMPThreads() == 13);
+	CHECK(s->EffectiveOMPThreads() == requested_omp_threads);
 	CHECK(s->HIGH_QUALITY_SCALING == true);
-	CHECK(omp_get_max_threads() == 13);
+	CHECK(omp_get_max_threads() == requested_omp_threads);
 
-	CHECK(Settings::Instance()->OMP_THREADS == 13);
+	CHECK(Settings::Instance()->OMP_THREADS == requested_omp_threads);
 	CHECK(Settings::Instance()->FF_THREADS == 12);
-	CHECK(Settings::Instance()->EffectiveOMPThreads() == 13);
+	CHECK(Settings::Instance()->EffectiveOMPThreads() == requested_omp_threads);
 	CHECK(Settings::Instance()->HIGH_QUALITY_SCALING == true);
 
 	// Restore prior OpenMP runtime state for later tests.
