@@ -17,7 +17,7 @@ endif()
 file(TO_NATIVE_PATH "${PROJECT_SOURCE_DIR}/examples/" TEST_MEDIA_PATH)
 
 # Benchmark executable
-add_executable(openshot-benchmark Benchmark.cpp)
+add_executable(openshot-benchmark Benchmark.cpp BenchmarkOptions.cpp)
 target_compile_definitions(openshot-benchmark PRIVATE -DTEST_MEDIA_PATH="${TEST_MEDIA_PATH}")
 target_link_libraries(openshot-benchmark openshot)
 
@@ -54,6 +54,7 @@ set(OPENSHOT_TESTS
   Crop
   LensFlare
   AnalogTape
+  BenchmarkArgs
   EffectMask
   Mask
   Sharpen
@@ -113,8 +114,14 @@ else()
 endif()
 
 foreach(tname ${OPENSHOT_TESTS})
-  add_executable(openshot-${tname}-test
+  set(test_sources
     ${tname}.cpp
+  )
+  if(tname STREQUAL "BenchmarkArgs")
+    list(APPEND test_sources BenchmarkOptions.cpp)
+  endif()
+  add_executable(openshot-${tname}-test
+    ${test_sources}
   )
   target_link_libraries(openshot-${tname}-test
     openshot_catch2
