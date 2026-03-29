@@ -16,6 +16,18 @@
 
 using namespace openshot::benchmark;
 
+static void CHECK_RUNTIME_ERROR_CONTAINS(const std::vector<std::string>& args,
+										 const std::string& expected_fragment) {
+	try {
+		(void) ParseBenchmarkOptions(args);
+		FAIL("Expected ParseBenchmarkOptions() to throw std::runtime_error");
+	} catch (const std::runtime_error& e) {
+		CHECK(std::string(e.what()).find(expected_fragment) != std::string::npos);
+	} catch (...) {
+		FAIL("Expected std::runtime_error");
+	}
+}
+
 TEST_CASE("Benchmark usage string includes new thread flags", "[benchmark][args]") {
 	const std::string usage = BenchmarkUsage();
 	CHECK(usage.find("--omp-threads <n>") != std::string::npos);
@@ -47,27 +59,17 @@ TEST_CASE("Benchmark args parse valid values", "[benchmark][args]") {
 }
 
 TEST_CASE("Benchmark args reject invalid thread values", "[benchmark][args]") {
-	CHECK_THROWS_WITH(ParseBenchmarkOptions({"--omp-threads", "0"}),
-					  Catch::Matchers::ContainsSubstring("Invalid --omp-threads value"));
-	CHECK_THROWS_WITH(ParseBenchmarkOptions({"--omp-threads", "1"}),
-					  Catch::Matchers::ContainsSubstring("Invalid --omp-threads value"));
-	CHECK_THROWS_WITH(ParseBenchmarkOptions({"--omp-threads", "-1"}),
-					  Catch::Matchers::ContainsSubstring("Invalid --omp-threads value"));
-	CHECK_THROWS_WITH(ParseBenchmarkOptions({"--ff-threads", "0"}),
-					  Catch::Matchers::ContainsSubstring("Invalid --ff-threads value"));
-	CHECK_THROWS_WITH(ParseBenchmarkOptions({"--ff-threads", "1"}),
-					  Catch::Matchers::ContainsSubstring("Invalid --ff-threads value"));
-	CHECK_THROWS_WITH(ParseBenchmarkOptions({"--ff-threads", "-1"}),
-					  Catch::Matchers::ContainsSubstring("Invalid --ff-threads value"));
-	CHECK_THROWS_WITH(ParseBenchmarkOptions({"--omp-threads", "abc"}),
-					  Catch::Matchers::ContainsSubstring("Invalid --omp-threads value"));
+	CHECK_RUNTIME_ERROR_CONTAINS({"--omp-threads", "0"}, "Invalid --omp-threads value");
+	CHECK_RUNTIME_ERROR_CONTAINS({"--omp-threads", "1"}, "Invalid --omp-threads value");
+	CHECK_RUNTIME_ERROR_CONTAINS({"--omp-threads", "-1"}, "Invalid --omp-threads value");
+	CHECK_RUNTIME_ERROR_CONTAINS({"--ff-threads", "0"}, "Invalid --ff-threads value");
+	CHECK_RUNTIME_ERROR_CONTAINS({"--ff-threads", "1"}, "Invalid --ff-threads value");
+	CHECK_RUNTIME_ERROR_CONTAINS({"--ff-threads", "-1"}, "Invalid --ff-threads value");
+	CHECK_RUNTIME_ERROR_CONTAINS({"--omp-threads", "abc"}, "Invalid --omp-threads value");
 }
 
 TEST_CASE("Benchmark args reject missing values and unknown args", "[benchmark][args]") {
-	CHECK_THROWS_WITH(ParseBenchmarkOptions({"--test"}),
-					  Catch::Matchers::ContainsSubstring("Missing value for --test"));
-	CHECK_THROWS_WITH(ParseBenchmarkOptions({"--ff-threads"}),
-					  Catch::Matchers::ContainsSubstring("Missing value for --ff-threads"));
-	CHECK_THROWS_WITH(ParseBenchmarkOptions({"--wat"}),
-					  Catch::Matchers::ContainsSubstring("Unknown argument"));
+	CHECK_RUNTIME_ERROR_CONTAINS({"--test"}, "Missing value for --test");
+	CHECK_RUNTIME_ERROR_CONTAINS({"--ff-threads"}, "Missing value for --ff-threads");
+	CHECK_RUNTIME_ERROR_CONTAINS({"--wat"}, "Unknown argument");
 }
