@@ -226,7 +226,20 @@ Clip::Clip(std::string path) : resampler(NULL), reader(NULL), allocated_reader(N
 {
 	// Init all default settings
 	init_settings();
+	reader = CreateReader(path);
 
+	// Update duration and set parent
+	if (reader) {
+		ClipBase::End(reader->info.duration);
+		reader->ParentClip(this);
+		allocated_reader = reader;
+		// Init reader info struct
+		init_reader_settings();
+	}
+}
+
+ReaderBase* Clip::CreateReader(std::string path, bool inspect_reader)
+{
 	// Get file extension (and convert to lower case)
 	std::string ext = get_file_extension(path);
 	std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
@@ -237,48 +250,29 @@ Clip::Clip(std::string path) : resampler(NULL), reader(NULL), allocated_reader(N
 	{
 		try
 		{
-			// Open common video format
-			reader = new openshot::FFmpegReader(path);
-
+			return new openshot::FFmpegReader(path, inspect_reader);
 		} catch(...) { }
 	}
 	if (ext=="osp")
 	{
 		try
 		{
-			// Open common video format
-			reader = new openshot::Timeline(path, true);
-
+			return new openshot::Timeline(path, true);
 		} catch(...) { }
 	}
 
-
 	// If no video found, try each reader
-	if (!reader)
+	try
 	{
+		return new openshot::QtImageReader(path, inspect_reader);
+	} catch(...) {
 		try
 		{
-			// Try an image reader
-			reader = new openshot::QtImageReader(path);
-
-		} catch(...) {
-			try
-			{
-				// Try a video reader
-				reader = new openshot::FFmpegReader(path);
-
-			} catch(...) { }
-		}
+			return new openshot::FFmpegReader(path, inspect_reader);
+		} catch(...) { }
 	}
 
-	// Update duration and set parent
-	if (reader) {
-		ClipBase::End(reader->info.duration);
-		reader->ParentClip(this);
-		allocated_reader = reader;
-		// Init reader info struct
-		init_reader_settings();
-	}
+	return NULL;
 }
 
 // Destructor

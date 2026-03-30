@@ -189,6 +189,25 @@ TEST_CASE( "Check_Video_File", "[libopenshot][ffmpegreader]" )
 	r.Close();
 }
 
+TEST_CASE( "Max_Decode_Size_FFmpegReader", "[libopenshot][ffmpegreader]" )
+{
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "test.mp4";
+
+	FFmpegReader r(path.str());
+	r.SetMaxDecodeSize(64, 64);
+	r.Open();
+
+	std::shared_ptr<Frame> f = r.GetFrame(1);
+	REQUIRE(f != nullptr);
+	CHECK(f->GetWidth() <= 64);
+	CHECK(f->GetHeight() <= 64);
+	CHECK(f->GetWidth() < r.info.width);
+	CHECK(f->GetHeight() < r.info.height);
+
+	r.Close();
+}
+
 TEST_CASE( "Seek", "[libopenshot][ffmpegreader]" )
 {
 	// Create a reader

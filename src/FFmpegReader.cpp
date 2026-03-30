@@ -1944,6 +1944,17 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
 		ApplyCropResizeScale(parent, info.width, info.height, max_width, max_height);
 	}
 
+	if (HasMaxDecodeSize()) {
+		QSize bounded_size(max_width, max_height);
+		const QSize max_decode_size(MaxDecodeWidth(), MaxDecodeHeight());
+		if (bounded_size.width() > max_decode_size.width() ||
+			bounded_size.height() > max_decode_size.height()) {
+			bounded_size.scale(max_decode_size, Qt::KeepAspectRatio);
+			max_width = bounded_size.width();
+			max_height = bounded_size.height();
+		}
+	}
+
 	// Determine if image needs to be scaled (for performance reasons)
 	int original_height = src_height;
 	if (max_width != 0 && max_height != 0 && max_width < width && max_height < height) {

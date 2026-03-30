@@ -78,6 +78,8 @@ namespace openshot
 		/// Mutex for multiple threads
 		std::recursive_mutex getFrameMutex;
 		openshot::ClipBase* clip; ///< Pointer to the parent clip instance (if any)
+		int max_decode_width; ///< Optional maximum decoded frame width (0 disables the limit)
+		int max_decode_height; ///< Optional maximum decoded frame height (0 disables the limit)
 
 	public:
 
@@ -92,6 +94,18 @@ namespace openshot
 
 		/// Set parent clip object of this reader
 		void ParentClip(openshot::ClipBase* new_clip);
+
+		/// Set an optional maximum decoded frame size. Use 0,0 to disable the limit.
+		void SetMaxDecodeSize(int width, int height);
+
+		/// Return the current maximum decoded frame width (0 when unlimited).
+		int MaxDecodeWidth() const;
+
+		/// Return the current maximum decoded frame height (0 when unlimited).
+		int MaxDecodeHeight() const;
+
+		/// Return true when a maximum decoded frame size is active.
+		bool HasMaxDecodeSize() const;
 
 		/// Close the reader (and any resources it was consuming)
 		virtual void Close() = 0;

@@ -110,3 +110,27 @@ TEST_CASE( "Duration_And_Length_QtImageReader", "[libopenshot][qtimagereader]" )
 
 	r.Close();
 }
+
+TEST_CASE( "Max_Decode_Size_QtImageReader", "[libopenshot][qtimagereader]" )
+{
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "front.png";
+
+	QtImageReader r(path.str());
+	r.Open();
+
+	std::shared_ptr<Frame> full = r.GetFrame(1);
+	REQUIRE(full != nullptr);
+	CHECK(full->GetWidth() == r.info.width);
+	CHECK(full->GetHeight() == r.info.height);
+
+	r.SetMaxDecodeSize(64, 64);
+	std::shared_ptr<Frame> limited = r.GetFrame(2);
+	REQUIRE(limited != nullptr);
+	CHECK(limited->GetWidth() <= 64);
+	CHECK(limited->GetHeight() <= 64);
+	CHECK(limited->GetWidth() < full->GetWidth());
+	CHECK(limited->GetHeight() < full->GetHeight());
+
+	r.Close();
+}

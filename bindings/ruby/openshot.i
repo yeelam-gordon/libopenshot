@@ -41,6 +41,8 @@
 %shared_ptr(juce::AudioBuffer<float>)
 %shared_ptr(openshot::Frame)
 
+%newobject openshot::Clip::CreateReader;
+
 /* Instantiate the required template specializations */
 %template() std::map<std::string, int>;
 %template() std::pair<int, int>;
@@ -221,5 +223,4 @@
 %include "effects/Saturation.h"
 %include "effects/Shift.h"
 %include "effects/Wave.h"
-
 
