@@ -46,6 +46,15 @@ namespace openshot {
 		/// Private variable to keep track of singleton instance
 		static Settings * m_pInstance;
 
+		/// Last OMP thread count applied to the OpenMP runtime
+		int applied_omp_threads = 0;
+
+		/// Machine default OpenMP thread count detected at startup
+		int default_omp_threads = 2;
+
+		/// Machine default FFmpeg thread count detected at startup
+		int default_ff_threads = 2;
+
 	public:
 		/**
 		 * @brief Use video codec for faster video decoding (if supported)
@@ -64,8 +73,8 @@ namespace openshot {
 		/// Scale mode used in FFmpeg decoding and encoding (used as an optimization for faster previews)
 		bool HIGH_QUALITY_SCALING = false;
 
-		/// Number of threads of OpenMP
-		int OMP_THREADS = 16;
+		/// Number of OpenMP threads
+		int OMP_THREADS = 2;
 
 			/// Number of threads that ffmpeg uses
 			int FF_THREADS = 16;
@@ -115,6 +124,21 @@ namespace openshot {
 
  		/// Whether to dump ZeroMQ debug messages to stderr
 		bool DEBUG_TO_STDERR = false;
+
+		/// Return the effective OpenMP worker budget used by libopenshot heuristics
+		int EffectiveOMPThreads() const;
+
+		/// Return the maximum allowed thread override based on this machine
+		int MaxAllowedThreads() const;
+
+		/// Return the machine default OpenMP thread count detected at startup
+		int DefaultOMPThreads() const { return default_omp_threads; }
+
+		/// Return the machine default FFmpeg thread count detected at startup
+		int DefaultFFThreads() const { return default_ff_threads; }
+
+		/// Apply any explicit OpenMP thread override to the runtime
+		void ApplyOpenMPSettings();
 
 		/// Create or get an instance of this logger singleton (invoke the class with this method)
 		static Settings * Instance();

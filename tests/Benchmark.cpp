@@ -9,12 +9,12 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 #include <chrono>
-#include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <string>
 #include <vector>
 
+#include "BenchmarkOptions.h"
 #include "Clip.h"
 #include "FFmpegReader.h"
 #include "FFmpegWriter.h"
@@ -26,6 +26,7 @@
 #include "QtImageReader.h"
 #endif
 #include "ReaderBase.h"
+#include "Settings.h"
 #include "Timeline.h"
 #include "effects/Brightness.h"
 #include "effects/ChromaKey.h"
@@ -62,24 +63,35 @@ int main(int argc, char* argv[]) {
 	const string video = base + "sintel_trailer-720p.mp4";
 	const string mask_img = base + "mask.png";
 	const string overlay = base + "front3.png";
-	string filter_test;
-	bool list_only = false;
+	benchmark::BenchmarkOptions options;
 	const int64_t chroma_bench_frames = 500;
 
-	for (int i = 1; i < argc; ++i) {
-		const string arg = argv[i];
-		if ((arg == "--test" || arg == "-t") && i + 1 < argc) {
-			filter_test = argv[++i];
-		} else if (arg == "--list" || arg == "-l") {
-			list_only = true;
-		} else if (arg == "--help" || arg == "-h") {
-			cout << "Usage: openshot-benchmark [--test <name>] [--list]\n";
-			return 0;
-		} else {
-			cerr << "Unknown argument: " << arg << "\n";
-			cerr << "Usage: openshot-benchmark [--test <name>] [--list]\n";
-			return 1;
-		}
+	try {
+		vector<string> args;
+		args.reserve(std::max(0, argc - 1));
+		for (int i = 1; i < argc; ++i)
+			args.emplace_back(argv[i]);
+		options = benchmark::ParseBenchmarkOptions(args);
+	} catch (const std::exception& e) {
+		cerr << e.what() << "\n";
+		cerr << benchmark::BenchmarkUsage() << "\n";
+		return 1;
+	}
+
+	if (options.show_help) {
+		cout << benchmark::BenchmarkUsage() << "\n";
+		return 0;
+	}
+
+	// Route benchmark thread settings through libopenshot's Settings singleton,
+	// matching how an application should configure the library before opening readers.
+	Settings *settings = Settings::Instance();
+	if (options.omp_threads > 0) {
+		settings->OMP_THREADS = options.omp_threads;
+		settings->ApplyOpenMPSettings();
+	}
+	if (options.ff_threads > 0) {
+		settings->FF_THREADS = options.ff_threads;
 	}
 
 	vector<Trial> trials;
@@ -278,7 +290,7 @@ int main(int argc, char* argv[]) {
 		r.Close();
 	});
 
-	if (list_only) {
+	if (options.list_only) {
 		for (const auto& trial : trials)
 			cout << trial.first << "\n";
 		return 0;
@@ -288,14 +300,14 @@ int main(int argc, char* argv[]) {
 	double total = 0.0;
 	int executed = 0;
 	for (const auto& trial : trials) {
-		if (!filter_test.empty() && trial.first != filter_test)
+		if (!options.filter_test.empty() && trial.first != options.filter_test)
 			continue;
 		total += time_trial(trial.first, trial.second);
 		executed++;
 	}
 
-	if (!filter_test.empty() && executed == 0) {
-		cerr << "Unknown test: " << filter_test << "\nAvailable tests:\n";
+	if (!options.filter_test.empty() && executed == 0) {
+		cerr << "Unknown test: " << options.filter_test << "\nAvailable tests:\n";
 		for (const auto& trial : trials)
 			cerr << "  " << trial.first << "\n";
 		return 2;
