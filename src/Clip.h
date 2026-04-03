@@ -148,7 +148,7 @@ namespace openshot {
 		QTransform get_transform(std::shared_ptr<Frame> frame, int width, int height);
 
 		/// Get file extension
-		std::string get_file_extension(std::string path);
+		static std::string get_file_extension(std::string path);
 
 		/// Get a frame object or create a blank one
 		std::shared_ptr<openshot::Frame> GetOrCreateFrame(int64_t number, bool enable_time=true);
@@ -194,6 +194,10 @@ namespace openshot {
 		/// @brief Constructor with filepath (reader is automatically created... by guessing file extensions)
 		/// @param path The path of a reader (video file, image file, etc...). The correct reader will be used automatically.
 		Clip(std::string path);
+
+		/// Create the most appropriate reader for a media path.
+		/// The caller owns the returned reader pointer.
+		static openshot::ReaderBase* CreateReader(std::string path, bool inspect_reader=true);
 
 		/// @brief Constructor with reader
 		/// @param new_reader The reader to be used by this clip

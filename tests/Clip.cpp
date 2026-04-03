@@ -75,6 +75,29 @@ TEST_CASE( "path string constructor", "[libopenshot][clip]" )
 	CHECK(c1.End() == Approx(4.4).margin(0.00001));
 }
 
+TEST_CASE( "CreateReader_selects_ffmpeg_reader", "[libopenshot][clip]" )
+{
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "piano.wav";
+
+	std::unique_ptr<ReaderBase> reader(Clip::CreateReader(path.str()));
+	REQUIRE(reader != nullptr);
+	CHECK(reader->Name() == "FFmpegReader");
+	CHECK(reader->info.has_audio == true);
+}
+
+TEST_CASE( "CreateReader_selects_qt_image_reader", "[libopenshot][clip]" )
+{
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "front.png";
+
+	std::unique_ptr<ReaderBase> reader(Clip::CreateReader(path.str()));
+	REQUIRE(reader != nullptr);
+	CHECK(reader->Name() == "QtImageReader");
+	CHECK(reader->info.has_video == true);
+	CHECK(reader->info.has_single_image == true);
+}
+
 TEST_CASE( "basic getters and setters", "[libopenshot][clip]" )
 {
 	// Create a empty clip
