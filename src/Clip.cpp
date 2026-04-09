@@ -245,7 +245,7 @@ ReaderBase* Clip::CreateReader(std::string path, bool inspect_reader)
 	std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
 	// Determine if common video formats (or image sequences)
-	if (ext=="avi" || ext=="mov" || ext=="mkv" ||  ext=="mpg" || ext=="mpeg" || ext=="mp3" || ext=="mp4" || ext=="mts" ||
+	if (ext=="avi" || ext=="flac" || ext=="mov" || ext=="mkv" ||  ext=="mpg" || ext=="mpeg" || ext=="mp3" || ext=="mp4" || ext=="mts" ||
 		ext=="ogg" || ext=="wav" || ext=="wmv" || ext=="webm" || ext=="vob" || ext=="gif" || path.find("%") != std::string::npos)
 	{
 		try
