@@ -18,6 +18,7 @@
 #include <set>
 #include <atomic>
 #include <cstdint>
+#include <utility>
 
 #include "TimelineBase.h"
 #include "ReaderBase.h"
@@ -166,12 +167,14 @@ namespace openshot {
 		double max_time; ///> The max duration (in seconds) of the timeline, based on the furthest clip (right edge)
 		double min_time; ///> The min duration (in seconds) of the timeline, based on the position of the first clip (left edge)
 		std::atomic<uint64_t> cache_epoch; ///< Cache invalidation epoch for external observers.
-		std::atomic<int> safe_edit_frames_remaining; ///< Remaining composed frames forced into safe edit composition.
 
 		std::map<std::string, std::shared_ptr<openshot::TrackedObjectBase>> tracked_objects; ///< map of TrackedObjectBBoxes and their IDs
 
 		/// Process a new layer of video or audio
-		void add_layer(std::shared_ptr<openshot::Frame> new_frame, openshot::Clip* source_clip, int64_t clip_frame_number, bool is_top_clip, bool force_safe_composite, float max_volume);
+		void add_layer(std::shared_ptr<openshot::Frame> new_frame, openshot::Clip* source_clip, int64_t clip_frame_number, bool is_top_clip, float max_volume);
+
+		/// Resolve equal-power audio gains for one clip under a transition on the current timeline frame.
+		std::pair<float, float> ResolveTransitionAudioGains(openshot::Clip* source_clip, int64_t timeline_frame_number, bool is_top_clip) const;
 
 		/// Apply a FrameMapper to a clip which matches the settings of this timeline
 		void apply_mapper_to_clip(openshot::Clip* clip);
@@ -318,7 +321,6 @@ namespace openshot {
 
 		/// Return the current cache invalidation epoch.
 		uint64_t CacheEpoch() const { return cache_epoch.load(std::memory_order_relaxed); };
-		int SafeEditFramesRemaining() const { return safe_edit_frames_remaining.load(std::memory_order_relaxed); };
 
 		/// Get an openshot::Frame object for a specific frame number of this timeline.
 		///

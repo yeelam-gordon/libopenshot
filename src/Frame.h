@@ -25,6 +25,7 @@
 #include <mutex>
 
 #include "ChannelLayouts.h"
+#include "Enums.h"
 #include "Fraction.h"
 
 #include <QColor>
@@ -257,9 +258,12 @@ namespace openshot
 		void SetPixelRatio(int num, int den);
 
 		/// Thumbnail the frame image with tons of options to the specified path.  The image format is determined from the extension (i.e. image.PNG, image.JPEG).
-		/// This method allows for masks, overlays, background color, and much more accurate resizing (including padding and centering)
+		/// This method allows for masks, overlays, background color, and much more accurate resizing (including padding and centering).
+		/// A trailing optional scale mode can force FIT / CROP / STRETCH behavior while preserving
+		/// legacy behavior for existing callers.
 		void Thumbnail(std::string path, int new_width, int new_height, std::string mask_path, std::string overlay_path,
-				std::string background_color, bool ignore_aspect, std::string format="png", int quality=100, float rotate=0.0);
+				std::string background_color, bool ignore_aspect, std::string format="png", int quality=100,
+				float rotate=0.0, ScaleType scale_mode=SCALE_FIT);
 
 		/// Play audio samples for this frame
 		void Play();

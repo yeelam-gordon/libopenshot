@@ -31,6 +31,7 @@
 #include "Exceptions.h"
 #include "effects/Blur.h"
 #include "effects/Bars.h"
+#include "effects/Mask.h"
 #include "effects/Negate.h"
 
 using namespace openshot;
@@ -149,6 +150,241 @@ public:
 	void SetJson(const std::string value) override { (void) value; }
 	void SetJsonValue(const Json::Value root) override { ReaderBase::SetJsonValue(root); }
 };
+
+class TimelineConstantAudioReader : public ReaderBase {
+private:
+	bool is_open = false;
+	CacheMemory cache;
+	float sample_value = 0.0f;
+
+public:
+	TimelineConstantAudioReader(int width, int height,
+	                            int fps_num, int fps_den,
+	                            int sample_rate, int channels,
+	                            int64_t length_frames, float fill_sample)
+		: sample_value(fill_sample) {
+		info.has_video = true;
+		info.has_audio = true;
+		info.width = width;
+		info.height = height;
+		info.fps = Fraction(fps_num, fps_den);
+		info.video_length = length_frames;
+		info.duration = static_cast<float>(length_frames / info.fps.ToDouble());
+		info.sample_rate = sample_rate;
+		info.channels = channels;
+		info.channel_layout = LAYOUT_STEREO;
+		info.audio_stream_index = 0;
+	}
+
+	openshot::CacheBase* GetCache() override { return &cache; }
+	bool IsOpen() override { return is_open; }
+	std::string Name() override { return "TimelineConstantAudioReader"; }
+	void Open() override { is_open = true; }
+	void Close() override { is_open = false; }
+
+	std::shared_ptr<openshot::Frame> GetFrame(int64_t number) override {
+		const int sample_count = Frame::GetSamplesPerFrame(number, info.fps, info.sample_rate, info.channels);
+		auto frame = std::make_shared<Frame>(number, info.width, info.height, "#000000", sample_count, info.channels);
+		std::vector<float> samples(sample_count, sample_value);
+		for (int channel = 0; channel < info.channels; ++channel)
+			frame->AddAudio(true, channel, 0, samples.data(), sample_count, 1.0f);
+		return frame;
+	}
+
+	std::string Json() const override { return JsonValue().toStyledString(); }
+	Json::Value JsonValue() const override {
+		Json::Value root = ReaderBase::JsonValue();
+		root["type"] = "TimelineConstantAudioReader";
+		root["path"] = "";
+		return root;
+	}
+	void SetJson(const std::string value) override { (void) value; }
+	void SetJsonValue(const Json::Value root) override { ReaderBase::SetJsonValue(root); }
+};
+
+static double expected_equal_power_gain(int64_t frame_number, int64_t start_frame, int64_t end_frame, bool fades_in) {
+	constexpr double kHalfPi = 1.57079632679489661923;
+	if (end_frame <= start_frame)
+		return 1.0;
+	const double span = static_cast<double>(end_frame - start_frame);
+	double t = static_cast<double>(frame_number - start_frame) / span;
+	if (t < 0.0)
+		t = 0.0;
+	else if (t > 1.0)
+		t = 1.0;
+	return fades_in ? std::sin(t * kHalfPi) : std::cos(t * kHalfPi);
+}
+
+TEST_CASE("Timeline honors Mask fade_audio_hint with equal-power overlapping audio", "[libopenshot][timeline][audio][transition]") {
+	const Fraction fps(30, 1);
+	const int sample_rate = 48000;
+	const int channels = 2;
+	const int64_t length_frames = 90;
+	const int64_t overlap_start_frame = 31;
+	const int64_t overlap_end_frame = 60;
+
+	Timeline t(320, 180, fps, sample_rate, channels, LAYOUT_STEREO);
+
+	TimelineConstantAudioReader bottom_reader(320, 180, fps.num, fps.den, sample_rate, channels, length_frames, 1.0f);
+	TimelineConstantAudioReader top_reader(320, 180, fps.num, fps.den, sample_rate, channels, length_frames, 1.0f);
+
+	Clip bottom_clip;
+	bottom_clip.Reader(&bottom_reader);
+	bottom_clip.Layer(0);
+	bottom_clip.Position(0.0);
+	bottom_clip.Start(0.0);
+	bottom_clip.End(2.0);
+	bottom_clip.channel_filter = Keyframe(0.0);
+
+	Clip top_clip;
+	top_clip.Reader(&top_reader);
+	top_clip.Layer(0);
+	top_clip.Position(1.0);
+	top_clip.Start(0.0);
+	top_clip.End(2.0);
+	top_clip.channel_filter = Keyframe(1.0);
+
+	TimelineTrackingMaskReader mask_reader(fps.num, fps.den, overlap_end_frame - overlap_start_frame + 1);
+	Mask transition;
+	transition.Reader(&mask_reader);
+	transition.Layer(0);
+	transition.Position(1.0);
+	transition.Start(0.0);
+	transition.End(1.0);
+	transition.brightness = Keyframe();
+	transition.brightness.AddPoint(1, 1.0, BEZIER);
+	transition.brightness.AddPoint(overlap_end_frame - overlap_start_frame + 1, -1.0, BEZIER);
+	transition.contrast = Keyframe(3.0);
+
+	t.AddClip(&bottom_clip);
+	t.AddClip(&top_clip);
+	t.AddEffect(&transition);
+	t.Open();
+
+	SECTION("disabled hint keeps raw overlap audio") {
+		transition.fade_audio_hint = false;
+		auto frame = t.GetFrame(45);
+		const int last_sample = frame->GetAudioSamplesCount() - 1;
+		CHECK(frame->GetAudioSamples(0)[0] == Approx(1.0).margin(0.0001));
+		CHECK(frame->GetAudioSamples(1)[0] == Approx(1.0).margin(0.0001));
+		CHECK(frame->GetAudioSamples(0)[last_sample] == Approx(1.0).margin(0.0001));
+		CHECK(frame->GetAudioSamples(1)[last_sample] == Approx(1.0).margin(0.0001));
+	}
+
+	SECTION("enabled hint fades bottom out and top in") {
+		transition.fade_audio_hint = true;
+
+		auto start_frame = t.GetFrame(overlap_start_frame);
+		CHECK(start_frame->GetAudioSamples(0)[0] == Approx(1.0).margin(0.0001));
+		CHECK(start_frame->GetAudioSamples(1)[0] == Approx(0.0).margin(0.0001));
+
+		auto middle_frame = t.GetFrame(45);
+		const int middle_last_sample = middle_frame->GetAudioSamplesCount() - 1;
+		const double expected_prev_bottom = expected_equal_power_gain(44, overlap_start_frame, overlap_end_frame, false);
+		const double expected_prev_top = expected_equal_power_gain(44, overlap_start_frame, overlap_end_frame, true);
+		const double expected_bottom = expected_equal_power_gain(45, overlap_start_frame, overlap_end_frame, false);
+		const double expected_top = expected_equal_power_gain(45, overlap_start_frame, overlap_end_frame, true);
+		CHECK(middle_frame->GetAudioSamples(0)[0] == Approx(expected_prev_bottom).margin(0.0002));
+		CHECK(middle_frame->GetAudioSamples(1)[0] == Approx(expected_prev_top).margin(0.0002));
+		CHECK(middle_frame->GetAudioSamples(0)[middle_last_sample] == Approx(expected_bottom).margin(0.002));
+		CHECK(middle_frame->GetAudioSamples(1)[middle_last_sample] == Approx(expected_top).margin(0.002));
+
+		auto end_frame = t.GetFrame(overlap_end_frame);
+		const int end_last_sample = end_frame->GetAudioSamplesCount() - 1;
+		CHECK(end_frame->GetAudioSamples(0)[end_last_sample] == Approx(0.0).margin(0.002));
+		CHECK(end_frame->GetAudioSamples(1)[end_last_sample] == Approx(1.0).margin(0.002));
+	}
+
+	SECTION("reversed brightness does not affect geometry-based fade directions") {
+		transition.fade_audio_hint = true;
+		transition.brightness = Keyframe();
+		transition.brightness.AddPoint(1, -1.0, BEZIER);
+		transition.brightness.AddPoint(overlap_end_frame - overlap_start_frame + 1, 1.0, BEZIER);
+
+		auto start_frame = t.GetFrame(overlap_start_frame);
+		CHECK(start_frame->GetAudioSamples(0)[0] == Approx(1.0).margin(0.0001));
+		CHECK(start_frame->GetAudioSamples(1)[0] == Approx(0.0).margin(0.0001));
+
+		auto middle_frame = t.GetFrame(45);
+		const int middle_last_sample = middle_frame->GetAudioSamplesCount() - 1;
+		const double expected_prev_bottom = expected_equal_power_gain(44, overlap_start_frame, overlap_end_frame, false);
+		const double expected_prev_top = expected_equal_power_gain(44, overlap_start_frame, overlap_end_frame, true);
+		const double expected_bottom = expected_equal_power_gain(45, overlap_start_frame, overlap_end_frame, false);
+		const double expected_top = expected_equal_power_gain(45, overlap_start_frame, overlap_end_frame, true);
+		CHECK(middle_frame->GetAudioSamples(0)[0] == Approx(expected_prev_bottom).margin(0.0002));
+		CHECK(middle_frame->GetAudioSamples(1)[0] == Approx(expected_prev_top).margin(0.0002));
+		CHECK(middle_frame->GetAudioSamples(0)[middle_last_sample] == Approx(expected_bottom).margin(0.002));
+		CHECK(middle_frame->GetAudioSamples(1)[middle_last_sample] == Approx(expected_top).margin(0.002));
+
+		auto end_frame = t.GetFrame(overlap_end_frame);
+		const int end_last_sample = end_frame->GetAudioSamplesCount() - 1;
+		CHECK(end_frame->GetAudioSamples(0)[end_last_sample] == Approx(0.0).margin(0.002));
+		CHECK(end_frame->GetAudioSamples(1)[end_last_sample] == Approx(1.0).margin(0.002));
+	}
+
+	t.Close();
+}
+
+TEST_CASE("Timeline uses transition edge proximity for single-clip fade audio", "[libopenshot][timeline][audio][transition][single]") {
+	const Fraction fps(30, 1);
+	const int sample_rate = 48000;
+	const int channels = 2;
+	const int64_t length_frames = 90;
+
+	Timeline t(320, 180, fps, sample_rate, channels, LAYOUT_STEREO);
+
+	TimelineConstantAudioReader clip_reader(320, 180, fps.num, fps.den, sample_rate, channels, length_frames, 1.0f);
+	Clip clip;
+	clip.Reader(&clip_reader);
+	clip.Layer(0);
+	clip.Position(1.0);
+	clip.Start(0.0);
+	clip.End(2.0);
+
+	TimelineTrackingMaskReader mask_reader(fps.num, fps.den, 30);
+	Mask transition;
+	transition.Reader(&mask_reader);
+	transition.Layer(0);
+	transition.Start(0.0);
+	transition.End(1.0);
+	transition.fade_audio_hint = true;
+	transition.brightness = Keyframe(0.0);
+	transition.contrast = Keyframe(0.0);
+
+	t.AddClip(&clip);
+	t.AddEffect(&transition);
+	t.Open();
+
+	SECTION("left edge proximity fades in") {
+		transition.Position(1.0);
+		auto start_frame = t.GetFrame(31);
+		auto end_frame = t.GetFrame(60);
+		const int end_last_sample = end_frame->GetAudioSamplesCount() - 1;
+		CHECK(start_frame->GetAudioSamples(0)[0] == Approx(0.0).margin(0.0001));
+		CHECK(end_frame->GetAudioSamples(0)[end_last_sample] == Approx(1.0).margin(0.002));
+	}
+
+	SECTION("right edge proximity fades out") {
+		transition.Position(2.0);
+		auto start_frame = t.GetFrame(61);
+		auto end_frame = t.GetFrame(90);
+		const int end_last_sample = end_frame->GetAudioSamplesCount() - 1;
+		CHECK(start_frame->GetAudioSamples(0)[0] == Approx(1.0).margin(0.0001));
+		CHECK(end_frame->GetAudioSamples(0)[end_last_sample] == Approx(0.0).margin(0.002));
+	}
+
+	SECTION("equal distance defaults to fade in") {
+		transition.Position(1.5);
+		transition.End(1.0);
+		auto start_frame = t.GetFrame(46);
+		auto end_frame = t.GetFrame(75);
+		const int end_last_sample = end_frame->GetAudioSamplesCount() - 1;
+		CHECK(start_frame->GetAudioSamples(0)[0] == Approx(0.0).margin(0.0001));
+		CHECK(end_frame->GetAudioSamples(0)[end_last_sample] == Approx(1.0).margin(0.002));
+	}
+
+	t.Close();
+}
 
 TEST_CASE( "constructor", "[libopenshot][timeline]" )
 {
@@ -1359,72 +1595,24 @@ TEST_CASE( "ApplyJSONDiff alpha updates refresh fixed-frame preview content", "[
 	std::shared_ptr<Frame> initial = t.GetFrame(frame_number);
 	REQUIRE(initial != nullptr);
 	REQUIRE(t.GetCache() != nullptr);
-	REQUIRE(overlay_clip.GetCache() != nullptr);
 	REQUIRE(t.GetCache()->Contains(frame_number));
-	REQUIRE(overlay_clip.GetCache()->Count() > 0);
+	QColor previous_color = initial->GetImage()->pixelColor(20, 20);
 
-	// Repeated alpha updates at the same frame must invalidate both timeline and
-	// clip caches, preventing stale preview frames from being reused.
+	// Repeated alpha updates at the same frame must invalidate the timeline cache
+	// and refresh the composited preview content.
 	const std::vector<double> alpha_steps = {0.9, 0.8, 0.7, 0.6, 0.5};
 	for (double alpha_value : alpha_steps) {
 		apply_alpha(alpha_value);
 		CHECK(!t.GetCache()->Contains(frame_number));
-		CHECK(overlay_clip.GetCache()->Count() == 0);
 
-		// Re-request frame to repopulate caches before next update.
+		// Re-request frame to repopulate the timeline cache before next update.
 		std::shared_ptr<Frame> refreshed = t.GetFrame(frame_number);
 		REQUIRE(refreshed != nullptr);
 		CHECK(t.GetCache()->Contains(frame_number));
-		CHECK(overlay_clip.GetCache()->Count() > 0);
+		QColor refreshed_color = refreshed->GetImage()->pixelColor(20, 20);
+		CHECK(refreshed_color != previous_color);
+		previous_color = refreshed_color;
 	}
-}
-
-TEST_CASE( "ApplyJSONDiff enables and drains edit safety window", "[libopenshot][timeline][edit]" )
-{
-	TimelineSolidColorReader reader(
-		/*width=*/64, /*height=*/64, /*fps_num=*/30, /*fps_den=*/1, /*length_frames=*/300,
-		QColor(220, 30, 180, 255)
-	);
-
-	Clip clip(&reader);
-	clip.Id("EDIT_WINDOW_CLIP");
-	clip.Layer(0);
-	clip.Position(0.0);
-	clip.End(10.0);
-
-	Timeline t(64, 64, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
-	t.AddClip(&clip);
-	t.Open();
-
-	CHECK(t.SafeEditFramesRemaining() == 0);
-
-	Json::Value root(Json::arrayValue);
-	Json::Value change(Json::objectValue);
-	change["type"] = "update";
-	change["partial"] = true;
-
-	Json::Value key(Json::arrayValue);
-	key.append("clips");
-	Json::Value key_id(Json::objectValue);
-	key_id["id"] = clip.Id();
-	key.append(key_id);
-	change["key"] = key;
-
-	Json::Value value(Json::objectValue);
-	value["rotation"] = Keyframe(10.0).JsonValue();
-	change["value"] = value;
-	root.append(change);
-
-	t.ApplyJsonDiff(root.toStyledString());
-	CHECK(t.SafeEditFramesRemaining() == 240);
-
-	(void)t.GetFrame(1);
-	CHECK(t.SafeEditFramesRemaining() == 239);
-
-	for (int64_t frame = 2; frame <= 240; ++frame) {
-		(void)t.GetFrame(frame);
-	}
-	CHECK(t.SafeEditFramesRemaining() == 0);
 }
 
 TEST_CASE( "ApplyJSONDiff clip Bars effect updates refresh fixed-frame preview content", "[libopenshot][timeline][effect][bars]" )

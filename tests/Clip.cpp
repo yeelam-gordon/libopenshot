@@ -75,6 +75,29 @@ TEST_CASE( "path string constructor", "[libopenshot][clip]" )
 	CHECK(c1.End() == Approx(4.4).margin(0.00001));
 }
 
+TEST_CASE( "CreateReader_selects_ffmpeg_reader", "[libopenshot][clip]" )
+{
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "piano.wav";
+
+	std::unique_ptr<ReaderBase> reader(Clip::CreateReader(path.str()));
+	REQUIRE(reader != nullptr);
+	CHECK(reader->Name() == "FFmpegReader");
+	CHECK(reader->info.has_audio == true);
+}
+
+TEST_CASE( "CreateReader_selects_qt_image_reader", "[libopenshot][clip]" )
+{
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "front.png";
+
+	std::unique_ptr<ReaderBase> reader(Clip::CreateReader(path.str()));
+	REQUIRE(reader != nullptr);
+	CHECK(reader->Name() == "QtImageReader");
+	CHECK(reader->info.has_video == true);
+	CHECK(reader->info.has_single_image == true);
+}
+
 TEST_CASE( "basic getters and setters", "[libopenshot][clip]" )
 {
 	// Create a empty clip
@@ -223,6 +246,74 @@ TEST_CASE( "Metadata rotation scales only default clips", "[libopenshot][clip]" 
 	CHECK(custom_clip.rotation.GetPoint(0).co.Y == Approx(90.0).margin(0.00001));
 	CHECK(custom_clip.scale_x.GetPoint(0).co.Y == Approx(0.5).margin(0.00001));
 	CHECK(custom_clip.scale_y.GetPoint(0).co.Y == Approx(0.5).margin(0.00001));
+}
+
+TEST_CASE( "SetJsonValue restores defaults for empty core transform keyframes", "[libopenshot][clip][json]" )
+{
+	Clip clip;
+	clip.scale_x = Keyframe(2.0);
+	clip.scale_y = Keyframe(3.0);
+	clip.location_x = Keyframe(0.25);
+	clip.location_y = Keyframe(-0.5);
+	clip.origin_x = Keyframe(0.2);
+	clip.origin_y = Keyframe(0.8);
+	clip.rotation = Keyframe(45.0);
+
+	Json::Value root = clip.JsonValue();
+	root["scale_x"]["Points"] = Json::Value(Json::arrayValue);
+	root["scale_y"]["Points"] = Json::Value(Json::arrayValue);
+	root["location_x"]["Points"] = Json::Value(Json::arrayValue);
+	root["location_y"]["Points"] = Json::Value(Json::arrayValue);
+	root["origin_x"]["Points"] = Json::Value(Json::arrayValue);
+	root["origin_y"]["Points"] = Json::Value(Json::arrayValue);
+	root["rotation"]["Points"] = Json::Value(Json::arrayValue);
+
+	clip.SetJsonValue(root);
+
+	REQUIRE(clip.scale_x.GetCount() == 1);
+	REQUIRE(clip.scale_y.GetCount() == 1);
+	REQUIRE(clip.location_x.GetCount() == 1);
+	REQUIRE(clip.location_y.GetCount() == 1);
+	REQUIRE(clip.origin_x.GetCount() == 1);
+	REQUIRE(clip.origin_y.GetCount() == 1);
+	REQUIRE(clip.rotation.GetCount() == 1);
+
+	CHECK(clip.scale_x.GetValue(1) == Approx(1.0).margin(0.00001));
+	CHECK(clip.scale_y.GetValue(1) == Approx(1.0).margin(0.00001));
+	CHECK(clip.location_x.GetValue(1) == Approx(0.0).margin(0.00001));
+	CHECK(clip.location_y.GetValue(1) == Approx(0.0).margin(0.00001));
+	CHECK(clip.origin_x.GetValue(1) == Approx(0.5).margin(0.00001));
+	CHECK(clip.origin_y.GetValue(1) == Approx(0.5).margin(0.00001));
+	CHECK(clip.rotation.GetValue(1) == Approx(0.0).margin(0.00001));
+}
+
+TEST_CASE( "Timeline render remains visible after loading clip with empty core transform keyframes", "[libopenshot][clip][json][timeline]" )
+{
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "front3.png";
+
+	Clip clip(path.str());
+	Json::Value root = clip.JsonValue();
+	root["scale_x"]["Points"] = Json::Value(Json::arrayValue);
+	root["scale_y"]["Points"] = Json::Value(Json::arrayValue);
+	root["location_x"]["Points"] = Json::Value(Json::arrayValue);
+	root["location_y"]["Points"] = Json::Value(Json::arrayValue);
+	root["rotation"]["Points"] = Json::Value(Json::arrayValue);
+	clip.SetJsonValue(root);
+
+	Timeline timeline(1280, 720, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	timeline.AddClip(&clip);
+	timeline.Open();
+
+	auto frame = timeline.GetFrame(1);
+	REQUIRE(frame != nullptr);
+	REQUIRE(frame->GetImage() != nullptr);
+
+	// Regression guard: the clip should still render into the timeline after
+	// loading empty transform keyframes from JSON.
+	CHECK(frame->GetImage()->pixelColor(200, 200).alpha() > 0);
+
+	timeline.Close();
 }
 
 TEST_CASE( "effects", "[libopenshot][clip]" )
@@ -795,6 +886,57 @@ TEST_CASE( "cached_frame_not_mutated_by_background_compositing", "[libopenshot][
 	CHECK(c2.red()   == Approx(127).margin(14));
 	CHECK(c2.green() == Approx(127).margin(14));
 	CHECK(c2.blue()  == Approx(0).margin(8));
+}
+
+TEST_CASE( "timeline_background_compositing_mutates_only_timeline_canvas", "[libopenshot][clip][timeline][cache]" )
+{
+	openshot::CacheMemory cache;
+	auto src = std::make_shared<openshot::Frame>(1, 64, 64, "#000000", 0, 2);
+	src->AddColor(QColor(Qt::red));
+	cache.Add(src);
+
+	openshot::DummyReader dummy(openshot::Fraction(30,1), 64, 64, 44100, 2, 1.0, &cache);
+	dummy.Open();
+
+	openshot::Clip clip;
+	clip.Reader(&dummy);
+	clip.Open();
+	clip.display = openshot::FRAME_DISPLAY_NONE;
+	clip.alpha.AddPoint(1, 0.5);
+
+	openshot::TimelineInfoStruct options{};
+	options.is_top_clip = true;
+	options.is_before_clip_keyframes = true;
+
+	auto bg_blue = std::make_shared<openshot::Frame>(1, 64, 64, "#000000", 0, 2);
+	bg_blue->AddColor(QColor(Qt::blue));
+	auto out_blue = clip.GetFrame(bg_blue, 1, &options);
+
+	QColor cached_pixel = out_blue->GetImage()->pixelColor(32, 32);
+	CHECK(cached_pixel.alpha() == Approx(127).margin(10));
+	CHECK(cached_pixel.red()   == Approx(255).margin(2));
+	CHECK(cached_pixel.green() == Approx(0).margin(2));
+	CHECK(cached_pixel.blue()  == Approx(0).margin(2));
+
+	QColor blue_canvas = bg_blue->GetImage()->pixelColor(32, 32);
+	CHECK(blue_canvas.red()   == Approx(127).margin(14));
+	CHECK(blue_canvas.green() == Approx(0).margin(8));
+	CHECK(blue_canvas.blue()  == Approx(127).margin(14));
+
+	auto bg_green = std::make_shared<openshot::Frame>(1, 64, 64, "#000000", 0, 2);
+	bg_green->AddColor(QColor(Qt::green));
+	auto out_green = clip.GetFrame(bg_green, 1, &options);
+
+	QColor cached_pixel_again = out_green->GetImage()->pixelColor(32, 32);
+	CHECK(cached_pixel_again.alpha() == Approx(127).margin(10));
+	CHECK(cached_pixel_again.red()   == Approx(255).margin(2));
+	CHECK(cached_pixel_again.green() == Approx(0).margin(2));
+	CHECK(cached_pixel_again.blue()  == Approx(0).margin(2));
+
+	QColor green_canvas = bg_green->GetImage()->pixelColor(32, 32);
+	CHECK(green_canvas.red()   == Approx(127).margin(14));
+	CHECK(green_canvas.green() == Approx(127).margin(14));
+	CHECK(green_canvas.blue()  == Approx(0).margin(8));
 }
 
 TEST_CASE("all_composite_modes_simple_colors", "[libopenshot][clip][composite]")

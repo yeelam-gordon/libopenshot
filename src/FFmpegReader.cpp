@@ -103,15 +103,14 @@ FFmpegReader::FFmpegReader(const std::string &path, bool inspect_reader)
 		: FFmpegReader(path, DurationStrategy::VideoPreferred, inspect_reader) {}
 
 FFmpegReader::FFmpegReader(const std::string &path, DurationStrategy duration_strategy, bool inspect_reader)
-		: last_frame(0), is_seeking(0), seeking_pts(0), seeking_frame(0), seek_count(0), NO_PTS_OFFSET(-99999),
-		  path(path), is_video_seek(true), check_interlace(false), check_fps(false), enable_seek(true), is_open(false),
-		  seek_audio_frame_found(0), seek_video_frame_found(0),
-		  last_seek_max_frame(-1), seek_stagnant_count(0),
-		  is_duration_known(false), largest_frame_processed(0),
-		  current_video_frame(0), packet(NULL), duration_strategy(duration_strategy),
-		  audio_pts(0), video_pts(0), pFormatCtx(NULL), videoStream(-1), audioStream(-1), pCodecCtx(NULL), aCodecCtx(NULL),
-		pStream(NULL), aStream(NULL), pFrame(NULL), previous_packet_location{-1,0},
-		hold_packet(false) {
+		: path(path), pFormatCtx(NULL), videoStream(-1), audioStream(-1), pCodecCtx(NULL), aCodecCtx(NULL),
+		  pStream(NULL), aStream(NULL), packet(NULL), pFrame(NULL), is_open(false), is_duration_known(false),
+		  check_interlace(false), check_fps(false), duration_strategy(duration_strategy), previous_packet_location{-1, 0},
+		  is_seeking(false), seeking_pts(0), seeking_frame(0), is_video_seek(true), seek_count(0),
+		  seek_audio_frame_found(0), seek_video_frame_found(0), last_seek_max_frame(-1), seek_stagnant_count(0),
+		  last_frame(0), largest_frame_processed(0), current_video_frame(0), audio_pts(0), video_pts(0),
+		  hold_packet(false), pts_offset_seconds(0.0), audio_pts_seconds(0.0), video_pts_seconds(0.0),
+		  NO_PTS_OFFSET(-99999), enable_seek(true) {
 
 	// Initialize FFMpeg, and register all formats and codecs
 	AV_REGISTER_ALL
@@ -681,43 +680,35 @@ void FFmpegReader::Open() {
 		for (unsigned int i = 0; i < pFormatCtx->nb_streams; i++) {
 			AVStream* st = pFormatCtx->streams[i];
 			if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-				// Only inspect the first video stream
-				for (int j = 0; j < st->nb_side_data; j++) {
-					AVPacketSideData *sd = &st->side_data[j];
+				size_t side_data_size = 0;
+				const uint8_t *displaymatrix = ffmpeg_stream_get_side_data(
+					st, AV_PKT_DATA_DISPLAYMATRIX, &side_data_size);
+				if (displaymatrix &&
+					side_data_size >= 9 * sizeof(int32_t) &&
+					!info.metadata.count("rotate")) {
+					double rotation = -av_display_rotation_get(
+						reinterpret_cast<const int32_t *>(displaymatrix));
+					if (std::isnan(rotation))
+						rotation = 0;
+					info.metadata["rotate"] = std::to_string(rotation);
+				}
 
-					// Handle rotation metadata (unchanged)
-					if (sd->type == AV_PKT_DATA_DISPLAYMATRIX &&
-						sd->size >= 9 * sizeof(int32_t) &&
-						!info.metadata.count("rotate"))
-					{
-						double rotation = -av_display_rotation_get(
-							reinterpret_cast<int32_t *>(sd->data));
-						if (std::isnan(rotation)) rotation = 0;
-						info.metadata["rotate"] = std::to_string(rotation);
-					}
-					// Handle spherical video metadata
-					else if (sd->type == AV_PKT_DATA_SPHERICAL) {
-						// Always mark as spherical
-						info.metadata["spherical"] = "1";
+				const uint8_t *spherical = ffmpeg_stream_get_side_data(
+					st, AV_PKT_DATA_SPHERICAL, &side_data_size);
+				if (spherical && side_data_size >= sizeof(AVSphericalMapping)) {
+					info.metadata["spherical"] = "1";
 
-						// Cast the raw bytes to an AVSphericalMapping
-						const AVSphericalMapping* map =
-							reinterpret_cast<const AVSphericalMapping*>(sd->data);
+					const AVSphericalMapping *map =
+						reinterpret_cast<const AVSphericalMapping *>(spherical);
+					const char *proj_name = av_spherical_projection_name(map->projection);
+					info.metadata["spherical_projection"] = proj_name ? proj_name : "unknown";
 
-						// Projection enum → string
-						const char* proj_name = av_spherical_projection_name(map->projection);
-						info.metadata["spherical_projection"] = proj_name
-							? proj_name
-							: "unknown";
-
-						// Convert 16.16 fixed-point to float degrees
-						auto to_deg = [](int32_t v){
-							return (double)v / 65536.0;
-						};
-						info.metadata["spherical_yaw"]   = std::to_string(to_deg(map->yaw));
-						info.metadata["spherical_pitch"] = std::to_string(to_deg(map->pitch));
-						info.metadata["spherical_roll"]  = std::to_string(to_deg(map->roll));
-					}
+					auto to_deg = [](int32_t v) {
+						return static_cast<double>(v) / 65536.0;
+					};
+					info.metadata["spherical_yaw"] = std::to_string(to_deg(map->yaw));
+					info.metadata["spherical_pitch"] = std::to_string(to_deg(map->pitch));
+					info.metadata["spherical_roll"] = std::to_string(to_deg(map->roll));
 				}
 				break;
 			}
@@ -924,7 +915,7 @@ void FFmpegReader::ApplyDurationStrategy() {
 }
 
 void FFmpegReader::UpdateAudioInfo() {
-	const int codec_channels =
+	int codec_channels =
 #if HAVE_CH_LAYOUT
 		AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout.nb_channels;
 #else
@@ -933,9 +924,12 @@ void FFmpegReader::UpdateAudioInfo() {
 
 	// Set default audio channel layout (if needed)
 #if HAVE_CH_LAYOUT
-	if (codec_channels > 0 &&
-		!ffmpeg_has_usable_channel_layout(&(AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout))) {
-		AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout = ffmpeg_default_channel_layout(codec_channels);
+	AVChannelLayout audio_ch_layout = ffmpeg_get_valid_channel_layout(
+		AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout, codec_channels);
+	if (audio_ch_layout.nb_channels > 0) {
+		av_channel_layout_uninit(&(AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout));
+		av_channel_layout_copy(&(AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout), &audio_ch_layout);
+		codec_channels = audio_ch_layout.nb_channels;
 	}
 #else
 	if (codec_channels > 0 && AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channel_layout == 0)
@@ -957,8 +951,8 @@ void FFmpegReader::UpdateAudioInfo() {
 	info.file_size = pFormatCtx->pb ? avio_size(pFormatCtx->pb) : -1;
 	info.acodec = aCodecCtx->codec->name;
 #if HAVE_CH_LAYOUT
-	info.channels = AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout.nb_channels;
-	info.channel_layout = (ChannelLayout) AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout.u.mask;
+	info.channels = audio_ch_layout.nb_channels;
+	info.channel_layout = static_cast<ChannelLayout>(ffmpeg_channel_layout_mask(audio_ch_layout));
 #else
 	info.channels = AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channels;
 	info.channel_layout = (ChannelLayout) AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channel_layout;
@@ -1029,6 +1023,9 @@ void FFmpegReader::UpdateAudioInfo() {
 		QString str_value = tag->value;
 		info.metadata[str_key.toStdString()] = str_value.trimmed().toStdString();
 	}
+#if HAVE_CH_LAYOUT
+	av_channel_layout_uninit(&audio_ch_layout);
+#endif
 }
 
 void FFmpegReader::UpdateVideoInfo() {
@@ -1435,6 +1432,9 @@ std::shared_ptr<Frame> FFmpegReader::ReadStream(int64_t requested_frame) {
 		if (frame) {
 			// Copy and return the largest processed frame (assuming it was the last in the video file)
 			std::shared_ptr<Frame> f = CreateFrame(largest_frame_processed);
+			if (frame->has_image_data) {
+				f->AddImage(std::make_shared<QImage>(frame->GetImage()->copy()));
+			}
 
 			// Use solid color (if no image data found)
 			if (!frame->has_image_data) {
@@ -1442,9 +1442,9 @@ std::shared_ptr<Frame> FFmpegReader::ReadStream(int64_t requested_frame) {
 				f->AddColor(info.width, info.height, "#000");
 			}
 			// Silence audio data (if any), since we are repeating the last frame
-			frame->AddAudioSilence(samples_in_frame);
+			f->AddAudioSilence(samples_in_frame);
 
-			return frame;
+			return f;
 		} else {
 			// The largest processed frame is no longer in cache. Prefer the most recent
 			// finalized image first, then decoded image, to avoid black flashes.
@@ -1875,8 +1875,6 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
 	int src_height = (pFrame && pFrame->height > 0) ? pFrame->height : info.height;
 	int height = src_height;
 	int width = src_width;
-	int64_t video_length = info.video_length;
-
 	// Create or reuse a RGB Frame (since most videos are not in RGB, we must convert it)
 	AVFrame *pFrameRGB = pFrameRGB_cached;
 	if (!pFrameRGB) {
@@ -1944,6 +1942,17 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
 
 		// If a crop effect is resizing the image, request enough pixels to preserve detail
 		ApplyCropResizeScale(parent, info.width, info.height, max_width, max_height);
+	}
+
+	if (HasMaxDecodeSize()) {
+		QSize bounded_size(max_width, max_height);
+		const QSize max_decode_size(MaxDecodeWidth(), MaxDecodeHeight());
+		if (bounded_size.width() > max_decode_size.width() ||
+			bounded_size.height() > max_decode_size.height()) {
+			bounded_size.scale(max_decode_size, Qt::KeepAspectRatio);
+			max_width = bounded_size.width();
+			max_height = bounded_size.height();
+		}
 	}
 
 	// Determine if image needs to be scaled (for performance reasons)
@@ -2205,12 +2214,12 @@ void FFmpegReader::ProcessAudioPacket(int64_t requested_frame) {
 	if (!avr) {
 		avr = SWR_ALLOC();
 #if HAVE_CH_LAYOUT
-		AVChannelLayout codec_layout = AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout;
-		if (!ffmpeg_has_usable_channel_layout(&codec_layout)) {
-			codec_layout = ffmpeg_default_channel_layout(info.channels);
-		}
-		av_opt_set_chlayout(avr, "in_chlayout", &codec_layout, 0);
-		av_opt_set_chlayout(avr, "out_chlayout", &codec_layout, 0);
+		AVChannelLayout input_layout = ffmpeg_get_valid_channel_layout(
+			AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout, info.channels);
+		AVChannelLayout output_layout = ffmpeg_get_valid_channel_layout(
+			input_layout, info.channels);
+		int in_layout_err = av_opt_set_chlayout(avr, "in_chlayout", &input_layout, 0);
+		int out_layout_err = av_opt_set_chlayout(avr, "out_chlayout", &output_layout, 0);
 #else
 		av_opt_set_int(avr, "in_channel_layout", AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channel_layout, 0);
 		av_opt_set_int(avr, "out_channel_layout", AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channel_layout, 0);
@@ -2221,7 +2230,20 @@ void FFmpegReader::ProcessAudioPacket(int64_t requested_frame) {
 		av_opt_set_int(avr, "out_sample_fmt", AV_SAMPLE_FMT_FLTP, 0);
 		av_opt_set_int(avr, "in_sample_rate", info.sample_rate, 0);
 		av_opt_set_int(avr, "out_sample_rate", info.sample_rate, 0);
-		SWR_INIT(avr);
+		int swr_init_err = SWR_INIT(avr);
+#if HAVE_CH_LAYOUT
+		av_channel_layout_uninit(&input_layout);
+		av_channel_layout_uninit(&output_layout);
+		if (in_layout_err < 0 || out_layout_err < 0 || swr_init_err < 0) {
+			SWR_FREE(&avr);
+			throw InvalidChannels("Could not initialize FFmpeg audio channel layout or resampler.", path);
+		}
+#else
+		if (swr_init_err < 0) {
+			SWR_FREE(&avr);
+			throw InvalidChannels("Could not initialize FFmpeg audio resampler.", path);
+		}
+#endif
 		avr_ctx = avr;
 	}
 
@@ -2814,6 +2836,28 @@ void FFmpegReader::CheckWorkingFrames(int64_t requested_frame) {
 			if (info.has_single_image) {
 				// For still-image video (including attached cover art), reuse the most
 				// recent image so playback does not stall waiting for video EOF.
+				std::shared_ptr<Frame> previous_frame_instance = final_cache.GetFrame(f->number - 1);
+				if (previous_frame_instance && previous_frame_instance->has_image_data) {
+					f->AddImage(std::make_shared<QImage>(previous_frame_instance->GetImage()->copy()));
+				}
+				if (!f->has_image_data
+					&& last_final_video_frame
+					&& last_final_video_frame->has_image_data
+					&& last_final_video_frame->number <= f->number) {
+					f->AddImage(std::make_shared<QImage>(last_final_video_frame->GetImage()->copy()));
+				}
+				if (!f->has_image_data
+					&& last_video_frame
+					&& last_video_frame->has_image_data
+					&& last_video_frame->number <= f->number) {
+					f->AddImage(std::make_shared<QImage>(last_video_frame->GetImage()->copy()));
+				}
+			}
+
+			// If both streams have advanced past this frame but the decoder never
+			// produced image data for it, reuse the most recent non-future image.
+			// This avoids stalling indefinitely on sparse/missing decoded frames.
+			if (!f->has_image_data && is_video_ready && is_audio_ready) {
 				std::shared_ptr<Frame> previous_frame_instance = final_cache.GetFrame(f->number - 1);
 				if (previous_frame_instance && previous_frame_instance->has_image_data) {
 					f->AddImage(std::make_shared<QImage>(previous_frame_instance->GetImage()->copy()));

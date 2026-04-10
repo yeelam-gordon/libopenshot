@@ -46,6 +46,8 @@ class QWidget;
 %shared_ptr(juce::AudioBuffer<float>)
 %shared_ptr(openshot::Frame)
 
+%newobject openshot::Clip::CreateReader;
+
 /* Rename operators to avoid wrapping name collisions */
 %rename(__eq__) operator==;
 %rename(__lt__) operator<;

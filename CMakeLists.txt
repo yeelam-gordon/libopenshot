@@ -24,8 +24,8 @@ For more information, please visit <http://www.openshot.org/>.
 set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/Modules")
 
 ################ PROJECT VERSION ####################
-set(PROJECT_VERSION_FULL "0.5.0")
-set(PROJECT_SO_VERSION 28)
+set(PROJECT_VERSION_FULL "0.7.0")
+set(PROJECT_SO_VERSION 30)
 
 # Remove the dash and anything following, to get the #.#.# version for project()
 STRING(REGEX REPLACE "\-.*$" "" VERSION_NUM "${PROJECT_VERSION_FULL}")
@@ -73,6 +73,7 @@ option(DISABLE_BUNDLED_JSONCPP "Don't fall back to bundled JsonCpp" OFF)
 option(ENABLE_MAGICK "Use ImageMagick, if available" ON)
 option(ENABLE_OPENCV "Build with OpenCV algorithms (requires Boost, Protobuf 3)" ON)
 option(USE_HW_ACCEL "Enable hardware-accelerated encoding-decoding with FFmpeg 3.4+" ON)
+option(ENABLE_VULKAN_BENCHMARK "Build the experimental Vulkan benchmark example" OFF)
 
 # Legacy commandline override
 if (DISABLE_TESTS)

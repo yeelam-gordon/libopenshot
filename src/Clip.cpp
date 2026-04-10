@@ -226,50 +226,7 @@ Clip::Clip(std::string path) : resampler(NULL), reader(NULL), allocated_reader(N
 {
 	// Init all default settings
 	init_settings();
-
-	// Get file extension (and convert to lower case)
-	std::string ext = get_file_extension(path);
-	std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-
-	// Determine if common video formats (or image sequences)
-	if (ext=="avi" || ext=="mov" || ext=="mkv" ||  ext=="mpg" || ext=="mpeg" || ext=="mp3" || ext=="mp4" || ext=="mts" ||
-		ext=="ogg" || ext=="wav" || ext=="wmv" || ext=="webm" || ext=="vob" || ext=="gif" || path.find("%") != std::string::npos)
-	{
-		try
-		{
-			// Open common video format
-			reader = new openshot::FFmpegReader(path);
-
-		} catch(...) { }
-	}
-	if (ext=="osp")
-	{
-		try
-		{
-			// Open common video format
-			reader = new openshot::Timeline(path, true);
-
-		} catch(...) { }
-	}
-
-
-	// If no video found, try each reader
-	if (!reader)
-	{
-		try
-		{
-			// Try an image reader
-			reader = new openshot::QtImageReader(path);
-
-		} catch(...) {
-			try
-			{
-				// Try a video reader
-				reader = new openshot::FFmpegReader(path);
-
-			} catch(...) { }
-		}
-	}
+	reader = CreateReader(path);
 
 	// Update duration and set parent
 	if (reader) {
@@ -279,6 +236,43 @@ Clip::Clip(std::string path) : resampler(NULL), reader(NULL), allocated_reader(N
 		// Init reader info struct
 		init_reader_settings();
 	}
+}
+
+ReaderBase* Clip::CreateReader(std::string path, bool inspect_reader)
+{
+	// Get file extension (and convert to lower case)
+	std::string ext = get_file_extension(path);
+	std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+	// Determine if common video formats (or image sequences)
+	if (ext=="avi" || ext=="flac" || ext=="mov" || ext=="mkv" ||  ext=="mpg" || ext=="mpeg" || ext=="mp3" || ext=="mp4" || ext=="mts" ||
+		ext=="ogg" || ext=="wav" || ext=="wmv" || ext=="webm" || ext=="vob" || ext=="gif" || path.find("%") != std::string::npos)
+	{
+		try
+		{
+			return new openshot::FFmpegReader(path, inspect_reader);
+		} catch(...) { }
+	}
+	if (ext=="osp")
+	{
+		try
+		{
+			return new openshot::Timeline(path, true);
+		} catch(...) { }
+	}
+
+	// If no video found, try each reader
+	try
+	{
+		return new openshot::QtImageReader(path, inspect_reader);
+	} catch(...) {
+		try
+		{
+			return new openshot::FFmpegReader(path, inspect_reader);
+		} catch(...) { }
+	}
+
+	return NULL;
 }
 
 // Destructor
@@ -478,68 +472,52 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 		// Get frame object
 		std::shared_ptr<Frame> frame = NULL;
 
-		// Check cache
-		frame = final_cache.GetFrame(clip_frame_number);
-		if (!frame) {
-            // Generate clip frame
-            frame = GetOrCreateFrame(clip_frame_number);
+		// Generate clip frame
+		frame = GetOrCreateFrame(clip_frame_number);
 
-            // Get frame size and frame #
-            int64_t timeline_frame_number = clip_frame_number;
-            QSize timeline_size(frame->GetWidth(), frame->GetHeight());
-            if (background_frame) {
-                // If a background frame is provided, use it instead
-                timeline_frame_number = background_frame->number;
-                timeline_size.setWidth(background_frame->GetWidth());
-                timeline_size.setHeight(background_frame->GetHeight());
-            }
+		// Get frame size and frame #
+		int64_t timeline_frame_number = clip_frame_number;
+		QSize timeline_size(frame->GetWidth(), frame->GetHeight());
+		if (background_frame) {
+			// If a background frame is provided, use it instead
+			timeline_frame_number = background_frame->number;
+			timeline_size.setWidth(background_frame->GetWidth());
+			timeline_size.setHeight(background_frame->GetHeight());
+		}
 
-            // Get time mapped frame object (used to increase speed, change direction, etc...)
-            apply_timemapping(frame);
+		// Get time mapped frame object (used to increase speed, change direction, etc...)
+		apply_timemapping(frame);
 
-            // Apply waveform image (if any)
-            apply_waveform(frame, timeline_size);
+		// Apply waveform image (if any)
+		apply_waveform(frame, timeline_size);
 
-            // Apply effects BEFORE applying keyframes (if any local or global effects are used)
-            apply_effects(frame, timeline_frame_number, options, true);
+		// Apply effects BEFORE applying keyframes (if any local or global effects are used)
+		apply_effects(frame, timeline_frame_number, options, true);
 
-            // Apply keyframe / transforms to current clip image
-            apply_keyframes(frame, timeline_size);
+		// Apply keyframe / transforms to current clip image
+		apply_keyframes(frame, timeline_size);
 
-            // Apply effects AFTER applying keyframes (if any local or global effects are used)
-            apply_effects(frame, timeline_frame_number, options, false);
+		// Apply effects AFTER applying keyframes (if any local or global effects are used)
+		apply_effects(frame, timeline_frame_number, options, false);
 
-            // Add final frame to cache (before flattening into background_frame)
-            final_cache.Add(frame);
-        }
-
-		const bool has_external_background = (background_frame != nullptr);
-
-		// Timeline path.
+		// Timeline composition can paint directly into the timeline-owned background
+		// without mutating the cached clip frame.
 		if (options) {
 			if (!background_frame) {
-				// Create a transparent background if missing.
 				background_frame = std::make_shared<Frame>(frame->number, frame->GetWidth(), frame->GetHeight(),
 														   "#00000000", frame->GetAudioSamplesCount(),
 														   frame->GetAudioChannelsCount());
 			}
-			if (options->force_safe_composite) {
-				// Edit mode: composite without mutating cached frame pixels.
-				apply_background(frame, background_frame, false);
-				return frame;
-			}
-
-			// Playback mode: keep original fast path.
-			apply_background(frame, background_frame, true);
+			apply_background(frame, background_frame, false);
 			return frame;
 		}
 
 		// No background: return the frame directly.
-		if (!has_external_background) {
+		if (!background_frame) {
 			return frame;
 		}
 
-		// External background: composite on a copy.
+		// Always composite on a copy so cached frame pixels remain immutable.
 		auto output = std::make_shared<Frame>(*frame.get());
 		apply_background(output, background_frame, true);
 		return output;
@@ -1032,6 +1010,11 @@ void Clip::SetJson(const std::string value) {
 
 // Load Json::Value into this object
 void Clip::SetJsonValue(const Json::Value root) {
+	auto ensure_default_keyframe = [](Keyframe& kf, double default_value) {
+		if (kf.GetCount() == 0) {
+			kf = Keyframe(default_value);
+		}
+	};
 
 	// Set parent data
 	ClipBase::SetJsonValue(root);
@@ -1110,6 +1093,16 @@ void Clip::SetJsonValue(const Json::Value root) {
 		perspective_c4_x.SetJsonValue(root["perspective_c4_x"]);
 	if (!root["perspective_c4_y"].isNull())
 		perspective_c4_y.SetJsonValue(root["perspective_c4_y"]);
+
+	// Core clip transforms should never remain empty after load. Empty JSON
+	// point arrays can be produced by editing flows that remove every keyframe.
+	ensure_default_keyframe(scale_x, 1.0);
+	ensure_default_keyframe(scale_y, 1.0);
+	ensure_default_keyframe(location_x, 0.0);
+	ensure_default_keyframe(location_y, 0.0);
+	ensure_default_keyframe(origin_x, 0.5);
+	ensure_default_keyframe(origin_y, 0.5);
+	ensure_default_keyframe(rotation, 0.0);
 	if (!root["effects"].isNull()) {
 
 		// Clear existing effects

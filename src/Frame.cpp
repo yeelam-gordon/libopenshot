@@ -541,7 +541,7 @@ void Frame::Save(std::string path, float scale, std::string format, int quality)
 
 // Thumbnail the frame image to the specified path.  The image format is determined from the extension (i.e. image.PNG, image.JPEG)
 void Frame::Thumbnail(std::string path, int new_width, int new_height, std::string mask_path, std::string overlay_path,
-		std::string background_color, bool ignore_aspect, std::string format, int quality, float rotate) {
+		std::string background_color, bool ignore_aspect, std::string format, int quality, float rotate, ScaleType scale_mode) {
 
 	// Create blank thumbnail image & fill background color
 	auto thumbnail = std::make_shared<QImage>(
@@ -569,16 +569,28 @@ void Frame::Thumbnail(std::string path, int new_width, int new_height, std::stri
 	}
 
 	// Resize frame image
-	if (ignore_aspect)
-		// Ignore aspect ratio
-		previewImage = std::make_shared<QImage>(previewImage->scaled(
-			new_width, new_height,
-			Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
-	else
-		// Maintain aspect ratio
-		previewImage = std::make_shared<QImage>(previewImage->scaled(
-			new_width, new_height,
-			Qt::KeepAspectRatio, Qt::SmoothTransformation));
+	Qt::AspectRatioMode aspect_ratio_mode = Qt::KeepAspectRatio;
+	if (ignore_aspect) {
+		aspect_ratio_mode = Qt::IgnoreAspectRatio;
+	} else {
+		switch (scale_mode) {
+			case SCALE_CROP:
+				aspect_ratio_mode = Qt::KeepAspectRatioByExpanding;
+				break;
+			case SCALE_STRETCH:
+				aspect_ratio_mode = Qt::IgnoreAspectRatio;
+				break;
+			case SCALE_FIT:
+			case SCALE_NONE:
+			default:
+				aspect_ratio_mode = Qt::KeepAspectRatio;
+				break;
+		}
+	}
+
+	previewImage = std::make_shared<QImage>(previewImage->scaled(
+		new_width, new_height,
+		aspect_ratio_mode, Qt::SmoothTransformation));
 
 	// Composite frame image onto background (centered)
 	int x = (new_width - previewImage->size().width()) / 2.0; // center

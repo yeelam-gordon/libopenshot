@@ -1510,7 +1510,7 @@ void FFmpegWriter::open_video(AVFormatContext *oc, AVStream *st) {
 		switch (video_codec_ctx->codec_id) {
 			case AV_CODEC_ID_H264:
 				video_codec_ctx->max_b_frames = 0;  // At least this GPU doesn't support b-frames
-				video_codec_ctx->profile = FF_PROFILE_H264_BASELINE | FF_PROFILE_H264_CONSTRAINED;
+				video_codec_ctx->profile = AV_PROFILE_H264_CONSTRAINED_BASELINE;
 				av_opt_set(video_codec_ctx->priv_data, "preset", "slow", 0);
 				av_opt_set(video_codec_ctx->priv_data, "tune", "zerolatency", 0);
 				av_opt_set(video_codec_ctx->priv_data, "vprofile", "baseline", AV_OPT_SEARCH_CHILDREN);
@@ -2406,6 +2406,7 @@ void FFmpegWriter::AddSphericalMetadata(const std::string& projection, float yaw
 	map->pitch = static_cast<int32_t>(pitch_deg * (1 << 16));
 	map->roll  = static_cast<int32_t>(roll_deg  * (1 << 16));
 
-	av_stream_add_side_data(video_st, AV_PKT_DATA_SPHERICAL, reinterpret_cast<uint8_t*>(map), sd_size);
+	ffmpeg_stream_add_side_data(video_st, AV_PKT_DATA_SPHERICAL,
+		reinterpret_cast<uint8_t*>(map), sd_size);
 #endif
 }
