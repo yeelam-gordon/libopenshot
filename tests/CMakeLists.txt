@@ -53,6 +53,7 @@ set(OPENSHOT_TESTS
   ColorMap
   ChromaKey
   Crop
+  Displace
   LensFlare
   AnalogTape
   BenchmarkArgs
