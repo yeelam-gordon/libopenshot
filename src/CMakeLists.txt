@@ -117,6 +117,7 @@ set(EFFECTS_SOURCES
   effects/Crop.cpp
   effects/CropHelpers.cpp
   effects/Deinterlace.cpp
+  effects/Displace.cpp
   effects/Hue.cpp
   effects/LensFlare.cpp
   effects/AnalogTape.cpp
