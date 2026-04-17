@@ -118,6 +118,7 @@ set(EFFECTS_SOURCES
   effects/CropHelpers.cpp
   effects/Deinterlace.cpp
   effects/Displace.cpp
+  effects/Glow.cpp
   effects/Hue.cpp
   effects/LensFlare.cpp
   effects/AnalogTape.cpp
@@ -126,6 +127,7 @@ set(EFFECTS_SOURCES
   effects/Pixelate.cpp
   effects/Saturation.cpp
   effects/Sharpen.cpp
+  effects/Shadow.cpp
   effects/Shift.cpp
   effects/SphericalProjection.cpp
   effects/Wave.cpp
