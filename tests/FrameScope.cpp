@@ -70,10 +70,16 @@ TEST_CASE("FrameScope analyzes video histogram and waveform data", "[framescope]
 	CHECK(root["video"]["waveform"]["columns"].asInt() == 4);
 	CHECK(root["video"]["waveform"]["bins"].asInt() == 256);
 	CHECK(root["video"]["waveform"]["luma"].size() == 4 * 256);
+	CHECK(root["video"]["waveform"]["red"].size() == 4 * 256);
+	CHECK(root["video"]["waveform"]["green"].size() == 4 * 256);
+	CHECK(root["video"]["waveform"]["blue"].size() == 4 * 256);
 	CHECK(root["video"]["histogram"]["red"][255].asInt() == 1);
 	CHECK(root["video"]["histogram"]["green"][255].asInt() == 1);
 	CHECK(root["video"]["histogram"]["blue"][255].asInt() == 1);
 	CHECK(root["video"]["histogram"]["luma"][0].asInt() == 1);
+	CHECK(root["video"]["waveform"]["red"][1 * 256 + 255].asInt() == 1);
+	CHECK(root["video"]["waveform"]["green"][2 * 256 + 255].asInt() == 1);
+	CHECK(root["video"]["waveform"]["blue"][3 * 256 + 255].asInt() == 1);
 	CHECK(root["video"]["summary"]["avg_luma"].asDouble() > 0.2);
 }
 

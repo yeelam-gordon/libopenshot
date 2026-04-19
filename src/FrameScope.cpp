@@ -27,6 +27,13 @@ static int clamp_int(int value, int min_value, int max_value) {
 static int byte_bin(float value) {
 	return clamp_int(static_cast<int>(std::round(value * 255.0f)), 0, 255);
 }
+
+static Json::Value json_array_from_vector(const std::vector<int>& values) {
+	Json::Value array(Json::arrayValue);
+	for (size_t i = 0; i < values.size(); ++i)
+		array.append(values[i]);
+	return array;
+}
 }
 
 FrameScope::FrameScope()
@@ -88,7 +95,11 @@ void FrameScope::analyze_video() {
 	std::vector<int> hist_red(256, 0);
 	std::vector<int> hist_green(256, 0);
 	std::vector<int> hist_blue(256, 0);
-	std::vector<int> waveform(static_cast<size_t>(waveform_columns) * 256, 0);
+	const size_t waveform_size = static_cast<size_t>(waveform_columns) * 256;
+	std::vector<int> waveform_luma(waveform_size, 0);
+	std::vector<int> waveform_red(waveform_size, 0);
+	std::vector<int> waveform_green(waveform_size, 0);
+	std::vector<int> waveform_blue(waveform_size, 0);
 
 	double luma_sum = 0.0;
 	int clipped_shadows = 0;
@@ -126,11 +137,15 @@ void FrameScope::analyze_video() {
 			const int blue_idx = byte_bin(bluef);
 			const int column = clamp_int((x * waveform_columns) / std::max(1, width), 0, waveform_columns - 1);
 
-			hist_luma[luma_idx]++;
-			hist_red[red_idx]++;
-			hist_green[green_idx]++;
-			hist_blue[blue_idx]++;
-			waveform[static_cast<size_t>(column) * 256 + luma_idx]++;
+				hist_luma[luma_idx]++;
+				hist_red[red_idx]++;
+				hist_green[green_idx]++;
+				hist_blue[blue_idx]++;
+				const size_t waveform_offset = static_cast<size_t>(column) * 256;
+				waveform_luma[waveform_offset + luma_idx]++;
+				waveform_red[waveform_offset + red_idx]++;
+				waveform_green[waveform_offset + green_idx]++;
+				waveform_blue[waveform_offset + blue_idx]++;
 
 			luma_sum += luma;
 			if (luma_idx <= 2)
@@ -156,24 +171,18 @@ void FrameScope::analyze_video() {
 	video["summary"]["clipped_blue"] = clipped_blue;
 
 	video["histogram"] = Json::Value(Json::objectValue);
-	video["histogram"]["luma"] = Json::Value(Json::arrayValue);
-	video["histogram"]["red"] = Json::Value(Json::arrayValue);
-	video["histogram"]["green"] = Json::Value(Json::arrayValue);
-	video["histogram"]["blue"] = Json::Value(Json::arrayValue);
-	for (int i = 0; i < 256; ++i) {
-		video["histogram"]["luma"].append(hist_luma[i]);
-		video["histogram"]["red"].append(hist_red[i]);
-		video["histogram"]["green"].append(hist_green[i]);
-		video["histogram"]["blue"].append(hist_blue[i]);
-	}
+	video["histogram"]["luma"] = json_array_from_vector(hist_luma);
+	video["histogram"]["red"] = json_array_from_vector(hist_red);
+	video["histogram"]["green"] = json_array_from_vector(hist_green);
+	video["histogram"]["blue"] = json_array_from_vector(hist_blue);
 
 	video["waveform"] = Json::Value(Json::objectValue);
 	video["waveform"]["columns"] = waveform_columns;
 	video["waveform"]["bins"] = 256;
-	video["waveform"]["luma"] = Json::Value(Json::arrayValue);
-	for (size_t i = 0; i < waveform.size(); ++i) {
-		video["waveform"]["luma"].append(waveform[i]);
-	}
+	video["waveform"]["luma"] = json_array_from_vector(waveform_luma);
+	video["waveform"]["red"] = json_array_from_vector(waveform_red);
+	video["waveform"]["green"] = json_array_from_vector(waveform_green);
+	video["waveform"]["blue"] = json_array_from_vector(waveform_blue);
 
 	scope_data["video"] = video;
 }
