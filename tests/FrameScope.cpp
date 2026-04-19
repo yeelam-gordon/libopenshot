@@ -83,6 +83,23 @@ TEST_CASE("FrameScope analyzes video histogram and waveform data", "[framescope]
 	CHECK(root["video"]["summary"]["avg_luma"].asDouble() > 0.2);
 }
 
+TEST_CASE("FrameScope exposes typed video getters", "[framescope][video][getters]")
+{
+	FrameScope scope(makeVideoScopeFrame(), 4, 4);
+
+	REQUIRE(scope.HasVideo() == true);
+	CHECK(scope.GetVideoWidth() == 4);
+	CHECK(scope.GetVideoHeight() == 1);
+	CHECK(scope.GetWaveformColumns() == 4);
+	CHECK(scope.GetWaveformBins() == 256);
+	CHECK(scope.GetVideoHistogramRed().size() == 256);
+	CHECK(scope.GetVideoHistogramGreen()[255] == 1);
+	CHECK(scope.GetVideoWaveformRed().size() == 4 * 256);
+	CHECK(scope.GetVideoWaveformRed()[1 * 256 + 255] == 1);
+	CHECK(scope.GetVideoWaveformBlue()[3 * 256 + 255] == 1);
+	CHECK(scope.GetVideoAverageLuma() > 0.2);
+}
+
 TEST_CASE("FrameScope analyzes audio waveform and summary data", "[framescope][audio]")
 {
 	FrameScope scope(makeAudioScopeFrame(), 4, 4);
@@ -102,6 +119,24 @@ TEST_CASE("FrameScope analyzes audio waveform and summary data", "[framescope][a
 	CHECK(root["audio"]["summary"]["clipped_samples"][0].asInt() == 2);
 	CHECK(root["audio"]["summary"]["clipped_samples"][1].asInt() == 0);
 	CHECK(root["audio"]["summary"]["rms"][0].asFloat() > 0.0f);
+}
+
+TEST_CASE("FrameScope exposes typed audio getters", "[framescope][audio][getters]")
+{
+	FrameScope scope(makeAudioScopeFrame(), 4, 4);
+
+	REQUIRE(scope.HasAudio() == true);
+	CHECK(scope.GetAudioChannels() == 2);
+	CHECK(scope.GetAudioSamples() == 8);
+	CHECK(scope.GetAudioSampleRate() == 48000);
+	CHECK(scope.GetAudioBuckets() == 4);
+	CHECK(scope.GetAudioPeakLevels().size() == 2);
+	CHECK(scope.GetAudioPeakLevels()[0] == Approx(1.0f));
+	CHECK(scope.GetAudioRmsLevels()[1] > 0.0f);
+	CHECK(scope.GetAudioClippedSamples()[0] == 2);
+	CHECK(scope.GetAudioWaveformMin(0).size() == 4);
+	CHECK(scope.GetAudioWaveformMax(1).size() == 4);
+	CHECK(scope.GetAudioWaveformMax(99).empty());
 }
 
 TEST_CASE("FrameScope Json string parses cleanly", "[framescope][json]")
