@@ -71,6 +71,7 @@ set(OPENSHOT_SOURCES
   FFmpegWriter.cpp
   Fraction.cpp
   Frame.cpp
+  FrameScope.cpp
   FrameMapper.cpp
   MemoryTrim.cpp
   Json.cpp

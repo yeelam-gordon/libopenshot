@@ -38,6 +38,7 @@ set(OPENSHOT_TESTS
   FFmpegWriter
   Fraction
   Frame
+  FrameScope
   FrameMapper
   KeyFrame
   Point
