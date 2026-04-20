@@ -482,7 +482,7 @@ std::string ColorGrade::PropertiesJSON(int64_t requested_frame) const {
 	root["vibrance"] = add_property_json("Vibrance", vibrance.GetValue(requested_frame), "float", "", &vibrance, -1.0, 1.0, false, requested_frame);
 	root["mix"] = add_property_json("Mix", mix.GetValue(requested_frame), "float", "", &mix, 0.0, 1.0, false, requested_frame);
 
-	root["wheels"] = add_property_json("Wheels", 0.0, "colorgrade_wheels", wheels.Summary(), NULL, 0.0, 1.0, false, requested_frame);
+	root["wheels"] = add_property_json("Color Wheels", 0.0, "colorgrade_wheels", wheels.Summary(), NULL, 0.0, 1.0, false, requested_frame);
 	root["wheels"]["wheels"] = wheels.JsonValue();
 	root["wheels"]["summary"] = wheels.Summary();
 
