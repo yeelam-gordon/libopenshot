@@ -35,6 +35,32 @@ static std::shared_ptr<Frame> makeSinglePixelFrame()
 	return frame;
 }
 
+static std::shared_ptr<Frame> makeTopEdgeFrame()
+{
+	QImage img(64, 64, QImage::Format_ARGB32);
+	img.fill(QColor(0, 0, 0, 0));
+	for (int y = 0; y < 24; ++y) {
+		for (int x = 20; x < 44; ++x)
+			img.setPixelColor(x, y, QColor(255, 255, 255, 255));
+	}
+	auto frame = std::make_shared<Frame>();
+	*frame->GetImage() = img;
+	return frame;
+}
+
+static std::shared_ptr<Frame> makeHardSquareFrame()
+{
+	QImage img(64, 64, QImage::Format_ARGB32);
+	img.fill(QColor(0, 0, 0, 0));
+	for (int y = 20; y < 44; ++y) {
+		for (int x = 20; x < 44; ++x)
+			img.setPixelColor(x, y, QColor(255, 255, 255, 255));
+	}
+	auto frame = std::make_shared<Frame>();
+	*frame->GetImage() = img;
+	return frame;
+}
+
 TEST_CASE("Shadow offsets visible pixels into surrounding area", "[effect][shadow]")
 {
 	Shadow effect;
@@ -53,6 +79,41 @@ TEST_CASE("Shadow offsets visible pixels into surrounding area", "[effect][shado
 
 	CHECK(before.alpha() == 0);
 	CHECK(after.alpha() > 0);
+}
+
+TEST_CASE("Shadow blur can still reach the canvas edge after offset", "[effect][shadow][edge]")
+{
+	Shadow effect;
+	effect.opacity = Keyframe(1.0);
+	effect.blur_radius = Keyframe(12.0);
+	effect.spread = Keyframe(0.0);
+	effect.distance = Keyframe(10.0);
+	effect.angle = Keyframe(90.0);
+	effect.color = Color("#000000");
+
+	auto frame = makeTopEdgeFrame();
+	auto out = effect.GetFrame(frame, 1);
+
+	CHECK(out->GetImage()->pixelColor(32, 0).alpha() > 0);
+}
+
+TEST_CASE("Shadow spread expands hard-edged shapes before blur", "[effect][shadow][spread]")
+{
+	Shadow low;
+	low.opacity = Keyframe(1.0);
+	low.blur_radius = Keyframe(8.0);
+	low.spread = Keyframe(0.0);
+	low.distance = Keyframe(0.0);
+	low.angle = Keyframe(0.0);
+	low.color = Color("#000000");
+
+	Shadow high = low;
+	high.spread = Keyframe(1.0);
+
+	auto low_frame = low.GetFrame(makeHardSquareFrame(), 1);
+	auto high_frame = high.GetFrame(makeHardSquareFrame(), 1);
+
+	CHECK(high_frame->GetImage()->pixelColor(16, 32).alpha() > low_frame->GetImage()->pixelColor(16, 32).alpha());
 }
 
 TEST_CASE("Shadow json round-trip preserves key properties", "[effect][shadow][json]")

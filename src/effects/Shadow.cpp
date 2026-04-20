@@ -112,8 +112,74 @@ namespace {
 		}
 	}
 
+	inline void shadow_spread_horizontal(const std::vector<float>& src, std::vector<float>& dst, int w, int h, int radius) {
+		if (radius <= 0) {
+			dst = src;
+			return;
+		}
+
+		#pragma omp parallel for schedule(static)
+		for (int y = 0; y < h; ++y) {
+			const int row = y * w;
+			for (int x = 0; x < w; ++x) {
+				const int left = std::max(0, x - radius);
+				const int right = std::min(w - 1, x + radius);
+				float value = 0.0f;
+				for (int sample_x = left; sample_x <= right; ++sample_x)
+					value = std::max(value, src[row + sample_x]);
+				dst[row + x] = value;
+			}
+		}
+	}
+
+	inline void shadow_spread_vertical(const std::vector<float>& src, std::vector<float>& dst, int w, int h, int radius) {
+		if (radius <= 0) {
+			dst = src;
+			return;
+		}
+
+		#pragma omp parallel for schedule(static)
+		for (int y = 0; y < h; ++y) {
+			const int top = std::max(0, y - radius);
+			const int bottom = std::min(h - 1, y + radius);
+			for (int x = 0; x < w; ++x) {
+				float value = 0.0f;
+				for (int sample_y = top; sample_y <= bottom; ++sample_y)
+					value = std::max(value, src[(sample_y * w) + x]);
+				dst[(y * w) + x] = value;
+			}
+		}
+	}
+
+	inline void shadow_apply_spread(std::vector<float>& mask, int w, int h, int radius) {
+		if (radius <= 0 || w <= 0 || h <= 0)
+			return;
+
+		std::vector<float> temp(mask.size());
+		shadow_spread_horizontal(mask, temp, w, h, radius);
+		shadow_spread_vertical(temp, mask, w, h, radius);
+	}
+
+	inline std::vector<float> shadow_shift_mask(const std::vector<float>& src, int w, int h,
+												int offset_x, int offset_y) {
+		std::vector<float> shifted(static_cast<size_t>(w * h), 0.0f);
+
+		#pragma omp parallel for schedule(static)
+		for (int y = 0; y < h; ++y) {
+			for (int x = 0; x < w; ++x) {
+				const int src_x = x - offset_x;
+				const int src_y = y - offset_y;
+				if (src_x < 0 || src_x >= w || src_y < 0 || src_y >= h)
+					continue;
+
+				shifted[(y * w) + x] = src[(src_y * w) + src_x];
+			}
+		}
+
+		return shifted;
+	}
+
 	inline QImage make_shadow_overlay(const std::vector<float>& mask, int w, int h,
-									  int offset_x, int offset_y,
 									  const std::vector<int>& rgba, float opacity) {
 		QImage overlay(w, h, QImage::Format_RGBA8888_Premultiplied);
 		overlay.fill(Qt::transparent);
@@ -127,12 +193,7 @@ namespace {
 		#pragma omp parallel for schedule(static)
 		for (int y = 0; y < h; ++y) {
 			for (int x = 0; x < w; ++x) {
-				const int src_x = x - offset_x;
-				const int src_y = y - offset_y;
-				if (src_x < 0 || src_x >= w || src_y < 0 || src_y >= h)
-					continue;
-
-				const float alpha = shadow_clampf(mask[(src_y * w) + src_x] * opacity * base_a, 0.0f, 1.0f);
+				const float alpha = shadow_clampf(mask[(y * w) + x] * opacity * base_a, 0.0f, 1.0f);
 				if (alpha <= 0.0f)
 					continue;
 
@@ -168,6 +229,7 @@ void Shadow::init_effect_details()
 	info.description = "Add a soft drop shadow based on visible pixels.";
 	info.has_audio = false;
 	info.has_video = true;
+	info.apply_before_clip = false;
 }
 
 std::shared_ptr<openshot::Frame> Shadow::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
@@ -190,21 +252,24 @@ std::shared_ptr<openshot::Frame> Shadow::GetFrame(std::shared_ptr<openshot::Fram
 	const float distance_value = static_cast<float>(distance.GetValue(frame_number));
 	const float angle_value = static_cast<float>(angle.GetValue(frame_number));
 	const std::vector<int> rgba = color.GetColorRGBA(frame_number);
-
-	std::vector<float> alpha_mask(static_cast<size_t>(w * h));
-	const float spread_gamma = 1.0f - (spread_value * 0.85f);
-	#pragma omp parallel for schedule(static)
-	for (int i = 0; i < (w * h); ++i) {
-		const float alpha = static_cast<float>(source_pixels[(i * 4) + 3]) / 255.0f;
-		alpha_mask[i] = (alpha <= 0.0f) ? 0.0f : std::pow(alpha, std::max(0.05f, spread_gamma));
-	}
-
-	if (blur_value > 0)
-		shadow_apply_box_blur(alpha_mask, w, h, blur_value, 3);
-
 	const float radians = angle_value * static_cast<float>(M_PI / 180.0);
 	const int shadow_x = static_cast<int>(std::lround(std::cos(radians) * distance_value));
 	const int shadow_y = static_cast<int>(std::lround(std::sin(radians) * distance_value));
+
+	std::vector<float> alpha_mask(static_cast<size_t>(w * h));
+	#pragma omp parallel for schedule(static)
+	for (int i = 0; i < (w * h); ++i) {
+		const float alpha = static_cast<float>(source_pixels[(i * 4) + 3]) / 255.0f;
+		alpha_mask[i] = alpha;
+	}
+
+	const int spread_radius = std::max(0, static_cast<int>(std::lround(static_cast<float>(blur_value) * spread_value)));
+	if (spread_radius > 0)
+		shadow_apply_spread(alpha_mask, w, h, spread_radius);
+
+	std::vector<float> shadow_mask = shadow_shift_mask(alpha_mask, w, h, shadow_x, shadow_y);
+	if (blur_value > 0)
+		shadow_apply_box_blur(shadow_mask, w, h, blur_value, 3);
 
 	QImage result(w, h, QImage::Format_RGBA8888_Premultiplied);
 	result.fill(Qt::transparent);
@@ -212,7 +277,7 @@ std::shared_ptr<openshot::Frame> Shadow::GetFrame(std::shared_ptr<openshot::Fram
 	{
 		QPainter painter(&result);
 		painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform, true);
-		QImage overlay = make_shadow_overlay(alpha_mask, w, h, shadow_x, shadow_y, rgba, opacity_value);
+		QImage overlay = make_shadow_overlay(shadow_mask, w, h, rgba, opacity_value);
 		painter.drawImage(0, 0, overlay);
 		painter.drawImage(0, 0, source);
 	}

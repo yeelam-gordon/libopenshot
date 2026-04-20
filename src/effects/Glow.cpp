@@ -111,6 +111,54 @@ namespace {
 			glow_blur_vertical(temp, mask, w, h, radius);
 		}
 	}
+
+	inline void glow_spread_horizontal(const std::vector<float>& src, std::vector<float>& dst, int w, int h, int radius) {
+		if (radius <= 0) {
+			dst = src;
+			return;
+		}
+
+		#pragma omp parallel for schedule(static)
+		for (int y = 0; y < h; ++y) {
+			const int row = y * w;
+			for (int x = 0; x < w; ++x) {
+				const int left = std::max(0, x - radius);
+				const int right = std::min(w - 1, x + radius);
+				float value = 0.0f;
+				for (int sample_x = left; sample_x <= right; ++sample_x)
+					value = std::max(value, src[row + sample_x]);
+				dst[row + x] = value;
+			}
+		}
+	}
+
+	inline void glow_spread_vertical(const std::vector<float>& src, std::vector<float>& dst, int w, int h, int radius) {
+		if (radius <= 0) {
+			dst = src;
+			return;
+		}
+
+		#pragma omp parallel for schedule(static)
+		for (int y = 0; y < h; ++y) {
+			const int top = std::max(0, y - radius);
+			const int bottom = std::min(h - 1, y + radius);
+			for (int x = 0; x < w; ++x) {
+				float value = 0.0f;
+				for (int sample_y = top; sample_y <= bottom; ++sample_y)
+					value = std::max(value, src[(sample_y * w) + x]);
+				dst[(y * w) + x] = value;
+			}
+		}
+	}
+
+	inline void glow_apply_spread(std::vector<float>& mask, int w, int h, int radius) {
+		if (radius <= 0 || w <= 0 || h <= 0)
+			return;
+
+		std::vector<float> temp(mask.size());
+		glow_spread_horizontal(mask, temp, w, h, radius);
+		glow_spread_vertical(temp, mask, w, h, radius);
+	}
 }
 
 Glow::Glow()
@@ -131,6 +179,7 @@ void Glow::init_effect_details()
 	info.description = "Add an outer or inner glow based on visible pixels.";
 	info.has_audio = false;
 	info.has_video = true;
+	info.apply_before_clip = false;
 }
 
 std::shared_ptr<openshot::Frame> Glow::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
@@ -157,12 +206,15 @@ std::shared_ptr<openshot::Frame> Glow::GetFrame(std::shared_ptr<openshot::Frame>
 	const float color_a = static_cast<float>(rgba[3]) / 255.0f;
 
 	std::vector<float> alpha_mask(static_cast<size_t>(w * h));
-	const float spread_gamma = 1.0f - (spread_value * 0.85f);
 	#pragma omp parallel for schedule(static)
 	for (int i = 0; i < (w * h); ++i) {
 		const float alpha = static_cast<float>(source_pixels[(i * 4) + 3]) / 255.0f;
-		alpha_mask[i] = (alpha <= 0.0f) ? 0.0f : std::pow(alpha, std::max(0.05f, spread_gamma));
+		alpha_mask[i] = alpha;
 	}
+
+	const int spread_radius = std::max(0, static_cast<int>(std::lround(static_cast<float>(blur_value) * spread_value)));
+	if (spread_radius > 0)
+		glow_apply_spread(alpha_mask, w, h, spread_radius);
 
 	std::vector<float> blurred_mask = alpha_mask;
 	if (blur_value > 0)

@@ -48,6 +48,19 @@ static std::shared_ptr<Frame> makeSolidSquareFrame()
 	return frame;
 }
 
+static std::shared_ptr<Frame> makeHardSquareFrame()
+{
+	QImage img(64, 64, QImage::Format_ARGB32);
+	img.fill(QColor(0, 0, 0, 0));
+	for (int y = 20; y < 44; ++y) {
+		for (int x = 20; x < 44; ++x)
+			img.setPixelColor(x, y, QColor(255, 255, 255, 255));
+	}
+	auto frame = std::make_shared<Frame>();
+	*frame->GetImage() = img;
+	return frame;
+}
+
 TEST_CASE("Glow outer mode brightens transparent neighbors", "[effect][glow]")
 {
 	Glow effect;
@@ -112,4 +125,22 @@ TEST_CASE("Glow json round-trip preserves mode and color", "[effect][glow][json]
 	CHECK(copy_json["color"]["red"]["Points"][0]["co"]["Y"].asDouble() == Approx(32.0));
 	CHECK(copy_json["color"]["green"]["Points"][0]["co"]["Y"].asDouble() == Approx(64.0));
 	CHECK(copy_json["color"]["blue"]["Points"][0]["co"]["Y"].asDouble() == Approx(96.0));
+}
+
+TEST_CASE("Glow spread expands hard-edged shapes before blur", "[effect][glow][spread]")
+{
+	Glow low;
+	low.mode = GLOW_MODE_OUTER;
+	low.opacity = Keyframe(1.0);
+	low.blur_radius = Keyframe(8.0);
+	low.spread = Keyframe(0.0);
+	low.color = Color("#ff0000");
+
+	Glow high = low;
+	high.spread = Keyframe(1.0);
+
+	auto low_frame = low.GetFrame(makeHardSquareFrame(), 1);
+	auto high_frame = high.GetFrame(makeHardSquareFrame(), 1);
+
+	CHECK(high_frame->GetImage()->pixelColor(16, 32).alpha() > low_frame->GetImage()->pixelColor(16, 32).alpha());
 }
