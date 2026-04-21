@@ -54,12 +54,14 @@ set(OPENSHOT_TESTS
   ChromaKey
   Crop
   Displace
+  Glow
   LensFlare
   AnalogTape
   BenchmarkArgs
   EffectMask
   Mask
   Sharpen
+  Shadow
   SphericalEffect
   WaveEffect
 )
