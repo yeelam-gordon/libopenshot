@@ -24,7 +24,9 @@ using namespace openshot;
 
 static std::shared_ptr<Frame> makeVideoScopeFrame()
 {
-	QImage img(4, 1, QImage::Format_ARGB32);
+	// Must use Format_RGBA8888_Premultiplied — the format libopenshot always
+	// stores frames in. FrameScope reads raw bytes as [R=0, G=1, B=2, A=3].
+	QImage img(4, 1, QImage::Format_RGBA8888_Premultiplied);
 	img.setPixelColor(0, 0, QColor(0, 0, 0, 255));
 	img.setPixelColor(1, 0, QColor(255, 0, 0, 255));
 	img.setPixelColor(2, 0, QColor(0, 255, 0, 255));
@@ -149,4 +151,51 @@ TEST_CASE("FrameScope Json string parses cleanly", "[framescope][json]")
 
 	REQUIRE(Json::parseFromStream(rb, json_stream, &root, &errs));
 	CHECK(root["audio"]["present"].asBool() == true);
+}
+
+TEST_CASE("FrameScope reads RGBA8888 pixel byte order correctly", "[framescope][video][rgba]")
+{
+	// Regression test: FrameScope must treat pixel bytes as [R=0, G=1, B=2, A=3]
+	// (QImage::Format_RGBA8888_Premultiplied — the canonical libopenshot frame
+	// format). A previous bug read them as BGRA (Format_ARGB32 order), causing
+	// the red and blue channels to report each other's data.
+
+	// Pure-red pixel: only histogram_red[255] should be non-zero.
+	{
+		QImage img(1, 1, QImage::Format_RGBA8888_Premultiplied);
+		img.setPixelColor(0, 0, QColor(255, 0, 0, 255));
+		auto frame = std::make_shared<Frame>();
+		*frame->GetImage() = img;
+		FrameScope scope(frame, 1, 1);
+
+		CHECK(scope.GetVideoHistogramRed()[255]  == 1);
+		CHECK(scope.GetVideoHistogramGreen()[255] == 0);
+		CHECK(scope.GetVideoHistogramBlue()[255]  == 0);
+	}
+
+	// Pure-blue pixel: only histogram_blue[255] should be non-zero.
+	{
+		QImage img(1, 1, QImage::Format_RGBA8888_Premultiplied);
+		img.setPixelColor(0, 0, QColor(0, 0, 255, 255));
+		auto frame = std::make_shared<Frame>();
+		*frame->GetImage() = img;
+		FrameScope scope(frame, 1, 1);
+
+		CHECK(scope.GetVideoHistogramRed()[255]  == 0);
+		CHECK(scope.GetVideoHistogramGreen()[255] == 0);
+		CHECK(scope.GetVideoHistogramBlue()[255]  == 1);
+	}
+
+	// Pure-green pixel: only histogram_green[255] should be non-zero.
+	{
+		QImage img(1, 1, QImage::Format_RGBA8888_Premultiplied);
+		img.setPixelColor(0, 0, QColor(0, 255, 0, 255));
+		auto frame = std::make_shared<Frame>();
+		*frame->GetImage() = img;
+		FrameScope scope(frame, 1, 1);
+
+		CHECK(scope.GetVideoHistogramRed()[255]  == 0);
+		CHECK(scope.GetVideoHistogramGreen()[255] == 1);
+		CHECK(scope.GetVideoHistogramBlue()[255]  == 0);
+	}
 }

@@ -29,6 +29,10 @@ namespace openshot {
 	 * frame. It intentionally focuses on broadly useful data for grading and
 	 * editorial decisions, such as histograms, a luma waveform, audio envelope
 	 * buckets, and simple clipping / peak summaries.
+	 *
+	 * Pixel format: libopenshot frames are always stored as
+	 * QImage::Format_RGBA8888_Premultiplied (see Frame::AddImage). The
+	 * in-memory byte order per pixel is [R=0, G=1, B=2, A=3].
 	 */
 	class FrameScope {
 	private:

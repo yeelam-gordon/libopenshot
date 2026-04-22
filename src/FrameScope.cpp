@@ -114,6 +114,8 @@ void FrameScope::analyze() {
 }
 
 void FrameScope::analyze_video() {
+	// Frame images are always QImage::Format_RGBA8888_Premultiplied (enforced
+	// by Frame::AddImage). Pixel byte order is [R=0, G=1, B=2, A=3].
 	std::shared_ptr<QImage> image = frame->GetImage();
 	if (!image || image->isNull())
 		return;
@@ -147,10 +149,10 @@ void FrameScope::analyze_video() {
 		const unsigned char* row = bits + (static_cast<size_t>(y) * bytes_per_line);
 		for (int x = 0; x < width; ++x) {
 			const unsigned char* pixel = row + (static_cast<size_t>(x) * 4);
-			const int blue = pixel[0];
+			const int red   = pixel[0];  // RGBA8888: [R=0, G=1, B=2, A=3]
 			const int green = pixel[1];
-			const int red = pixel[2];
-			const int alpha = pixel[3];
+			const int blue  = pixel[2];
+			const int alpha = pixel[3];  // premultiplied — divided out below
 			if (alpha <= 0)
 				continue;
 
