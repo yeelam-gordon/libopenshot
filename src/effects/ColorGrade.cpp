@@ -44,10 +44,10 @@ static std::string color_to_hex(const QColor& color) {
 	return color.name(QColor::HexRgb).toStdString();
 }
 
-static std::array<float, 256> build_curve_lut(const ColorGradeCurveData& curve) {
+static std::array<float, 256> build_curve_lut(const AnimatedCurve& curve, int64_t frame_number) {
 	std::array<float, 256> lut{};
 	for (size_t i = 0; i < lut.size(); ++i) {
-		lut[i] = curve.Sample(static_cast<float>(i) * kInv255);
+		lut[i] = curve.Sample(static_cast<float>(i) * kInv255, frame_number);
 	}
 	return lut;
 }
@@ -57,116 +57,65 @@ static float sample_curve_lut(const std::array<float, 256>& lut, float value) {
 }
 }
 
-ColorGradeCurveData::ColorGradeCurveData()
-	: enabled(true), points{{0.0f, 0.0f}, {1.0f, 1.0f}} {}
-
-Json::Value ColorGradeCurveData::JsonValue() const {
-	Json::Value root(Json::objectValue);
-	root["enabled"] = enabled;
-	root["points"] = Json::Value(Json::arrayValue);
-	for (const auto& point : points) {
-		Json::Value item(Json::objectValue);
-		item["x"] = point.first;
-		item["y"] = point.second;
-		root["points"].append(item);
-	}
-	return root;
-}
-
-void ColorGradeCurveData::SetJsonValue(const Json::Value& root) {
-	if (!root["enabled"].isNull())
-		enabled = root["enabled"].asBool();
-
-	std::vector<std::pair<float, float>> parsed;
-	const Json::Value& json_points = root["points"];
-	if (json_points.isArray()) {
-		for (const auto& point : json_points) {
-			if (!point["x"].isNull() && !point["y"].isNull()) {
-				parsed.emplace_back(
-					clamp01(point["x"].asFloat()),
-					clamp01(point["y"].asFloat()));
-			}
-		}
-	}
-	if (parsed.empty()) {
-		parsed = {{0.0f, 0.0f}, {1.0f, 1.0f}};
-	}
-	std::sort(parsed.begin(), parsed.end(), [](const auto& lhs, const auto& rhs) {
-		return lhs.first < rhs.first;
-	});
-	if (parsed.front().first > 0.0f) {
-		parsed.insert(parsed.begin(), {0.0f, parsed.front().second});
-	} else {
-		parsed.front().first = 0.0f;
-	}
-	if (parsed.back().first < 1.0f) {
-		parsed.push_back({1.0f, parsed.back().second});
-	} else {
-		parsed.back().first = 1.0f;
-	}
-	points.swap(parsed);
-}
-
-float ColorGradeCurveData::Sample(float input) const {
-	if (!enabled)
-		return clamp01(input);
-	const float x = clamp01(input);
-	if (points.empty())
-		return x;
-	if (x <= points.front().first)
-		return points.front().second;
-	if (x >= points.back().first)
-		return points.back().second;
-
-	for (size_t i = 1; i < points.size(); ++i) {
-		const auto& left = points[i - 1];
-		const auto& right = points[i];
-		if (x <= right.first) {
-			const float span = std::max(0.00001f, right.first - left.first);
-			const float t = (x - left.first) / span;
-			return left.second + ((right.second - left.second) * t);
-		}
-	}
-	return points.back().second;
-}
-
-std::string ColorGradeCurveData::Summary() const {
-	std::ostringstream ss;
-	if (!enabled)
-		ss << "Disabled, ";
-	ss << points.size() << " pts";
-	return ss.str();
-}
-
 ColorGradeWheelEntry::ColorGradeWheelEntry()
-	: color(Qt::white), amount(0.0f), luma(0.0f) {}
+	: color(QColor(Qt::white)), amount(0.0f), luma(0.0f) {}
 
 Json::Value ColorGradeWheelEntry::JsonValue() const {
 	Json::Value root(Json::objectValue);
-	root["color"] = color_to_hex(color);
-	root["amount"] = amount;
-	root["luma"] = luma;
+	root["color"] = color_to_hex(QColor(
+		color.red.GetInt(1),
+		color.green.GetInt(1),
+		color.blue.GetInt(1),
+		color.alpha.GetInt(1)));
+	root["color_keyframes"] = color.JsonValue();
+	root["amount"] = amount.GetValue(1);
+	root["amount_keyframes"] = amount.JsonValue();
+	root["luma"] = luma.GetValue(1);
+	root["luma_keyframes"] = luma.JsonValue();
 	return root;
 }
 
 void ColorGradeWheelEntry::SetJsonValue(const Json::Value& root) {
-	if (!root["color"].isNull()) {
+	if (!root["color_keyframes"].isNull()) {
+		color.SetJsonValue(root["color_keyframes"]);
+	} else if (!root["color"].isNull()) {
 		const QColor parsed(QString::fromStdString(root["color"].asString()));
 		if (parsed.isValid())
-			color = parsed;
+			color = Color(parsed);
 	}
-	if (!root["amount"].isNull())
-		amount = std::max(-1.0f, std::min(1.0f, root["amount"].asFloat()));
-	if (!root["luma"].isNull())
-		luma = std::max(-1.0f, std::min(1.0f, root["luma"].asFloat()));
+	if (!root["amount_keyframes"].isNull())
+		amount.SetJsonValue(root["amount_keyframes"]);
+	else if (!root["amount"].isNull())
+		amount = Keyframe(std::max(-1.0f, std::min(1.0f, root["amount"].asFloat())));
+	if (!root["luma_keyframes"].isNull())
+		luma.SetJsonValue(root["luma_keyframes"]);
+	else if (!root["luma"].isNull())
+		luma = Keyframe(std::max(-1.0f, std::min(1.0f, root["luma"].asFloat())));
+}
+
+QColor ColorGradeWheelEntry::GetColor(int64_t frame_number) const {
+	return QColor(
+		color.red.GetInt(frame_number),
+		color.green.GetInt(frame_number),
+		color.blue.GetInt(frame_number),
+		color.alpha.GetInt(frame_number));
+}
+
+float ColorGradeWheelEntry::GetAmount(int64_t frame_number) const {
+	return std::max(-1.0f, std::min(1.0f, static_cast<float>(amount.GetValue(frame_number))));
+}
+
+float ColorGradeWheelEntry::GetLuma(int64_t frame_number) const {
+	return std::max(-1.0f, std::min(1.0f, static_cast<float>(luma.GetValue(frame_number))));
 }
 
 ColorGradeWheelsData::ColorGradeWheelsData()
-	: enabled(true) {}
+	: enabled(1.0) {}
 
 Json::Value ColorGradeWheelsData::JsonValue() const {
 	Json::Value root(Json::objectValue);
-	root["enabled"] = enabled;
+	root["enabled"] = enabled.GetValue(1) >= 0.5;
+	root["enabled_keyframes"] = enabled.JsonValue();
 	root["global"] = global.JsonValue();
 	root["shadows"] = shadows.JsonValue();
 	root["midtones"] = midtones.JsonValue();
@@ -175,8 +124,10 @@ Json::Value ColorGradeWheelsData::JsonValue() const {
 }
 
 void ColorGradeWheelsData::SetJsonValue(const Json::Value& root) {
-	if (!root["enabled"].isNull())
-		enabled = root["enabled"].asBool();
+	if (root["enabled"].isBool())
+		enabled = Keyframe(root["enabled"].asBool() ? 1.0 : 0.0);
+	else if (!root["enabled_keyframes"].isNull())
+		enabled.SetJsonValue(root["enabled_keyframes"]);
 	if (!root["global"].isNull())
 		global.SetJsonValue(root["global"]);
 	if (!root["shadows"].isNull())
@@ -187,9 +138,13 @@ void ColorGradeWheelsData::SetJsonValue(const Json::Value& root) {
 		highlights.SetJsonValue(root["highlights"]);
 }
 
-std::string ColorGradeWheelsData::Summary() const {
-	return enabled ? "Global / Shadows / Midtones / Highlights"
-	               : "Disabled";
+std::string ColorGradeWheelsData::Summary(int64_t frame_number) const {
+	return IsEnabled(frame_number) ? "Global / Shadows / Midtones / Highlights"
+	                               : "Disabled";
+}
+
+bool ColorGradeWheelsData::IsEnabled(int64_t frame_number) const {
+	return enabled.GetValue(frame_number) >= 0.5;
 }
 
 ColorGrade::ColorGrade()
@@ -252,10 +207,10 @@ std::shared_ptr<openshot::Frame> ColorGrade::GetFrame(std::shared_ptr<openshot::
 	const float mix_value = std::max(0.0f, std::min(1.0f, static_cast<float>(mix.GetValue(frame_number))));
 	const float exposure_gain = std::pow(2.0f, exposure_value);
 	const float contrast_factor = std::max(0.0f, 1.0f + contrast_value);
-	const std::array<float, 256> curve_master_lut = build_curve_lut(curve_master);
-	const std::array<float, 256> curve_red_lut = build_curve_lut(curve_red);
-	const std::array<float, 256> curve_green_lut = build_curve_lut(curve_green);
-	const std::array<float, 256> curve_blue_lut = build_curve_lut(curve_blue);
+	const std::array<float, 256> curve_all_lut = build_curve_lut(curve_all, frame_number);
+	const std::array<float, 256> curve_red_lut = build_curve_lut(curve_red, frame_number);
+	const std::array<float, 256> curve_green_lut = build_curve_lut(curve_green, frame_number);
+	const std::array<float, 256> curve_blue_lut = build_curve_lut(curve_blue, frame_number);
 
 	static const std::array<float, 256> inv_alpha = [] {
 		std::array<float, 256> lut{};
@@ -265,17 +220,19 @@ std::shared_ptr<openshot::Frame> ColorGrade::GetFrame(std::shared_ptr<openshot::
 		return lut;
 	}();
 
-	const auto wheel_bias = [](const ColorGradeWheelEntry& wheel, float weight, float& r, float& g, float& b) {
+	const auto wheel_bias = [frame_number](const ColorGradeWheelEntry& wheel, float weight, float& r, float& g, float& b) {
 		if (std::abs(weight) <= 0.00001f)
 			return;
-		const float cr = wheel.color.redF();
-		const float cg = wheel.color.greenF();
-		const float cb = wheel.color.blueF();
+		const QColor color = wheel.GetColor(frame_number);
+		const float cr = color.redF();
+		const float cg = color.greenF();
+		const float cb = color.blueF();
 		const float avg = (cr + cg + cb) / 3.0f;
-		const float amount = wheel.amount * weight;
-		r += ((cr - avg) * amount) + (wheel.luma * weight);
-		g += ((cg - avg) * amount) + (wheel.luma * weight);
-		b += ((cb - avg) * amount) + (wheel.luma * weight);
+		const float amount = wheel.GetAmount(frame_number) * weight;
+		const float luma = wheel.GetLuma(frame_number) * weight;
+		r += ((cr - avg) * amount) + luma;
+		g += ((cg - avg) * amount) + luma;
+		b += ((cb - avg) * amount) + luma;
 	};
 
 	unsigned char* pixels = reinterpret_cast<unsigned char*>(frame_image->bits());
@@ -340,7 +297,7 @@ std::shared_ptr<openshot::Frame> ColorGrade::GetFrame(std::shared_ptr<openshot::
 		float wheel_r = R;
 		float wheel_g = G;
 		float wheel_b = B;
-		if (wheels.enabled) {
+		if (wheels.IsEnabled(frame_number)) {
 			wheel_bias(wheels.global, 1.0f, wheel_r, wheel_g, wheel_b);
 			wheel_bias(wheels.shadows, (1.0f - luma) * (1.0f - luma), wheel_r, wheel_g, wheel_b);
 			wheel_bias(wheels.midtones, smooth_midtones(luma), wheel_r, wheel_g, wheel_b);
@@ -362,9 +319,9 @@ std::shared_ptr<openshot::Frame> ColorGrade::GetFrame(std::shared_ptr<openshot::
 		B = Clamp01(luma + ((B - luma) * sat_factor));
 
 		// Curves.
-		R = sample_curve_lut(curve_master_lut, R);
-		G = sample_curve_lut(curve_master_lut, G);
-		B = sample_curve_lut(curve_master_lut, B);
+		R = sample_curve_lut(curve_all_lut, R);
+		G = sample_curve_lut(curve_all_lut, G);
+		B = sample_curve_lut(curve_all_lut, B);
 		R = sample_curve_lut(curve_red_lut, R);
 		G = sample_curve_lut(curve_green_lut, G);
 		B = sample_curve_lut(curve_blue_lut, B);
@@ -410,7 +367,7 @@ Json::Value ColorGrade::JsonValue() const {
 	root["vibrance"] = vibrance.JsonValue();
 	root["mix"] = mix.JsonValue();
 	root["wheels"] = wheels.JsonValue();
-	root["curve_master"] = curve_master.JsonValue();
+	root["curve_all"] = curve_all.JsonValue();
 	root["curve_red"] = curve_red.JsonValue();
 	root["curve_green"] = curve_green.JsonValue();
 	root["curve_blue"] = curve_blue.JsonValue();
@@ -451,8 +408,8 @@ void ColorGrade::SetJsonValue(const Json::Value root) {
 		mix.SetJsonValue(root["mix"]);
 	if (!root["wheels"].isNull())
 		wheels.SetJsonValue(root["wheels"]);
-	if (!root["curve_master"].isNull())
-		curve_master.SetJsonValue(root["curve_master"]);
+	if (!root["curve_all"].isNull())
+		curve_all.SetJsonValue(root["curve_all"]);
 	if (!root["curve_red"].isNull())
 		curve_red.SetJsonValue(root["curve_red"]);
 	if (!root["curve_green"].isNull())
@@ -482,29 +439,29 @@ std::string ColorGrade::PropertiesJSON(int64_t requested_frame) const {
 	root["vibrance"] = add_property_json("Vibrance", vibrance.GetValue(requested_frame), "float", "", &vibrance, -1.0, 1.0, false, requested_frame);
 	root["mix"] = add_property_json("Mix", mix.GetValue(requested_frame), "float", "", &mix, 0.0, 1.0, false, requested_frame);
 
-	root["wheels"] = add_property_json("Color Wheels", 0.0, "colorgrade_wheels", wheels.Summary(), NULL, 0.0, 1.0, false, requested_frame);
+	root["wheels"] = add_property_json("Color Wheels", 0.0, "colorgrade_wheels", wheels.Summary(requested_frame), NULL, 0.0, 1.0, false, requested_frame);
 	root["wheels"]["wheels"] = wheels.JsonValue();
-	root["wheels"]["summary"] = wheels.Summary();
+	root["wheels"]["summary"] = wheels.Summary(requested_frame);
 
-	root["curve_master"] = add_property_json("Curve: Master", 0.0, "colorgrade_curve", curve_master.Summary(), NULL, 0.0, 1.0, false, requested_frame);
-	root["curve_master"]["curve"] = curve_master.JsonValue();
-	root["curve_master"]["channel"] = "master";
-	root["curve_master"]["summary"] = curve_master.Summary();
+	root["curve_all"] = add_property_json("Curve: All", 0.0, "colorgrade_curve", curve_all.Summary(requested_frame), NULL, 0.0, 1.0, false, requested_frame);
+	root["curve_all"]["curve"] = curve_all.JsonValue();
+	root["curve_all"]["channel"] = "all";
+	root["curve_all"]["summary"] = curve_all.Summary(requested_frame);
 
-	root["curve_red"] = add_property_json("Curve: Red", 0.0, "colorgrade_curve", curve_red.Summary(), NULL, 0.0, 1.0, false, requested_frame);
+	root["curve_red"] = add_property_json("Curve: Red", 0.0, "colorgrade_curve", curve_red.Summary(requested_frame), NULL, 0.0, 1.0, false, requested_frame);
 	root["curve_red"]["curve"] = curve_red.JsonValue();
 	root["curve_red"]["channel"] = "red";
-	root["curve_red"]["summary"] = curve_red.Summary();
+	root["curve_red"]["summary"] = curve_red.Summary(requested_frame);
 
-	root["curve_green"] = add_property_json("Curve: Green", 0.0, "colorgrade_curve", curve_green.Summary(), NULL, 0.0, 1.0, false, requested_frame);
+	root["curve_green"] = add_property_json("Curve: Green", 0.0, "colorgrade_curve", curve_green.Summary(requested_frame), NULL, 0.0, 1.0, false, requested_frame);
 	root["curve_green"]["curve"] = curve_green.JsonValue();
 	root["curve_green"]["channel"] = "green";
-	root["curve_green"]["summary"] = curve_green.Summary();
+	root["curve_green"]["summary"] = curve_green.Summary(requested_frame);
 
-	root["curve_blue"] = add_property_json("Curve: Blue", 0.0, "colorgrade_curve", curve_blue.Summary(), NULL, 0.0, 1.0, false, requested_frame);
+	root["curve_blue"] = add_property_json("Curve: Blue", 0.0, "colorgrade_curve", curve_blue.Summary(requested_frame), NULL, 0.0, 1.0, false, requested_frame);
 	root["curve_blue"]["curve"] = curve_blue.JsonValue();
 	root["curve_blue"]["channel"] = "blue";
-	root["curve_blue"]["summary"] = curve_blue.Summary();
+	root["curve_blue"]["summary"] = curve_blue.Summary(requested_frame);
 
 	root["lut_path"] = add_property_json("LUT File", 0.0, "string", lut_path, NULL, 0, 0, false, requested_frame);
 	root["lut_intensity"] = add_property_json("LUT Intensity", lut_intensity.GetValue(requested_frame), "float", "", &lut_intensity, 0.0, 1.0, false, requested_frame);

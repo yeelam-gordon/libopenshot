@@ -13,7 +13,9 @@
 #ifndef OPENSHOT_COLOR_GRADE_EFFECT_H
 #define OPENSHOT_COLOR_GRADE_EFFECT_H
 
+#include "../AnimatedCurve.h"
 #include "../EffectBase.h"
+#include "../Color.h"
 #include "../Frame.h"
 #include "../Json.h"
 #include "../KeyFrame.h"
@@ -29,52 +31,26 @@
 namespace openshot
 {
 	/**
-	 * @brief A compact rich curve payload used by the ColorGrade effect.
-	 *
-	 * The JSON form is:
-	 * {
-	 *   "points": [
-	 *     {"x": 0.0, "y": 0.0},
-	 *     {"x": 1.0, "y": 1.0}
-	 *   ]
-	 * }
-	 */
-	struct ColorGradeCurveData {
-		bool enabled;
-		std::vector<std::pair<float, float>> points;
-
-		ColorGradeCurveData();
-		Json::Value JsonValue() const;
-		void SetJsonValue(const Json::Value& root);
-		float Sample(float input) const;
-		std::string Summary() const;
-	};
-
-	/**
-	 * @brief Wheel payload for a tonal region.
-	 *
-	 * The JSON form is:
-	 * {
-	 *   "color": "#RRGGBB",
-	 *   "amount": 0.0,
-	 *   "luma": 0.0
-	 * }
+	 * @brief Wheel payload for a tonal region using native animated primitives.
 	 */
 	struct ColorGradeWheelEntry {
-		QColor color;
-		float amount;
-		float luma;
+		Color color;
+		Keyframe amount;
+		Keyframe luma;
 
 		ColorGradeWheelEntry();
 		Json::Value JsonValue() const;
 		void SetJsonValue(const Json::Value& root);
+		QColor GetColor(int64_t frame_number) const;
+		float GetAmount(int64_t frame_number) const;
+		float GetLuma(int64_t frame_number) const;
 	};
 
 	/**
 	 * @brief All wheel controls for ColorGrade.
 	 */
 	struct ColorGradeWheelsData {
-		bool enabled;
+		Keyframe enabled;
 		ColorGradeWheelEntry global;
 		ColorGradeWheelEntry shadows;
 		ColorGradeWheelEntry midtones;
@@ -83,7 +59,8 @@ namespace openshot
 		ColorGradeWheelsData();
 		Json::Value JsonValue() const;
 		void SetJsonValue(const Json::Value& root);
-		std::string Summary() const;
+		std::string Summary(int64_t frame_number) const;
+		bool IsEnabled(int64_t frame_number) const;
 	};
 
 	/**
@@ -118,10 +95,10 @@ namespace openshot
 		Keyframe lut_intensity;
 
 		ColorGradeWheelsData wheels;
-		ColorGradeCurveData curve_master;
-		ColorGradeCurveData curve_red;
-		ColorGradeCurveData curve_green;
-		ColorGradeCurveData curve_blue;
+		AnimatedCurve curve_all;
+		AnimatedCurve curve_red;
+		AnimatedCurve curve_green;
+		AnimatedCurve curve_blue;
 
 		ColorGrade();
 
