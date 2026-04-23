@@ -23,6 +23,12 @@ using namespace openshot;
 namespace {
 constexpr float kInv255 = 1.0f / 255.0f;
 
+struct WheelBiasParams {
+	float red_delta;
+	float green_delta;
+	float blue_delta;
+};
+
 static float clamp01(float value) {
 	return std::max(0.0f, std::min(1.0f, value));
 }
@@ -46,14 +52,36 @@ static std::string color_to_hex(const QColor& color) {
 
 static std::array<float, 256> build_curve_lut(const AnimatedCurve& curve, int64_t frame_number) {
 	std::array<float, 256> lut{};
+	if (curve.enabled.GetValue(frame_number) < 0.5) {
+		for (size_t i = 0; i < lut.size(); ++i)
+			lut[i] = static_cast<float>(i) * kInv255;
+		return lut;
+	}
+
+	const Keyframe sampled_curve = curve.BuildCurve(frame_number, 255.0);
 	for (size_t i = 0; i < lut.size(); ++i) {
-		lut[i] = curve.Sample(static_cast<float>(i) * kInv255, frame_number);
+		lut[i] = clamp01(static_cast<float>(sampled_curve.GetValue(static_cast<int64_t>(i))));
 	}
 	return lut;
 }
 
 static float sample_curve_lut(const std::array<float, 256>& lut, float value) {
 	return lut[clampByte(clamp01(value) * 255.0f)];
+}
+
+static WheelBiasParams build_wheel_bias(const ColorGradeWheelEntry& wheel, int64_t frame_number) {
+	const QColor color = wheel.GetColor(frame_number);
+	const float cr = color.redF();
+	const float cg = color.greenF();
+	const float cb = color.blueF();
+	const float avg = (cr + cg + cb) / 3.0f;
+	const float amount = wheel.GetAmount(frame_number);
+	const float luma = wheel.GetLuma(frame_number);
+	return {
+		((cr - avg) * amount) + luma,
+		((cg - avg) * amount) + luma,
+		((cb - avg) * amount) + luma,
+	};
 }
 }
 
@@ -205,12 +233,18 @@ std::shared_ptr<openshot::Frame> ColorGrade::GetFrame(std::shared_ptr<openshot::
 	const float saturation_value = std::max(0.0f, std::min(4.0f, static_cast<float>(saturation.GetValue(frame_number))));
 	const float vibrance_value = std::max(-1.0f, std::min(1.0f, static_cast<float>(vibrance.GetValue(frame_number))));
 	const float mix_value = std::max(0.0f, std::min(1.0f, static_cast<float>(mix.GetValue(frame_number))));
+	const float inverse_mix = 1.0f - mix_value;
 	const float exposure_gain = std::pow(2.0f, exposure_value);
 	const float contrast_factor = std::max(0.0f, 1.0f + contrast_value);
 	const std::array<float, 256> curve_all_lut = build_curve_lut(curve_all, frame_number);
 	const std::array<float, 256> curve_red_lut = build_curve_lut(curve_red, frame_number);
 	const std::array<float, 256> curve_green_lut = build_curve_lut(curve_green, frame_number);
 	const std::array<float, 256> curve_blue_lut = build_curve_lut(curve_blue, frame_number);
+	const bool wheels_enabled = wheels.IsEnabled(frame_number);
+	const WheelBiasParams global_wheel = wheels_enabled ? build_wheel_bias(wheels.global, frame_number) : WheelBiasParams{0.0f, 0.0f, 0.0f};
+	const WheelBiasParams shadows_wheel = wheels_enabled ? build_wheel_bias(wheels.shadows, frame_number) : WheelBiasParams{0.0f, 0.0f, 0.0f};
+	const WheelBiasParams midtones_wheel = wheels_enabled ? build_wheel_bias(wheels.midtones, frame_number) : WheelBiasParams{0.0f, 0.0f, 0.0f};
+	const WheelBiasParams highlights_wheel = wheels_enabled ? build_wheel_bias(wheels.highlights, frame_number) : WheelBiasParams{0.0f, 0.0f, 0.0f};
 
 	static const std::array<float, 256> inv_alpha = [] {
 		std::array<float, 256> lut{};
@@ -220,19 +254,12 @@ std::shared_ptr<openshot::Frame> ColorGrade::GetFrame(std::shared_ptr<openshot::
 		return lut;
 	}();
 
-	const auto wheel_bias = [frame_number](const ColorGradeWheelEntry& wheel, float weight, float& r, float& g, float& b) {
+	const auto apply_wheel_bias = [](const WheelBiasParams& wheel, float weight, float& r, float& g, float& b) {
 		if (std::abs(weight) <= 0.00001f)
 			return;
-		const QColor color = wheel.GetColor(frame_number);
-		const float cr = color.redF();
-		const float cg = color.greenF();
-		const float cb = color.blueF();
-		const float avg = (cr + cg + cb) / 3.0f;
-		const float amount = wheel.GetAmount(frame_number) * weight;
-		const float luma = wheel.GetLuma(frame_number) * weight;
-		r += ((cr - avg) * amount) + luma;
-		g += ((cg - avg) * amount) + luma;
-		b += ((cb - avg) * amount) + luma;
+		r += wheel.red_delta * weight;
+		g += wheel.green_delta * weight;
+		b += wheel.blue_delta * weight;
 	};
 
 	unsigned char* pixels = reinterpret_cast<unsigned char*>(frame_image->bits());
@@ -297,11 +324,11 @@ std::shared_ptr<openshot::Frame> ColorGrade::GetFrame(std::shared_ptr<openshot::
 		float wheel_r = R;
 		float wheel_g = G;
 		float wheel_b = B;
-		if (wheels.IsEnabled(frame_number)) {
-			wheel_bias(wheels.global, 1.0f, wheel_r, wheel_g, wheel_b);
-			wheel_bias(wheels.shadows, (1.0f - luma) * (1.0f - luma), wheel_r, wheel_g, wheel_b);
-			wheel_bias(wheels.midtones, smooth_midtones(luma), wheel_r, wheel_g, wheel_b);
-			wheel_bias(wheels.highlights, luma * luma, wheel_r, wheel_g, wheel_b);
+		if (wheels_enabled) {
+			apply_wheel_bias(global_wheel, 1.0f, wheel_r, wheel_g, wheel_b);
+			apply_wheel_bias(shadows_wheel, (1.0f - luma) * (1.0f - luma), wheel_r, wheel_g, wheel_b);
+			apply_wheel_bias(midtones_wheel, smooth_midtones(luma), wheel_r, wheel_g, wheel_b);
+			apply_wheel_bias(highlights_wheel, luma * luma, wheel_r, wheel_g, wheel_b);
 		}
 		R = Clamp01(wheel_r);
 		G = Clamp01(wheel_g);
@@ -327,9 +354,9 @@ std::shared_ptr<openshot::Frame> ColorGrade::GetFrame(std::shared_ptr<openshot::
 		B = sample_curve_lut(curve_blue_lut, B);
 
 		// Mix original and graded values.
-		R = Clamp01((original_r * (1.0f - mix_value)) + (R * mix_value));
-		G = Clamp01((original_g * (1.0f - mix_value)) + (G * mix_value));
-		B = Clamp01((original_b * (1.0f - mix_value)) + (B * mix_value));
+		R = Clamp01((original_r * inverse_mix) + (R * mix_value));
+		G = Clamp01((original_g * inverse_mix) + (G * mix_value));
+		B = Clamp01((original_b * inverse_mix) + (B * mix_value));
 
 		if (A == 255) {
 			pixels[idx + 0] = static_cast<unsigned char>(clampByte(R * 255.0f));

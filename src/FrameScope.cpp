@@ -13,6 +13,7 @@
 #include "FrameScope.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 using namespace openshot;
@@ -26,6 +27,17 @@ static int clamp_int(int value, int min_value, int max_value) {
 
 static int byte_bin(float value) {
 	return clamp_int(static_cast<int>(std::round(value * 255.0f)), 0, 255);
+}
+
+static const std::array<float, 256>& inv_alpha_lut() {
+	static const std::array<float, 256> lut = [] {
+		std::array<float, 256> values{};
+		values[0] = 0.0f;
+		for (int i = 1; i < 256; ++i)
+			values[i] = 255.0f / static_cast<float>(i);
+		return values;
+	}();
+	return lut;
 }
 
 static Json::Value json_array_from_vector(const std::vector<int>& values) {
@@ -124,15 +136,6 @@ void FrameScope::analyze_video() {
 	video_width = image->width();
 	video_height = image->height();
 
-	std::fill(histogram_luma.begin(), histogram_luma.end(), 0);
-	std::fill(histogram_red.begin(), histogram_red.end(), 0);
-	std::fill(histogram_green.begin(), histogram_green.end(), 0);
-	std::fill(histogram_blue.begin(), histogram_blue.end(), 0);
-	std::fill(waveform_luma.begin(), waveform_luma.end(), 0);
-	std::fill(waveform_red.begin(), waveform_red.end(), 0);
-	std::fill(waveform_green.begin(), waveform_green.end(), 0);
-	std::fill(waveform_blue.begin(), waveform_blue.end(), 0);
-
 	double luma_sum = 0.0;
 	clipped_shadows = 0;
 	clipped_highlights = 0;
@@ -144,6 +147,11 @@ void FrameScope::analyze_video() {
 	const int height = image->height();
 	const int bytes_per_line = image->bytesPerLine();
 	const unsigned char* bits = image->constBits();
+	const auto& inv_alpha = inv_alpha_lut();
+	std::vector<int> waveform_column_map(static_cast<size_t>(width), 0);
+	const int waveform_column_limit = waveform_columns - 1;
+	for (int x = 0; x < width; ++x)
+		waveform_column_map[static_cast<size_t>(x)] = clamp_int((x * waveform_columns) / std::max(1, width), 0, waveform_column_limit);
 
 	for (int y = 0; y < height; ++y) {
 		const unsigned char* row = bits + (static_cast<size_t>(y) * bytes_per_line);
@@ -156,28 +164,35 @@ void FrameScope::analyze_video() {
 			if (alpha <= 0)
 				continue;
 
-			const float alpha_percent = static_cast<float>(alpha) * kInv255;
-			const float inv_alpha = alpha == 255 ? 1.0f : (1.0f / alpha_percent);
-			const float redf = std::min(1.0f, (red * kInv255) * inv_alpha);
-			const float greenf = std::min(1.0f, (green * kInv255) * inv_alpha);
-			const float bluef = std::min(1.0f, (blue * kInv255) * inv_alpha);
+			float redf = 0.0f;
+			float greenf = 0.0f;
+			float bluef = 0.0f;
+			if (alpha == 255) {
+				redf = red * kInv255;
+				greenf = green * kInv255;
+				bluef = blue * kInv255;
+			} else {
+				const float unpremultiply = inv_alpha[alpha];
+				redf = std::min(1.0f, (red * unpremultiply) * kInv255);
+				greenf = std::min(1.0f, (green * unpremultiply) * kInv255);
+				bluef = std::min(1.0f, (blue * unpremultiply) * kInv255);
+			}
 			const float luma = (0.299f * redf) + (0.587f * greenf) + (0.114f * bluef);
 
 			const int luma_idx = byte_bin(luma);
 			const int red_idx = byte_bin(redf);
 			const int green_idx = byte_bin(greenf);
 			const int blue_idx = byte_bin(bluef);
-			const int column = clamp_int((x * waveform_columns) / std::max(1, width), 0, waveform_columns - 1);
+			const size_t waveform_offset = static_cast<size_t>(waveform_column_map[static_cast<size_t>(x)]) * static_cast<size_t>(waveform_bins);
 
-				histogram_luma[luma_idx]++;
-				histogram_red[red_idx]++;
-				histogram_green[green_idx]++;
-				histogram_blue[blue_idx]++;
-				const size_t waveform_offset = static_cast<size_t>(column) * static_cast<size_t>(waveform_bins);
-				waveform_luma[waveform_offset + luma_idx]++;
-				waveform_red[waveform_offset + red_idx]++;
-				waveform_green[waveform_offset + green_idx]++;
-				waveform_blue[waveform_offset + blue_idx]++;
+			histogram_luma[luma_idx]++;
+			histogram_red[red_idx]++;
+			histogram_green[green_idx]++;
+			histogram_blue[blue_idx]++;
+			waveform_luma[waveform_offset + luma_idx]++;
+			waveform_red[waveform_offset + red_idx]++;
+			waveform_green[waveform_offset + green_idx]++;
+			waveform_blue[waveform_offset + blue_idx]++;
 
 			luma_sum += luma;
 			if (luma_idx <= 2)
