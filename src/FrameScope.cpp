@@ -15,11 +15,14 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 
 using namespace openshot;
 
 namespace {
 constexpr float kInv255 = 1.0f / 255.0f;
+constexpr float kVectorscopeUMax = 0.43600f;
+constexpr float kVectorscopeVMax = 0.61500f;
 
 static int clamp_int(int value, int min_value, int max_value) {
 	return std::max(min_value, std::min(max_value, value));
@@ -47,6 +50,13 @@ static Json::Value json_array_from_vector(const std::vector<int>& values) {
 	return array;
 }
 
+static Json::Value json_array_from_vector(const std::vector<uint32_t>& values) {
+	Json::Value array(Json::arrayValue);
+	for (size_t i = 0; i < values.size(); ++i)
+		array.append(Json::Value::UInt(values[i]));
+	return array;
+}
+
 static Json::Value json_array_from_vector(const std::vector<float>& values) {
 	Json::Value array(Json::arrayValue);
 	for (size_t i = 0; i < values.size(); ++i)
@@ -56,20 +66,46 @@ static Json::Value json_array_from_vector(const std::vector<float>& values) {
 }
 
 FrameScope::FrameScope()
-	: frame(nullptr), waveform_columns(256), audio_buckets(256), waveform_bins(256), json_dirty(true) {
+	: frame(nullptr),
+	  waveform_columns(256),
+	  audio_buckets(256),
+	  vectorscope_size(256),
+	  roi_enabled(false),
+	  roi_x(0.0f),
+	  roi_y(0.0f),
+	  roi_width(1.0f),
+	  roi_height(1.0f),
+	  waveform_bins(256),
+	  waveform_column_map_width(0),
+	  waveform_column_map_columns(0),
+	  json_dirty(true) {
 	reset();
 }
 
-FrameScope::FrameScope(std::shared_ptr<Frame> new_frame, int new_waveform_columns, int new_audio_buckets)
+FrameScope::FrameScope(std::shared_ptr<Frame> new_frame, int new_waveform_columns, int new_audio_buckets, int new_vectorscope_size)
 	: frame(new_frame),
 	  waveform_columns(std::max(1, new_waveform_columns)),
 	  audio_buckets(std::max(1, new_audio_buckets)),
+	  vectorscope_size(std::max(1, new_vectorscope_size)),
+	  roi_enabled(false),
+	  roi_x(0.0f),
+	  roi_y(0.0f),
+	  roi_width(1.0f),
+	  roi_height(1.0f),
 	  waveform_bins(256),
+	  waveform_column_map_width(0),
+	  waveform_column_map_columns(0),
 	  json_dirty(true) {
 	analyze();
 }
 
 void FrameScope::reset() {
+	reset_video();
+	reset_audio();
+	json_dirty = true;
+}
+
+void FrameScope::reset_video() {
 	video_present = false;
 	video_width = 0;
 	video_height = 0;
@@ -79,15 +115,20 @@ void FrameScope::reset() {
 	clipped_red = 0;
 	clipped_green = 0;
 	clipped_blue = 0;
-	histogram_luma.assign(256, 0);
-	histogram_red.assign(256, 0);
-	histogram_green.assign(256, 0);
-	histogram_blue.assign(256, 0);
-	waveform_luma.assign(static_cast<size_t>(waveform_columns) * waveform_bins, 0);
-	waveform_red.assign(static_cast<size_t>(waveform_columns) * waveform_bins, 0);
-	waveform_green.assign(static_cast<size_t>(waveform_columns) * waveform_bins, 0);
-	waveform_blue.assign(static_cast<size_t>(waveform_columns) * waveform_bins, 0);
+	ensure_video_buffers();
+	std::fill(histogram_luma.begin(), histogram_luma.end(), 0u);
+	std::fill(histogram_red.begin(), histogram_red.end(), 0u);
+	std::fill(histogram_green.begin(), histogram_green.end(), 0u);
+	std::fill(histogram_blue.begin(), histogram_blue.end(), 0u);
+	std::fill(waveform_luma.begin(), waveform_luma.end(), 0u);
+	std::fill(waveform_red.begin(), waveform_red.end(), 0u);
+	std::fill(waveform_green.begin(), waveform_green.end(), 0u);
+	std::fill(waveform_blue.begin(), waveform_blue.end(), 0u);
+	std::fill(vectorscope.begin(), vectorscope.end(), 0u);
+	json_dirty = true;
+}
 
+void FrameScope::reset_audio() {
 	audio_present = false;
 	audio_channels = 0;
 	audio_samples = 0;
@@ -100,6 +141,40 @@ void FrameScope::reset() {
 	json_dirty = true;
 }
 
+void FrameScope::ensure_video_buffers() {
+	histogram_luma.resize(256);
+	histogram_red.resize(256);
+	histogram_green.resize(256);
+	histogram_blue.resize(256);
+	waveform_luma.resize(static_cast<size_t>(waveform_columns) * static_cast<size_t>(waveform_bins));
+	waveform_red.resize(static_cast<size_t>(waveform_columns) * static_cast<size_t>(waveform_bins));
+	waveform_green.resize(static_cast<size_t>(waveform_columns) * static_cast<size_t>(waveform_bins));
+	waveform_blue.resize(static_cast<size_t>(waveform_columns) * static_cast<size_t>(waveform_bins));
+	vectorscope.resize(static_cast<size_t>(vectorscope_size) * static_cast<size_t>(vectorscope_size));
+}
+
+void FrameScope::ensure_audio_buffers() {
+	audio_peak.assign(static_cast<size_t>(audio_channels), 0.0f);
+	audio_rms.assign(static_cast<size_t>(audio_channels), 0.0f);
+	audio_clipped_samples.assign(static_cast<size_t>(audio_channels), 0u);
+	audio_waveform_min.assign(static_cast<size_t>(audio_channels), std::vector<float>(static_cast<size_t>(audio_buckets), 0.0f));
+	audio_waveform_max.assign(static_cast<size_t>(audio_channels), std::vector<float>(static_cast<size_t>(audio_buckets), 0.0f));
+}
+
+void FrameScope::rebuild_waveform_column_map(int width) {
+	if (width == waveform_column_map_width && waveform_columns == waveform_column_map_columns &&
+		static_cast<int>(waveform_column_map.size()) == width)
+		return;
+
+	waveform_column_map.resize(static_cast<size_t>(width));
+	const int waveform_column_limit = waveform_columns - 1;
+	for (int x = 0; x < width; ++x)
+		waveform_column_map[static_cast<size_t>(x)] = clamp_int((x * waveform_columns) / std::max(1, width), 0, waveform_column_limit);
+
+	waveform_column_map_width = width;
+	waveform_column_map_columns = waveform_columns;
+}
+
 void FrameScope::SetFrame(std::shared_ptr<Frame> new_frame) {
 	frame = new_frame;
 	analyze();
@@ -107,12 +182,45 @@ void FrameScope::SetFrame(std::shared_ptr<Frame> new_frame) {
 
 void FrameScope::SetWaveformColumns(int columns) {
 	waveform_columns = std::max(1, columns);
-	analyze();
+	reset_video();
+	if (frame)
+		analyze_video();
 }
 
 void FrameScope::SetAudioBuckets(int buckets) {
 	audio_buckets = std::max(1, buckets);
-	analyze();
+	reset_audio();
+	if (frame)
+		analyze_audio();
+}
+
+void FrameScope::SetVectorscopeSize(int size) {
+	vectorscope_size = std::max(1, size);
+	reset_video();
+	if (frame)
+		analyze_video();
+}
+
+void FrameScope::SetVideoRegionNormalized(float x, float y, float width, float height) {
+	roi_x = std::max(0.0f, std::min(1.0f, x));
+	roi_y = std::max(0.0f, std::min(1.0f, y));
+	roi_width = std::max(0.0f, std::min(1.0f - roi_x, width));
+	roi_height = std::max(0.0f, std::min(1.0f - roi_y, height));
+	roi_enabled = roi_width > 0.0f && roi_height > 0.0f;
+	reset_video();
+	if (frame)
+		analyze_video();
+}
+
+void FrameScope::ClearVideoRegion() {
+	roi_enabled = false;
+	roi_x = 0.0f;
+	roi_y = 0.0f;
+	roi_width = 1.0f;
+	roi_height = 1.0f;
+	reset_video();
+	if (frame)
+		analyze_video();
 }
 
 void FrameScope::analyze() {
@@ -133,29 +241,40 @@ void FrameScope::analyze_video() {
 		return;
 
 	video_present = true;
-	video_width = image->width();
-	video_height = image->height();
+	const int width = image->width();
+	const int height = image->height();
+	int start_x = 0;
+	int end_x = width;
+	int start_y = 0;
+	int end_y = height;
+	if (roi_enabled) {
+		start_x = clamp_int(static_cast<int>(std::floor(roi_x * width)), 0, width - 1);
+		start_y = clamp_int(static_cast<int>(std::floor(roi_y * height)), 0, height - 1);
+		end_x = clamp_int(static_cast<int>(std::ceil((roi_x + roi_width) * width)), start_x + 1, width);
+		end_y = clamp_int(static_cast<int>(std::ceil((roi_y + roi_height) * height)), start_y + 1, height);
+	}
+	video_width = std::max(1, end_x - start_x);
+	video_height = std::max(1, end_y - start_y);
+	ensure_video_buffers();
 
 	double luma_sum = 0.0;
+	double pixel_total = 0.0;
 	clipped_shadows = 0;
 	clipped_highlights = 0;
 	clipped_red = 0;
 	clipped_green = 0;
 	clipped_blue = 0;
 
-	const int width = image->width();
-	const int height = image->height();
 	const int bytes_per_line = image->bytesPerLine();
 	const unsigned char* bits = image->constBits();
 	const auto& inv_alpha = inv_alpha_lut();
-	std::vector<int> waveform_column_map(static_cast<size_t>(width), 0);
-	const int waveform_column_limit = waveform_columns - 1;
-	for (int x = 0; x < width; ++x)
-		waveform_column_map[static_cast<size_t>(x)] = clamp_int((x * waveform_columns) / std::max(1, width), 0, waveform_column_limit);
+	rebuild_waveform_column_map(video_width);
+	const float vectorscope_center = static_cast<float>(vectorscope_size - 1) * 0.5f;
+	const float vectorscope_scale = vectorscope_center;
 
-	for (int y = 0; y < height; ++y) {
+	for (int y = start_y; y < end_y; ++y) {
 		const unsigned char* row = bits + (static_cast<size_t>(y) * bytes_per_line);
-		for (int x = 0; x < width; ++x) {
+		for (int x = start_x; x < end_x; ++x) {
 			const unsigned char* pixel = row + (static_cast<size_t>(x) * 4);
 			const int red   = pixel[0];  // RGBA8888: [R=0, G=1, B=2, A=3]
 			const int green = pixel[1];
@@ -183,7 +302,15 @@ void FrameScope::analyze_video() {
 			const int red_idx = byte_bin(redf);
 			const int green_idx = byte_bin(greenf);
 			const int blue_idx = byte_bin(bluef);
-			const size_t waveform_offset = static_cast<size_t>(waveform_column_map[static_cast<size_t>(x)]) * static_cast<size_t>(waveform_bins);
+			const int roi_column = x - start_x;
+			const size_t waveform_offset = static_cast<size_t>(waveform_column_map[static_cast<size_t>(roi_column)]) * static_cast<size_t>(waveform_bins);
+			const float u = -0.14713f * redf - 0.28886f * greenf + 0.43600f * bluef;
+			const float v = 0.61500f * redf - 0.51499f * greenf - 0.10001f * bluef;
+			const float normalized_u = u / kVectorscopeUMax;
+			const float normalized_v = v / kVectorscopeVMax;
+			const int vector_x = clamp_int(static_cast<int>(std::round(vectorscope_center + (normalized_u * vectorscope_scale))), 0, vectorscope_size - 1);
+			const int vector_y = clamp_int(static_cast<int>(std::round(vectorscope_center - (normalized_v * vectorscope_scale))), 0, vectorscope_size - 1);
+			const size_t vector_offset = (static_cast<size_t>(vector_y) * static_cast<size_t>(vectorscope_size)) + static_cast<size_t>(vector_x);
 
 			histogram_luma[luma_idx]++;
 			histogram_red[red_idx]++;
@@ -193,8 +320,10 @@ void FrameScope::analyze_video() {
 			waveform_red[waveform_offset + red_idx]++;
 			waveform_green[waveform_offset + green_idx]++;
 			waveform_blue[waveform_offset + blue_idx]++;
+			vectorscope[vector_offset]++;
 
 			luma_sum += luma;
+			pixel_total += 1.0;
 			if (luma_idx <= 2)
 				clipped_shadows++;
 			if (luma_idx >= 253)
@@ -206,9 +335,8 @@ void FrameScope::analyze_video() {
 			if (blue_idx >= 253)
 				clipped_blue++;
 		}
-		}
+	}
 
-	const double pixel_total = static_cast<double>(width) * static_cast<double>(height);
 	avg_luma = pixel_total > 0.0 ? (luma_sum / pixel_total) : 0.0;
 }
 
@@ -225,13 +353,8 @@ void FrameScope::analyze_audio() {
 	audio_channels = channels;
 	audio_samples = samples;
 	audio_sample_rate = frame->SampleRate();
-
-	audio_peak.assign(static_cast<size_t>(channels), 0.0f);
+	ensure_audio_buffers();
 	std::vector<double> rms_sums(static_cast<size_t>(channels), 0.0);
-	audio_rms.assign(static_cast<size_t>(channels), 0.0f);
-	audio_clipped_samples.assign(static_cast<size_t>(channels), 0);
-	audio_waveform_min.assign(static_cast<size_t>(channels), std::vector<float>(static_cast<size_t>(audio_buckets), 0.0f));
-	audio_waveform_max.assign(static_cast<size_t>(channels), std::vector<float>(static_cast<size_t>(audio_buckets), 0.0f));
 
 	for (int channel = 0; channel < channels; ++channel) {
 		float* channel_samples = frame->GetAudioSamples(channel);
@@ -299,6 +422,10 @@ void FrameScope::rebuild_json() const {
 		video["waveform"]["red"] = json_array_from_vector(waveform_red);
 		video["waveform"]["green"] = json_array_from_vector(waveform_green);
 		video["waveform"]["blue"] = json_array_from_vector(waveform_blue);
+
+		video["vectorscope"] = Json::Value(Json::objectValue);
+		video["vectorscope"]["size"] = vectorscope_size;
+		video["vectorscope"]["density"] = json_array_from_vector(vectorscope);
 	}
 	scope_data["video"] = video;
 
@@ -337,6 +464,14 @@ std::string FrameScope::Json() const {
 	if (json_dirty)
 		rebuild_json();
 	return scope_data.toStyledString();
+}
+
+std::vector<int> FrameScope::copy_to_int_vector(const std::vector<uint32_t>& values) {
+	std::vector<int> copy(values.size(), 0);
+	const uint32_t max_int = static_cast<uint32_t>(std::numeric_limits<int>::max());
+	for (size_t i = 0; i < values.size(); ++i)
+		copy[i] = static_cast<int>(std::min(values[i], max_int));
+	return copy;
 }
 
 std::vector<float> FrameScope::GetAudioWaveformMin(int channel) const {

@@ -75,6 +75,8 @@ TEST_CASE("FrameScope analyzes video histogram and waveform data", "[framescope]
 	CHECK(root["video"]["waveform"]["red"].size() == 4 * 256);
 	CHECK(root["video"]["waveform"]["green"].size() == 4 * 256);
 	CHECK(root["video"]["waveform"]["blue"].size() == 4 * 256);
+	CHECK(root["video"]["vectorscope"]["size"].asInt() == 256);
+	CHECK(root["video"]["vectorscope"]["density"].size() == 256 * 256);
 	CHECK(root["video"]["histogram"]["red"][255].asInt() == 1);
 	CHECK(root["video"]["histogram"]["green"][255].asInt() == 1);
 	CHECK(root["video"]["histogram"]["blue"][255].asInt() == 1);
@@ -99,7 +101,30 @@ TEST_CASE("FrameScope exposes typed video getters", "[framescope][video][getters
 	CHECK(scope.GetVideoWaveformRed().size() == 4 * 256);
 	CHECK(scope.GetVideoWaveformRed()[1 * 256 + 255] == 1);
 	CHECK(scope.GetVideoWaveformBlue()[3 * 256 + 255] == 1);
+	CHECK(scope.GetVideoHistogramRedBins()[255] == 1u);
+	CHECK(scope.GetVideoWaveformGreenBins()[2 * 256 + 255] == 1u);
+	CHECK(scope.GetVideoVectorscopeBins().size() == 256u * 256u);
+	CHECK(scope.GetVideoVectorscope().size() == 256 * 256);
 	CHECK(scope.GetVideoAverageLuma() > 0.2);
+}
+
+TEST_CASE("FrameScope exposes vectorscope bins and configurable size", "[framescope][video][vectorscope]")
+{
+	FrameScope scope(makeVideoScopeFrame(), 4, 4, 64);
+
+	REQUIRE(scope.HasVideo() == true);
+	CHECK(scope.GetVectorscopeSize() == 64);
+	CHECK(scope.GetVideoVectorscopeBins().size() == 64u * 64u);
+
+	uint32_t vectorscope_sum = 0;
+	for (uint32_t value : scope.GetVideoVectorscopeBins())
+		vectorscope_sum += value;
+
+	CHECK(vectorscope_sum == 4u);
+
+	scope.SetVectorscopeSize(32);
+	CHECK(scope.GetVectorscopeSize() == 32);
+	CHECK(scope.GetVideoVectorscopeBins().size() == 32u * 32u);
 }
 
 TEST_CASE("FrameScope analyzes audio waveform and summary data", "[framescope][audio]")
@@ -134,11 +159,30 @@ TEST_CASE("FrameScope exposes typed audio getters", "[framescope][audio][getters
 	CHECK(scope.GetAudioBuckets() == 4);
 	CHECK(scope.GetAudioPeakLevels().size() == 2);
 	CHECK(scope.GetAudioPeakLevels()[0] == Approx(1.0f));
+	CHECK(scope.GetAudioPeakLevelsRef()[1] == Approx(0.8f));
 	CHECK(scope.GetAudioRmsLevels()[1] > 0.0f);
 	CHECK(scope.GetAudioClippedSamples()[0] == 2);
+	CHECK(scope.GetAudioClippedSamplesRef()[0] == 2u);
 	CHECK(scope.GetAudioWaveformMin(0).size() == 4);
 	CHECK(scope.GetAudioWaveformMax(1).size() == 4);
 	CHECK(scope.GetAudioWaveformMax(99).empty());
+}
+
+TEST_CASE("FrameScope setting changes only affect matching scope families", "[framescope][settings]")
+{
+	FrameScope scope(makeAudioScopeFrame(), 4, 4, 64);
+
+	REQUIRE(scope.HasAudio() == true);
+	const std::vector<float> original_peak = scope.GetAudioPeakLevels();
+	scope.SetVectorscopeSize(32);
+	CHECK(scope.GetAudioPeakLevels() == original_peak);
+
+	auto video_frame = makeVideoScopeFrame();
+	scope.SetFrame(video_frame);
+	REQUIRE(scope.HasVideo() == true);
+	const std::vector<uint32_t> original_vectorscope = scope.GetVideoVectorscopeBins();
+	scope.SetAudioBuckets(8);
+	CHECK(scope.GetVideoVectorscopeBins() == original_vectorscope);
 }
 
 TEST_CASE("FrameScope Json string parses cleanly", "[framescope][json]")

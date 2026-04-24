@@ -16,6 +16,7 @@
 #include "Frame.h"
 #include "Json.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -39,25 +40,35 @@ namespace openshot {
 		std::shared_ptr<Frame> frame;
 		int waveform_columns;
 		int audio_buckets;
+		int vectorscope_size;
+		bool roi_enabled;
+		float roi_x;
+		float roi_y;
+		float roi_width;
+		float roi_height;
 
 		bool video_present;
 		int video_width;
 		int video_height;
 		int waveform_bins;
+		std::vector<int> waveform_column_map;
+		int waveform_column_map_width;
+		int waveform_column_map_columns;
 		double avg_luma;
 		int clipped_shadows;
 		int clipped_highlights;
 		int clipped_red;
 		int clipped_green;
 		int clipped_blue;
-		std::vector<int> histogram_luma;
-		std::vector<int> histogram_red;
-		std::vector<int> histogram_green;
-		std::vector<int> histogram_blue;
-		std::vector<int> waveform_luma;
-		std::vector<int> waveform_red;
-		std::vector<int> waveform_green;
-		std::vector<int> waveform_blue;
+		std::vector<uint32_t> histogram_luma;
+		std::vector<uint32_t> histogram_red;
+		std::vector<uint32_t> histogram_green;
+		std::vector<uint32_t> histogram_blue;
+		std::vector<uint32_t> waveform_luma;
+		std::vector<uint32_t> waveform_red;
+		std::vector<uint32_t> waveform_green;
+		std::vector<uint32_t> waveform_blue;
+		std::vector<uint32_t> vectorscope;
 
 		bool audio_present;
 		int audio_channels;
@@ -65,24 +76,30 @@ namespace openshot {
 		int audio_sample_rate;
 		std::vector<float> audio_peak;
 		std::vector<float> audio_rms;
-		std::vector<int> audio_clipped_samples;
+		std::vector<uint32_t> audio_clipped_samples;
 		std::vector<std::vector<float>> audio_waveform_min;
 		std::vector<std::vector<float>> audio_waveform_max;
 		mutable Json::Value scope_data;
 		mutable bool json_dirty;
 
 		void reset();
+		void reset_video();
+		void reset_audio();
+		void ensure_video_buffers();
+		void ensure_audio_buffers();
+		void rebuild_waveform_column_map(int width);
 		void analyze_video();
 		void analyze_audio();
 		void analyze();
 		void rebuild_json() const;
+		static std::vector<int> copy_to_int_vector(const std::vector<uint32_t>& values);
 
 	public:
 		/// Create an empty scope analyzer with default bucket sizes.
 		FrameScope();
 
 		/// Construct and immediately analyze a frame.
-		FrameScope(std::shared_ptr<Frame> frame, int waveform_columns = 256, int audio_buckets = 256);
+		FrameScope(std::shared_ptr<Frame> frame, int waveform_columns = 256, int audio_buckets = 256, int vectorscope_size = 256);
 
 		/// Replace the current frame and recompute the scope data.
 		void SetFrame(std::shared_ptr<Frame> new_frame);
@@ -95,6 +112,18 @@ namespace openshot {
 
 		/// Set the number of audio buckets and re-analyze.
 		void SetAudioBuckets(int buckets);
+
+		/// Set the vectorscope plane edge length and re-analyze video.
+		void SetVectorscopeSize(int size);
+
+		/// Set a normalized ROI for video analysis and re-analyze video.
+		void SetVideoRegionNormalized(float x, float y, float width, float height);
+
+		/// Clear any video ROI and re-analyze the full frame.
+		void ClearVideoRegion();
+
+		/// Return whether a video ROI is enabled.
+		bool HasVideoRegion() const { return roi_enabled; }
 
 		/// Return whether the current frame has analyzable video data.
 		bool HasVideo() const { return video_present; }
@@ -114,29 +143,62 @@ namespace openshot {
 		/// Return the number of vertical waveform bins.
 		int GetWaveformBins() const { return waveform_bins; }
 
+		/// Return the vectorscope plane edge length.
+		int GetVectorscopeSize() const { return vectorscope_size; }
+
+		/// Return the luma histogram bins by reference.
+		const std::vector<uint32_t>& GetVideoHistogramLumaBins() const { return histogram_luma; }
+
+		/// Return the red histogram bins by reference.
+		const std::vector<uint32_t>& GetVideoHistogramRedBins() const { return histogram_red; }
+
+		/// Return the green histogram bins by reference.
+		const std::vector<uint32_t>& GetVideoHistogramGreenBins() const { return histogram_green; }
+
+		/// Return the blue histogram bins by reference.
+		const std::vector<uint32_t>& GetVideoHistogramBlueBins() const { return histogram_blue; }
+
+		/// Return the flattened luma waveform bins by reference.
+		const std::vector<uint32_t>& GetVideoWaveformLumaBins() const { return waveform_luma; }
+
+		/// Return the flattened red waveform bins by reference.
+		const std::vector<uint32_t>& GetVideoWaveformRedBins() const { return waveform_red; }
+
+		/// Return the flattened green waveform bins by reference.
+		const std::vector<uint32_t>& GetVideoWaveformGreenBins() const { return waveform_green; }
+
+		/// Return the flattened blue waveform bins by reference.
+		const std::vector<uint32_t>& GetVideoWaveformBlueBins() const { return waveform_blue; }
+
+		/// Return the flattened vectorscope density plane by reference.
+		const std::vector<uint32_t>& GetVideoVectorscopeBins() const { return vectorscope; }
+
+		/// Return the flattened vectorscope density plane.
+		std::vector<int> GetVideoVectorscope() const { return copy_to_int_vector(vectorscope); }
+
 		/// Return the luma histogram bins.
-		std::vector<int> GetVideoHistogramLuma() const { return histogram_luma; }
+		std::vector<int> GetVideoHistogramLuma() const { return copy_to_int_vector(histogram_luma); }
 
 		/// Return the red histogram bins.
-		std::vector<int> GetVideoHistogramRed() const { return histogram_red; }
+		std::vector<int> GetVideoHistogramRed() const { return copy_to_int_vector(histogram_red); }
 
 		/// Return the green histogram bins.
-		std::vector<int> GetVideoHistogramGreen() const { return histogram_green; }
+		std::vector<int> GetVideoHistogramGreen() const { return copy_to_int_vector(histogram_green); }
 
 		/// Return the blue histogram bins.
-		std::vector<int> GetVideoHistogramBlue() const { return histogram_blue; }
+		std::vector<int> GetVideoHistogramBlue() const { return copy_to_int_vector(histogram_blue); }
 
 		/// Return the flattened luma waveform bins.
-		std::vector<int> GetVideoWaveformLuma() const { return waveform_luma; }
+		std::vector<int> GetVideoWaveformLuma() const { return copy_to_int_vector(waveform_luma); }
 
 		/// Return the flattened red waveform bins.
-		std::vector<int> GetVideoWaveformRed() const { return waveform_red; }
+		std::vector<int> GetVideoWaveformRed() const { return copy_to_int_vector(waveform_red); }
 
 		/// Return the flattened green waveform bins.
-		std::vector<int> GetVideoWaveformGreen() const { return waveform_green; }
+		std::vector<int> GetVideoWaveformGreen() const { return copy_to_int_vector(waveform_green); }
 
 		/// Return the flattened blue waveform bins.
-		std::vector<int> GetVideoWaveformBlue() const { return waveform_blue; }
+		std::vector<int> GetVideoWaveformBlue() const { return copy_to_int_vector(waveform_blue); }
 
 		/// Return the average luma of the analyzed frame.
 		double GetVideoAverageLuma() const { return avg_luma; }
@@ -169,13 +231,22 @@ namespace openshot {
 		int GetAudioBuckets() const { return audio_buckets; }
 
 		/// Return per-channel peak levels.
+		const std::vector<float>& GetAudioPeakLevelsRef() const { return audio_peak; }
+
+		/// Return per-channel RMS levels.
+		const std::vector<float>& GetAudioRmsLevelsRef() const { return audio_rms; }
+
+		/// Return per-channel clipped sample counts.
+		const std::vector<uint32_t>& GetAudioClippedSamplesRef() const { return audio_clipped_samples; }
+
+		/// Return per-channel peak levels.
 		std::vector<float> GetAudioPeakLevels() const { return audio_peak; }
 
 		/// Return per-channel RMS levels.
 		std::vector<float> GetAudioRmsLevels() const { return audio_rms; }
 
 		/// Return per-channel clipped sample counts.
-		std::vector<int> GetAudioClippedSamples() const { return audio_clipped_samples; }
+		std::vector<int> GetAudioClippedSamples() const { return copy_to_int_vector(audio_clipped_samples); }
 
 		/// Return one channel of audio waveform minimum values.
 		std::vector<float> GetAudioWaveformMin(int channel) const;
