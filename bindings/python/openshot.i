@@ -534,6 +534,7 @@ static int openshot_swig_is_qwidget(PyObject *obj) {
 %include "effects/ColorShift.h"
 %include "effects/Crop.h"
 %include "effects/Deinterlace.h"
+%include "effects/FilmGrain.h"
 %include "effects/Hue.h"
 %include "effects/LensFlare.h"
 %include "effects/Mask.h"
