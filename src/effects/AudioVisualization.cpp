@@ -570,15 +570,33 @@ std::shared_ptr<openshot::Frame> AudioVisualization::GetFrame(std::shared_ptr<op
 		} else {
 			terrain_brush = vertical_style_fill(0, 0, 0, height, palette, style);
 		}
-		painter.setPen(Qt::NoPen);
-		painter.setBrush(terrain_brush);
-		QPolygonF terrain;
-		terrain.reserve(points.size() + 2);
-		terrain.append(QPointF(0, height));
-		for (const QPointF& point : points)
-			terrain.append(point);
-		terrain.append(QPointF(width, height));
-		painter.drawPolygon(terrain);
+		if (points.size() > 1) {
+			QImage fill_layer(width, height, QImage::Format_RGBA8888_Premultiplied);
+			fill_layer.fill(Qt::transparent);
+			QPainter fill_painter(&fill_layer);
+			fill_painter.fillRect(fill_layer.rect(), terrain_brush);
+			fill_painter.end();
+
+			QImage mask(width, height, QImage::Format_RGBA8888_Premultiplied);
+			mask.fill(Qt::transparent);
+			QPainter mask_painter(&mask);
+			mask_painter.setRenderHint(QPainter::Antialiasing, false);
+			mask_painter.setPen(QPen(Qt::white, 1.0f));
+			for (int x = 0; x < width; ++x) {
+				const float position = x * (points.size() - 1) / static_cast<float>(std::max(1, width - 1));
+				const int index = clampi(static_cast<int>(std::floor(position)), 0, static_cast<int>(points.size()) - 2);
+				const float mix = position - index;
+				const float y = points[index].y() * (1.0f - mix) + points[index + 1].y() * mix;
+				mask_painter.drawLine(QPointF(x + 0.5f, y), QPointF(x + 0.5f, height));
+			}
+			mask_painter.end();
+
+			fill_painter.begin(&fill_layer);
+			fill_painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+			fill_painter.drawImage(0, 0, mask);
+			fill_painter.end();
+			painter.drawImage(0, 0, fill_layer);
+		}
 		const float ridge_width = std::max(1.0f, stroke * 0.75f);
 		if (color_mode == AUDIO_VISUALIZATION_COLOR_RAINBOW) {
 			QLinearGradient glow_grad(0, 0, width, 0);
