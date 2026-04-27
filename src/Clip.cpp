@@ -21,6 +21,7 @@
 #include "DummyReader.h"
 #include "Timeline.h"
 #include "ZmqLogger.h"
+#include "effects/AudioVisualization.h"
 
 #include <algorithm>
 #include <cmath>
@@ -80,6 +81,7 @@ void Clip::init_settings()
 	mixing = VOLUME_MIX_NONE;
 	composite = COMPOSITE_SOURCE_OVER;
 	waveform = false;
+	waveform_mode = AUDIO_VISUALIZATION_WAVEFORM;
 	previous_properties = "";
 	parentObjectId = "";
 
@@ -829,6 +831,7 @@ std::string Clip::PropertiesJSON(int64_t requested_frame) const {
 	root["mixing"] = add_property_json("Volume Mixing", mixing, "int", "", NULL, 0, 2, false, requested_frame);
 	root["composite"] = add_property_json("Composite", composite, "int", "", NULL, 0, composite_choices_count - 1, false, requested_frame);
 	root["waveform"] = add_property_json("Waveform", waveform, "int", "", NULL, 0, 1, false, requested_frame);
+	root["waveform_mode"] = add_property_json("Waveform Mode", waveform_mode, "int", "", NULL, 0, AUDIO_VISUALIZATION_RADIAL_BARS, false, requested_frame);
 	root["parentObjectId"] = add_property_json("Parent", 0.0, "string", parentObjectId, NULL, -1, -1, false, requested_frame);
 
 	// Add gravity choices (dropdown style)
@@ -866,6 +869,17 @@ std::string Clip::PropertiesJSON(int64_t requested_frame) const {
 	// Add waveform choices (dropdown style)
 	root["waveform"]["choices"].append(add_property_choice_json("Yes", true, waveform));
 	root["waveform"]["choices"].append(add_property_choice_json("No", false, waveform));
+
+	// Add waveform mode choices (dropdown style)
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Waveform", AUDIO_VISUALIZATION_WAVEFORM, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Filled Waveform", AUDIO_VISUALIZATION_FILLED_WAVEFORM, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Bars", AUDIO_VISUALIZATION_BARS, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Radial", AUDIO_VISUALIZATION_RADIAL, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Radial Bars", AUDIO_VISUALIZATION_RADIAL_BARS, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Spectrum", AUDIO_VISUALIZATION_SPECTRUM, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Phase Scope", AUDIO_VISUALIZATION_PHASE_SCOPE, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Particles", AUDIO_VISUALIZATION_PARTICLES, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("VU Meter", AUDIO_VISUALIZATION_VU_METER, waveform_mode));
 
 	// Add the parentClipObject's properties
 	if (parentClipObject)
@@ -947,6 +961,7 @@ Json::Value Clip::JsonValue() const {
 	root["mixing"] = mixing;
 	root["composite"] = composite;
 	root["waveform"] = waveform;
+	root["waveform_mode"] = waveform_mode;
 	root["scale_x"] = scale_x.JsonValue();
 	root["scale_y"] = scale_y.JsonValue();
 	root["location_x"] = location_x.JsonValue();
@@ -1043,6 +1058,8 @@ void Clip::SetJsonValue(const Json::Value root) {
 		composite = (CompositeType) root["composite"].asInt();
 	if (!root["waveform"].isNull())
 		waveform = root["waveform"].asBool();
+	if (!root["waveform_mode"].isNull())
+		waveform_mode = root["waveform_mode"].asInt();
 	if (!root["scale_x"].isNull())
 		scale_x.SetJsonValue(root["scale_x"]);
 	if (!root["scale_y"].isNull())
@@ -1404,9 +1421,6 @@ void Clip::apply_waveform(std::shared_ptr<Frame> frame, QSize timeline_size) {
 		return;
 	}
 
-	// Get image from clip
-	std::shared_ptr<QImage> source_image = frame->GetImage();
-
 	// Debug output
 	ZmqLogger::Instance()->AppendDebugMethod("Clip::apply_waveform (Generate Waveform Image)",
 			"frame->number", frame->number,
@@ -1420,9 +1434,34 @@ void Clip::apply_waveform(std::shared_ptr<Frame> frame, QSize timeline_size) {
 	int blue = wave_color.blue.GetInt(frame->number);
 	int alpha = wave_color.alpha.GetInt(frame->number);
 
-	// Generate Waveform Dynamically (the size of the timeline)
-	source_image = frame->GetWaveform(timeline_size.width(), timeline_size.height(), red, green, blue, alpha);
-	frame->AddImage(source_image);
+	// Render the waveform through the audio visualization effect so clip shortcuts
+	// and explicit effects share the same rendering path.
+	auto visual_frame = std::make_shared<Frame>(*frame.get());
+	visual_frame->AddImage(std::make_shared<QImage>(
+		timeline_size.width(), timeline_size.height(), QImage::Format_RGBA8888_Premultiplied));
+	visual_frame->GetImage()->fill(Qt::transparent);
+
+	AudioVisualization visualization;
+	visualization.visualization_type = waveform_mode;
+	visualization.style = AUDIO_VISUALIZATION_STYLE_CLEAN;
+	visualization.color = Color(
+		static_cast<unsigned char>(red),
+		static_cast<unsigned char>(green),
+		static_cast<unsigned char>(blue),
+		static_cast<unsigned char>(alpha));
+	visualization.intensity = Keyframe(1.0);
+	visualization.smoothing = Keyframe(0.25);
+	visualization.detail = Keyframe(0.75);
+	visualization.glow = Keyframe(0.0);
+	visualization.color_spread = Keyframe(0.0);
+	visualization.color_mode = AUDIO_VISUALIZATION_COLOR_SEED;
+	visualization.channel_layout = AUDIO_VISUALIZATION_CHANNEL_AUTO;
+	visualization.frequency_low = Keyframe(0.0);
+	visualization.frequency_high = Keyframe(1.0);
+	visualization.background = AUDIO_VISUALIZATION_BACKGROUND_TRANSPARENT;
+	visualization.GetFrame(visual_frame, frame->number);
+
+	frame->AddImage(visual_frame->GetImage());
 }
 
 // Scale a source size to a target size (given a specific scale-type)

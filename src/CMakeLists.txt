@@ -107,6 +107,7 @@ set(OPENSHOT_CV_SOURCES
 
 # Video effects
 set(EFFECTS_SOURCES
+  effects/AudioVisualization.cpp
   effects/Bars.cpp
   effects/Blur.cpp
   effects/Brightness.cpp

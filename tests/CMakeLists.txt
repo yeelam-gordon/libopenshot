@@ -50,6 +50,7 @@ set(OPENSHOT_TESTS
   Timeline
   VideoCacheThread
   # Effects
+  AudioVisualization
   ColorMap
   ChromaKey
   Crop

@@ -36,6 +36,7 @@
 #include "FrameMapper.h"
 #include "Timeline.h"
 #include "Json.h"
+#include "effects/AudioVisualization.h"
 #include "effects/Negate.h"
 
 using namespace openshot;
@@ -285,6 +286,28 @@ TEST_CASE( "SetJsonValue restores defaults for empty core transform keyframes", 
 	CHECK(clip.origin_x.GetValue(1) == Approx(0.5).margin(0.00001));
 	CHECK(clip.origin_y.GetValue(1) == Approx(0.5).margin(0.00001));
 	CHECK(clip.rotation.GetValue(1) == Approx(0.0).margin(0.00001));
+}
+
+TEST_CASE( "waveform mode serializes and exposes visualization choices", "[libopenshot][clip][json]" )
+{
+	Clip clip;
+
+	CHECK(clip.WaveformMode() == AUDIO_VISUALIZATION_WAVEFORM);
+	CHECK(clip.JsonValue()["waveform_mode"].asInt() == AUDIO_VISUALIZATION_WAVEFORM);
+
+	Json::Value root = clip.JsonValue();
+	root["waveform_mode"] = AUDIO_VISUALIZATION_RADIAL_BARS;
+	clip.SetJsonValue(root);
+
+	CHECK(clip.WaveformMode() == AUDIO_VISUALIZATION_RADIAL_BARS);
+	CHECK(clip.JsonValue()["waveform_mode"].asInt() == AUDIO_VISUALIZATION_RADIAL_BARS);
+
+	const Json::Value props = openshot::stringToJson(clip.PropertiesJSON(1));
+	REQUIRE(props.isMember("waveform_mode"));
+	CHECK(props["waveform_mode"]["min"].asInt() == AUDIO_VISUALIZATION_WAVEFORM);
+	CHECK(props["waveform_mode"]["max"].asInt() == AUDIO_VISUALIZATION_RADIAL_BARS);
+	CHECK(props["waveform_mode"]["value"].asInt() == AUDIO_VISUALIZATION_RADIAL_BARS);
+	CHECK(props["waveform_mode"]["choices"].size() == 9);
 }
 
 TEST_CASE( "Timeline render remains visible after loading clip with empty core transform keyframes", "[libopenshot][clip][json][timeline]" )
