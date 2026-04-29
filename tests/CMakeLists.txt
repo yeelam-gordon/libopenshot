@@ -58,12 +58,14 @@ set(OPENSHOT_TESTS
   Crop
   Displace
   FilmGrain
+  Glow
   LensFlare
   AnalogTape
   BenchmarkArgs
   EffectMask
   Mask
   Sharpen
+  Shadow
   SphericalEffect
   WaveEffect
 )
