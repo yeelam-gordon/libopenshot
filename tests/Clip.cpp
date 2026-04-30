@@ -430,8 +430,8 @@ TEST_CASE( "waveform mode serializes and exposes visualization choices", "[libop
 {
 	Clip clip;
 
-	CHECK(clip.WaveformMode() == AUDIO_VISUALIZATION_WAVEFORM);
-	CHECK(clip.JsonValue()["waveform_mode"].asInt() == AUDIO_VISUALIZATION_WAVEFORM);
+	CHECK(clip.WaveformMode() == AUDIO_VISUALIZATION_FILLED_WAVEFORM);
+	CHECK(clip.JsonValue()["waveform_mode"].asInt() == AUDIO_VISUALIZATION_FILLED_WAVEFORM);
 
 	Json::Value root = clip.JsonValue();
 	root["waveform_mode"] = AUDIO_VISUALIZATION_RADIAL_BARS;

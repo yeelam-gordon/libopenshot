@@ -81,7 +81,7 @@ void Clip::init_settings()
 	mixing = VOLUME_MIX_NONE;
 	composite = COMPOSITE_SOURCE_OVER;
 	waveform = false;
-	waveform_mode = AUDIO_VISUALIZATION_WAVEFORM;
+	waveform_mode = AUDIO_VISUALIZATION_FILLED_WAVEFORM;
 	previous_properties = "";
 	parentObjectId = "";
 

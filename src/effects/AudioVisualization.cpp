@@ -23,6 +23,7 @@
 #include <QColor>
 #include <QConicalGradient>
 #include <QLinearGradient>
+#include <QLineF>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
@@ -236,9 +237,14 @@ namespace {
 			const int start = (i * samples) / values.size();
 			const int end = std::max(start + 1, ((i + 1) * samples) / static_cast<int>(values.size()));
 			float peak = 0.0f;
+			float peak_magnitude = 0.0f;
 			for (int sample = start; sample < end && sample < samples; ++sample) {
-				if (std::fabs(audio[sample]) > std::fabs(peak))
-					peak = audio[sample];
+				const float value = audio[sample];
+				const float magnitude = std::fabs(value);
+				if (magnitude > peak_magnitude) {
+					peak = value;
+					peak_magnitude = magnitude;
+				}
 			}
 			const float scaled = clampf(peak * gain, -1.0f, 1.0f);
 			values[i] = previous * smooth + scaled * (1.0f - smooth);
@@ -254,18 +260,27 @@ namespace {
 		if (samples <= 0 || channels <= 0)
 			return values;
 
+		std::vector<const float*> channel_data;
+		channel_data.reserve(channels);
+		for (int channel = 0; channel < channels; ++channel)
+			channel_data.push_back(frame->GetAudioSampleBuffer()->getReadPointer(channel));
+
 		float previous = 0.0f;
 		for (int i = 0; i < static_cast<int>(values.size()); ++i) {
 			const int start = (i * samples) / values.size();
 			const int end = std::max(start + 1, ((i + 1) * samples) / static_cast<int>(values.size()));
 			float peak = 0.0f;
+			float peak_magnitude = 0.0f;
 			for (int sample = start; sample < end && sample < samples; ++sample) {
 				float mixed = 0.0f;
 				for (int channel = 0; channel < channels; ++channel)
-					mixed += frame->GetAudioSampleBuffer()->getReadPointer(channel)[sample];
+					mixed += channel_data[channel][sample];
 				mixed /= channels;
-				if (std::fabs(mixed) > std::fabs(peak))
+				const float magnitude = std::fabs(mixed);
+				if (magnitude > peak_magnitude) {
 					peak = mixed;
+					peak_magnitude = magnitude;
+				}
 			}
 			const float scaled = clampf(peak * gain, -1.0f, 1.0f);
 			values[i] = previous * smooth + scaled * (1.0f - smooth);
@@ -323,25 +338,51 @@ namespace {
 		low_hz = clampf(low_hz, 1.0f, nyquist);
 		high_hz = clampf(high_hz, low_hz + 1.0f, nyquist);
 
-		float previous = 0.0f;
-		for (int bin = 0; bin < static_cast<int>(result.size()); ++bin) {
-			const float t = (bin + 0.5f) / result.size();
+		std::vector<const float*> channel_data;
+		channel_data.reserve(channels);
+		for (int channel = 0; channel < channels; ++channel)
+			channel_data.push_back(frame->GetAudioSampleBuffer()->getReadPointer(channel));
+
+		std::vector<double> mixed_windowed(max_source_samples, 0.0);
+		for (int sample = 0; sample < max_source_samples; ++sample) {
+			float mixed = 0.0f;
+			for (int channel = 0; channel < channels; ++channel)
+				mixed += channel_data[channel][sample];
+			mixed /= channels;
+			const double window = 0.5 - 0.5 * std::cos((2.0 * PI * sample) / (max_source_samples - 1));
+			mixed_windowed[sample] = mixed * window;
+		}
+
+		std::vector<float> magnitudes(result.size(), 0.0f);
+		const int result_size = static_cast<int>(result.size());
+		#pragma omp parallel for if(result_size * max_source_samples >= 32768) schedule(static)
+		for (int bin = 0; bin < result_size; ++bin) {
+			const float t = (bin + 0.5f) / result_size;
 			const float hz = low_hz * std::pow(high_hz / low_hz, t);
-			const double radians = 2.0 * PI * hz / sample_rate;
+			const double phase_delta = 2.0 * PI * hz / sample_rate;
+			const double step_real = std::cos(phase_delta);
+			const double step_imag = std::sin(phase_delta);
+			double phase_real = 1.0;
+			double phase_imag = 0.0;
 			double real = 0.0;
 			double imag = 0.0;
+
 			for (int sample = 0; sample < max_source_samples; ++sample) {
-				float mixed = 0.0f;
-				for (int channel = 0; channel < channels; ++channel)
-					mixed += frame->GetAudioSampleBuffer()->getReadPointer(channel)[sample];
-				mixed /= channels;
-				const double window = 0.5 - 0.5 * std::cos((2.0 * PI * sample) / (max_source_samples - 1));
-				const double phase = radians * sample;
-				real += mixed * window * std::cos(phase);
-				imag -= mixed * window * std::sin(phase);
+				const double value = mixed_windowed[sample];
+				real += value * phase_real;
+				imag -= value * phase_imag;
+
+				const double next_real = phase_real * step_real - phase_imag * step_imag;
+				phase_imag = phase_real * step_imag + phase_imag * step_real;
+				phase_real = next_real;
 			}
-			const float magnitude = clampf(std::sqrt(real * real + imag * imag) / max_source_samples * gain * 8.0f, 0.0f, 1.0f);
-			result[bin] = previous * smooth + magnitude * (1.0f - smooth);
+
+			magnitudes[bin] = clampf(std::sqrt(real * real + imag * imag) / max_source_samples * gain * 8.0f, 0.0f, 1.0f);
+		}
+
+		float previous = 0.0f;
+		for (int bin = 0; bin < result_size; ++bin) {
+			result[bin] = previous * smooth + magnitudes[bin] * (1.0f - smooth);
 			previous = result[bin];
 		}
 		return result;
@@ -485,13 +526,14 @@ std::shared_ptr<openshot::Frame> AudioVisualization::GetFrame(std::shared_ptr<op
 	const float stroke = style_stroke_width(style, styled_glow);
 	const bool is_waveform_mode = mode == AUDIO_VISUALIZATION_WAVEFORM || mode == AUDIO_VISUALIZATION_FILLED_WAVEFORM;
 	painter.setRenderHint(QPainter::Antialiasing, !is_waveform_mode || styled_glow > 0.01f || stroke > 1.05f);
-	const int points = clampi(std::lround(64 + detail_value * 448), 16, std::max(16, width * 2));
 
 	if (is_waveform_mode) {
+		painter.setRenderHint(QPainter::Antialiasing, false);
 		const int lanes = split ? std::min(channels, 8) : (overlay ? std::min(channels, 8) : 1);
+		const int columns = clampi(std::lround(width * (0.75f + detail_value * 0.25f)), 16, std::max(16, width));
 		for (int lane = 0; lane < lanes; ++lane) {
-			const std::vector<float> values = (split || overlay) ? channel_samples(frame, lane, points, gain, smoothing_value)
-																 : combined_samples(frame, points, gain, smoothing_value);
+			const std::vector<float> values = (split || overlay) ? channel_samples(frame, lane, columns, gain, smoothing_value)
+																 : combined_samples(frame, columns, gain, smoothing_value);
 			const float lane_top = split ? height * lane / static_cast<float>(lanes) : 0.0f;
 			const float lane_height = split ? height / static_cast<float>(lanes) : static_cast<float>(height);
 			const float center_y = lane_top + lane_height * 0.5f;
@@ -501,25 +543,59 @@ std::shared_ptr<openshot::Frame> AudioVisualization::GetFrame(std::shared_ptr<op
 				: (overlay ? mix_color(base, hue_shift(base, lane * 18), color_spread_value * 0.18f) : (lane % 2 ? palette.accent : base));
 			const Palette lane_palette = make_palette(lane_base, styled_glow, style, color_spread_value);
 
-			QPolygonF line;
-			line.reserve(static_cast<int>(values.size()));
+			QPolygonF top_edge;
+			QPolygonF bottom_edge;
+			top_edge.reserve(static_cast<int>(values.size()));
+			bottom_edge.reserve(static_cast<int>(values.size()));
 			for (int i = 0; i < static_cast<int>(values.size()); ++i) {
 				const float x = (values.size() <= 1) ? 0.0f : (width - 1) * i / static_cast<float>(values.size() - 1);
-				const float y = center_y - values[i] * amplitude;
-				line.append(QPointF(x, y));
+				const float magnitude = std::fabs(values[i]) * amplitude;
+				const float envelope = values[i] == 0.0f ? 0.0f : std::max(1.0f, magnitude);
+				top_edge.append(QPointF(x, center_y - envelope));
+				bottom_edge.append(QPointF(x, center_y + envelope));
 			}
 
+			const float alpha_scale = overlay ? 0.48f : 1.0f;
 			if (mode == AUDIO_VISUALIZATION_FILLED_WAVEFORM) {
-				QPolygonF fill = line;
-				fill.append(QPointF(width, center_y));
-				fill.append(QPointF(0, center_y));
-				const float alpha_scale = overlay ? 0.48f : 1.0f;
+				if (styled_glow > 0.01f)
+					painter.setBrush(alpha_color(lane_palette.glow, 0.35f * alpha_scale));
+				else
+					painter.setBrush(Qt::NoBrush);
 				painter.setPen(Qt::NoPen);
+				if (styled_glow > 0.01f) {
+					const int glow_pad = std::max(1, static_cast<int>(std::ceil(styled_glow * 5.0f)));
+					for (int i = 0; i < static_cast<int>(values.size()); ++i) {
+						const int x0 = (i * width) / static_cast<int>(values.size());
+						const int x1 = ((i + 1) * width) / static_cast<int>(values.size());
+						const float magnitude = std::fabs(values[i]) * amplitude;
+						const float envelope = values[i] == 0.0f ? 0.0f : std::max(1.0f, magnitude);
+						const int y0 = clampi(static_cast<int>(std::floor(center_y - envelope)) - glow_pad, 0, height);
+						const int y1 = clampi(static_cast<int>(std::ceil(center_y + envelope)) + glow_pad, y0 + 1, height);
+						painter.drawRect(QRect(x0, y0, std::max(1, x1 - x0), y1 - y0));
+					}
+				}
+
 				painter.setBrush(vertical_style_fill(0, lane_top, 0, lane_top + lane_height, lane_palette, style, alpha_scale));
-				painter.drawPolygon(fill);
+				for (int i = 0; i < static_cast<int>(values.size()); ++i) {
+					const int x0 = (i * width) / static_cast<int>(values.size());
+					const int x1 = ((i + 1) * width) / static_cast<int>(values.size());
+					const float magnitude = std::fabs(values[i]) * amplitude;
+					const float envelope = values[i] == 0.0f ? 0.0f : std::max(1.0f, magnitude);
+					const int y0 = clampi(static_cast<int>(std::floor(center_y - envelope)), 0, height);
+					const int y1 = clampi(static_cast<int>(std::ceil(center_y + envelope)), y0 + 1, height);
+					painter.drawRect(QRect(x0, y0, std::max(1, x1 - x0), y1 - y0));
+				}
+			} else {
+				const float line_width = std::max(1.0f, stroke);
+				if (styled_glow > 0.01f) {
+					painter.setPen(QPen(alpha_color(lane_palette.glow, 0.38f * alpha_scale),
+						line_width + styled_glow * 7.0f, Qt::SolidLine, Qt::FlatCap));
+					painter.drawPolyline(top_edge);
+				}
+				painter.setPen(QPen(alpha_color(lane_palette.base, alpha_scale),
+					line_width, Qt::SolidLine, Qt::FlatCap));
+				painter.drawPolyline(top_edge);
 			}
-			const float line_width = mode == AUDIO_VISUALIZATION_FILLED_WAVEFORM ? std::max(0.8f, stroke * 0.72f) : stroke;
-			draw_glow_polyline(painter, line, lane_palette, line_width, styled_glow);
 		}
 	} else if (mode == AUDIO_VISUALIZATION_BARS) {
 		const int bars = clampi(std::lround(16 + detail_value * 112), 8, std::max(8, width / 3));
