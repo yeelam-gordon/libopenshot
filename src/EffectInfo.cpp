@@ -47,6 +47,9 @@ EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 	else if (effect_type == "ChromaKey")
 		return new ChromaKey();
 
+	else if (effect_type == "ColorGrade")
+		return new ColorGrade();
+
 	else if (effect_type == "ColorMap")
 		return new ColorMap();
 
@@ -61,6 +64,12 @@ EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 
 	else if (effect_type == "Displace")
 		return new Displace();
+
+	else if (effect_type == "FilmGrain")
+		return new FilmGrain();
+
+	else if (effect_type == "Glow")
+		return new Glow();
 
 	else if (effect_type == "Hue")
 		return new Hue();
@@ -82,6 +91,9 @@ EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 
 	else if (effect_type == "Sharpen")
 		return new Sharpen();
+
+	else if (effect_type == "Shadow")
+		return new Shadow();
 
 	else if (effect_type == "Shift")
 		return new Shift();
@@ -150,11 +162,14 @@ Json::Value EffectInfo::JsonValue() {
 	root.append(Brightness().JsonInfo());
 	root.append(Caption().JsonInfo());
 	root.append(ChromaKey().JsonInfo());
+	root.append(ColorGrade().JsonInfo());
 	root.append(ColorMap().JsonInfo());
 	root.append(ColorShift().JsonInfo());
 	root.append(Crop().JsonInfo());
 	root.append(Deinterlace().JsonInfo());
 	root.append(Displace().JsonInfo());
+	root.append(FilmGrain().JsonInfo());
+	root.append(Glow().JsonInfo());
 	root.append(Hue().JsonInfo());
 	root.append(LensFlare().JsonInfo());
 	root.append(Mask().JsonInfo());
@@ -162,6 +177,7 @@ Json::Value EffectInfo::JsonValue() {
 	root.append(Pixelate().JsonInfo());
 	root.append(Saturation().JsonInfo());
 	root.append(Sharpen().JsonInfo());
+	root.append(Shadow().JsonInfo());
 	root.append(Shift().JsonInfo());
 	root.append(SphericalProjection().JsonInfo());
 	root.append(Wave().JsonInfo());

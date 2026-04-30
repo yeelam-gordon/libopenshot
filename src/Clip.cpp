@@ -1616,8 +1616,16 @@ QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int heig
 
 	/* LOCATION, ROTATION, AND SCALE */
 	float r = rotation.GetValue(frame->number) + parentObject_rotation; // rotate in degrees
-	x += width * (location_x.GetValue(frame->number) + parentObject_location_x); // move in percentage of final width
-	y += height * (location_y.GetValue(frame->number) + parentObject_location_y); // move in percentage of final height
+	float location_x_value = location_x.GetValue(frame->number) + parentObject_location_x;
+	float location_y_value = location_y.GetValue(frame->number) + parentObject_location_y;
+	auto location_offset = [](float location, float anchored_position, float canvas_size, float clip_size) {
+		if (location < 0.0f) {
+			return location * (anchored_position + clip_size);
+		}
+		return location * (canvas_size - anchored_position);
+	};
+	x += location_offset(location_x_value, x, width, scaled_source_width);
+	y += location_offset(location_y_value, y, height, scaled_source_height);
 	float shear_x_value = shear_x.GetValue(frame->number) + parentObject_shear_x;
 	float shear_y_value = shear_y.GetValue(frame->number) + parentObject_shear_y;
 	float origin_x_value = origin_x.GetValue(frame->number);

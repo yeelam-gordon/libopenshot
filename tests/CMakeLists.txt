@@ -26,6 +26,7 @@ target_link_libraries(openshot-benchmark openshot)
 ###
 set(OPENSHOT_TESTS
   AudioDeviceManager
+  AnimatedCurve
   AudioWaveformer
   CacheDisk
   CacheMemory
@@ -38,6 +39,7 @@ set(OPENSHOT_TESTS
   FFmpegWriter
   Fraction
   Frame
+  FrameScope
   FrameMapper
   KeyFrame
   Point
@@ -51,16 +53,20 @@ set(OPENSHOT_TESTS
   VideoCacheThread
   # Effects
   AudioVisualization
+  ColorGrade
   ColorMap
   ChromaKey
   Crop
   Displace
+  FilmGrain
+  Glow
   LensFlare
   AnalogTape
   BenchmarkArgs
   EffectMask
   Mask
   Sharpen
+  Shadow
   SphericalEffect
   WaveEffect
 )

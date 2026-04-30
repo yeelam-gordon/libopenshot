@@ -68,7 +68,7 @@ void EffectBase::DisplayInfo(std::ostream* out) {
 	*out << "--> Description: " << info.description << std::endl;
 	*out << "--> Has Video: " << info.has_video << std::endl;
 	*out << "--> Has Audio: " << info.has_audio << std::endl;
-	*out << "--> Apply Before Clip Keyframes: " << info.apply_before_clip << std::endl;
+	*out << "--> Apply to Source: " << info.apply_before_clip << std::endl;
 	*out << "--> Order: " << order << std::endl;
 	*out << "----------------------------" << std::endl;
 }
@@ -244,7 +244,7 @@ Json::Value EffectBase::BasePropertiesJSON(int64_t requested_frame) const {
 	root["duration"] = add_property_json("Duration", Duration(), "float", "", NULL, 0, 30 * 60 * 60 * 48, true, requested_frame);
 
 	// Add replace_image choices (dropdown style)
-	root["apply_before_clip"] = add_property_json("Apply Before Clip Keyframes", info.apply_before_clip, "int", "", NULL, 0, 1, false, requested_frame);
+	root["apply_before_clip"] = add_property_json("Apply to Source", info.apply_before_clip, "int", "", NULL, 0, 1, false, requested_frame);
 	root["apply_before_clip"]["choices"].append(add_property_choice_json("Yes", true, info.apply_before_clip));
 	root["apply_before_clip"]["choices"].append(add_property_choice_json("No", false, info.apply_before_clip));
 
