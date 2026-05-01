@@ -124,8 +124,6 @@ namespace {
 		} else if (style == AUDIO_VISUALIZATION_STYLE_NEON) {
 			palette.light = mix_color(base, QColor(255, 255, 255, base.alpha()), 0.18f);
 			palette.accent = palette.light;
-		} else if (style == AUDIO_VISUALIZATION_STYLE_RETRO) {
-			palette.accent = mix_color(base, hue_shift(base, -18), 0.25f);
 		}
 		palette.glow = alpha_color(palette.light, 0.18f + glow_amount * 0.65f);
 		return palette;
@@ -158,21 +156,17 @@ namespace {
 			return 2.4f + glow * 1.4f;
 		if (style == AUDIO_VISUALIZATION_STYLE_NEON)
 			return 1.8f + glow * 1.2f;
-		if (style == AUDIO_VISUALIZATION_STYLE_RETRO)
-			return 2.0f;
 		return 1.5f + glow * 1.6f;
 	}
 
 	float style_fill_alpha(int style) {
 		if (style == AUDIO_VISUALIZATION_STYLE_MINIMAL)
-			return 0.82f;
-		if (style == AUDIO_VISUALIZATION_STYLE_RETRO)
-			return 0.74f;
+			return 1.0f;
 		if (style == AUDIO_VISUALIZATION_STYLE_NEON)
-			return 0.22f;
+			return 0.82f;
 		if (style == AUDIO_VISUALIZATION_STYLE_SOFT)
-			return 0.34f;
-		return 0.48f;
+			return 0.74f;
+		return 0.72f;
 	}
 
 	QBrush vertical_style_fill(float x0, float y0, float x1, float y1, const Palette& palette, int style, float alpha_scale = 1.0f) {
@@ -180,23 +174,18 @@ namespace {
 			return QBrush(alpha_color(palette.base, style_fill_alpha(style) * alpha_scale));
 
 		QLinearGradient grad(x0, y0, x1, y1);
-		if (style == AUDIO_VISUALIZATION_STYLE_RETRO) {
-			grad.setColorAt(0.0, alpha_color(palette.light, 0.88f * alpha_scale));
-			grad.setColorAt(0.48, alpha_color(palette.base, 0.88f * alpha_scale));
-			grad.setColorAt(0.52, alpha_color(palette.accent, 0.78f * alpha_scale));
-			grad.setColorAt(1.0, alpha_color(palette.base, 0.74f * alpha_scale));
-		} else if (style == AUDIO_VISUALIZATION_STYLE_NEON) {
-			grad.setColorAt(0.0, alpha_color(palette.light, 0.30f * alpha_scale));
-			grad.setColorAt(0.5, alpha_color(palette.base, 0.18f * alpha_scale));
-			grad.setColorAt(1.0, alpha_color(palette.base, 0.02f * alpha_scale));
+		if (style == AUDIO_VISUALIZATION_STYLE_NEON) {
+			grad.setColorAt(0.0, alpha_color(palette.light, 0.92f * alpha_scale));
+			grad.setColorAt(0.5, alpha_color(palette.base, 0.70f * alpha_scale));
+			grad.setColorAt(1.0, alpha_color(palette.base, 0.28f * alpha_scale));
 		} else if (style == AUDIO_VISUALIZATION_STYLE_SOFT) {
-			grad.setColorAt(0.0, alpha_color(palette.light, 0.08f * alpha_scale));
-			grad.setColorAt(0.5, alpha_color(palette.base, 0.34f * alpha_scale));
-			grad.setColorAt(1.0, alpha_color(palette.base, 0.08f * alpha_scale));
+			grad.setColorAt(0.0, alpha_color(palette.light, 0.48f * alpha_scale));
+			grad.setColorAt(0.5, alpha_color(palette.base, 0.78f * alpha_scale));
+			grad.setColorAt(1.0, alpha_color(palette.base, 0.48f * alpha_scale));
 		} else {
-			grad.setColorAt(0.0, alpha_color(palette.light, 0.42f * alpha_scale));
-			grad.setColorAt(0.62, alpha_color(palette.base, 0.46f * alpha_scale));
-			grad.setColorAt(1.0, alpha_color(palette.base, 0.20f * alpha_scale));
+			grad.setColorAt(0.0, alpha_color(palette.light, 0.72f * alpha_scale));
+			grad.setColorAt(0.62, alpha_color(palette.base, 0.72f * alpha_scale));
+			grad.setColorAt(1.0, alpha_color(palette.base, 0.38f * alpha_scale));
 		}
 		return QBrush(grad);
 	}
@@ -544,25 +533,24 @@ std::shared_ptr<openshot::Frame> AudioVisualization::GetFrame(std::shared_ptr<op
 			const Palette lane_palette = make_palette(lane_base, styled_glow, style, color_spread_value);
 
 			QPolygonF top_edge;
-			QPolygonF bottom_edge;
 			top_edge.reserve(static_cast<int>(values.size()));
-			bottom_edge.reserve(static_cast<int>(values.size()));
 			for (int i = 0; i < static_cast<int>(values.size()); ++i) {
 				const float x = (values.size() <= 1) ? 0.0f : (width - 1) * i / static_cast<float>(values.size() - 1);
-				const float magnitude = std::fabs(values[i]) * amplitude;
-				const float envelope = values[i] == 0.0f ? 0.0f : std::max(1.0f, magnitude);
-				top_edge.append(QPointF(x, center_y - envelope));
-				bottom_edge.append(QPointF(x, center_y + envelope));
+				top_edge.append(QPointF(x, center_y - values[i] * amplitude));
 			}
 
 			const float alpha_scale = overlay ? 0.48f : 1.0f;
+			const bool rainbow = color_mode == AUDIO_VISUALIZATION_COLOR_RAINBOW;
 			if (mode == AUDIO_VISUALIZATION_FILLED_WAVEFORM) {
-				if (styled_glow > 0.01f)
-					painter.setBrush(alpha_color(lane_palette.glow, 0.35f * alpha_scale));
-				else
-					painter.setBrush(Qt::NoBrush);
 				painter.setPen(Qt::NoPen);
 				if (styled_glow > 0.01f) {
+					if (rainbow) {
+						QLinearGradient glow_grad(0, 0, width, 0);
+						set_rainbow_stops(glow_grad, base, color_spread_value, 0.78f * alpha_scale);
+						painter.setBrush(QBrush(glow_grad));
+					} else {
+						painter.setBrush(alpha_color(lane_palette.glow, 0.78f * alpha_scale));
+					}
 					const int glow_pad = std::max(1, static_cast<int>(std::ceil(styled_glow * 5.0f)));
 					for (int i = 0; i < static_cast<int>(values.size()); ++i) {
 						const int x0 = (i * width) / static_cast<int>(values.size());
@@ -575,7 +563,13 @@ std::shared_ptr<openshot::Frame> AudioVisualization::GetFrame(std::shared_ptr<op
 					}
 				}
 
-				painter.setBrush(vertical_style_fill(0, lane_top, 0, lane_top + lane_height, lane_palette, style, alpha_scale));
+				if (rainbow) {
+					QLinearGradient fill_grad(0, 0, width, 0);
+					set_rainbow_stops(fill_grad, base, color_spread_value, style_fill_alpha(style) * alpha_scale);
+					painter.setBrush(QBrush(fill_grad));
+				} else {
+					painter.setBrush(vertical_style_fill(0, lane_top, 0, lane_top + lane_height, lane_palette, style, alpha_scale));
+				}
 				for (int i = 0; i < static_cast<int>(values.size()); ++i) {
 					const int x0 = (i * width) / static_cast<int>(values.size());
 					const int x1 = ((i + 1) * width) / static_cast<int>(values.size());
@@ -587,14 +581,27 @@ std::shared_ptr<openshot::Frame> AudioVisualization::GetFrame(std::shared_ptr<op
 				}
 			} else {
 				const float line_width = std::max(1.0f, stroke);
-				if (styled_glow > 0.01f) {
-					painter.setPen(QPen(alpha_color(lane_palette.glow, 0.38f * alpha_scale),
-						line_width + styled_glow * 7.0f, Qt::SolidLine, Qt::FlatCap));
+				if (rainbow) {
+					if (styled_glow > 0.01f) {
+						QLinearGradient glow_grad(0, 0, width, 0);
+						set_rainbow_stops(glow_grad, base, color_spread_value, 0.88f * alpha_scale);
+						painter.setPen(QPen(QBrush(glow_grad), line_width + styled_glow * 16.0f, Qt::SolidLine, Qt::FlatCap));
+						painter.drawPolyline(top_edge);
+					}
+					QLinearGradient line_grad(0, 0, width, 0);
+					set_rainbow_stops(line_grad, base, color_spread_value, alpha_scale);
+					painter.setPen(QPen(QBrush(line_grad), line_width, Qt::SolidLine, Qt::FlatCap));
+					painter.drawPolyline(top_edge);
+				} else {
+					if (styled_glow > 0.01f) {
+						painter.setPen(QPen(alpha_color(lane_palette.glow, 0.88f * alpha_scale),
+							line_width + styled_glow * 16.0f, Qt::SolidLine, Qt::FlatCap));
+						painter.drawPolyline(top_edge);
+					}
+					painter.setPen(QPen(alpha_color(lane_palette.base, alpha_scale),
+						line_width, Qt::SolidLine, Qt::FlatCap));
 					painter.drawPolyline(top_edge);
 				}
-				painter.setPen(QPen(alpha_color(lane_palette.base, alpha_scale),
-					line_width, Qt::SolidLine, Qt::FlatCap));
-				painter.drawPolyline(top_edge);
 			}
 		}
 	} else if (mode == AUDIO_VISUALIZATION_BARS) {
@@ -824,8 +831,8 @@ std::shared_ptr<openshot::Frame> AudioVisualization::GetFrame(std::shared_ptr<op
 			QPen trail_pen(alpha_color(c, 0.26f + mid * 0.16f), std::max(0.45f, size * (0.28f + low * 0.12f)), Qt::SolidLine, Qt::RoundCap);
 			painter.setPen(trail_pen);
 			painter.drawLine(tail, p);
-			if (style == AUDIO_VISUALIZATION_STYLE_MINIMAL || style == AUDIO_VISUALIZATION_STYLE_RETRO) {
-				painter.setBrush(alpha_color(c, style == AUDIO_VISUALIZATION_STYLE_MINIMAL ? 1.0f : 0.82f));
+			if (style == AUDIO_VISUALIZATION_STYLE_MINIMAL) {
+				painter.setBrush(alpha_color(c, 1.0f));
 			} else {
 				QRadialGradient grad(p, size * (2.2f + styled_glow * 4.0f));
 				grad.setColorAt(0.0, c);
@@ -850,8 +857,6 @@ std::shared_ptr<openshot::Frame> AudioVisualization::GetFrame(std::shared_ptr<op
 				QColor c;
 				if (style == AUDIO_VISUALIZATION_STYLE_MINIMAL) {
 					c = palette.base;
-				} else if (style == AUDIO_VISUALIZATION_STYLE_RETRO) {
-					c = t > 0.72f ? palette.accent : (segment % 2 ? palette.base : palette.light);
 				} else {
 					c = t > 0.82f ? QColor(255, 86, 68, base.alpha()) : (t > 0.55f ? mix_color(palette.accent, QColor(255, 214, 90, base.alpha()), (t - 0.55f) / 0.27f) : mix_color(palette.base, palette.light, t * 1.5f));
 				}
@@ -947,12 +952,11 @@ std::string AudioVisualization::PropertiesJSON(int64_t requested_frame) const {
 	root["visualization_type"]["choices"].append(add_property_choice_json("Particles", AUDIO_VISUALIZATION_PARTICLES, visualization_type));
 	root["visualization_type"]["choices"].append(add_property_choice_json("VU Meter", AUDIO_VISUALIZATION_VU_METER, visualization_type));
 
-	root["style"] = add_property_json("Style", style, "int", "", NULL, 0, AUDIO_VISUALIZATION_STYLE_RETRO, false, requested_frame);
+	root["style"] = add_property_json("Style", style, "int", "", NULL, 0, AUDIO_VISUALIZATION_STYLE_MINIMAL, false, requested_frame);
 	root["style"]["choices"].append(add_property_choice_json("Clean", AUDIO_VISUALIZATION_STYLE_CLEAN, style));
 	root["style"]["choices"].append(add_property_choice_json("Soft", AUDIO_VISUALIZATION_STYLE_SOFT, style));
 	root["style"]["choices"].append(add_property_choice_json("Neon", AUDIO_VISUALIZATION_STYLE_NEON, style));
 	root["style"]["choices"].append(add_property_choice_json("Minimal", AUDIO_VISUALIZATION_STYLE_MINIMAL, style));
-	root["style"]["choices"].append(add_property_choice_json("Retro", AUDIO_VISUALIZATION_STYLE_RETRO, style));
 
 	root["color"] = add_property_json("Color", 0.0, "color", "", &color.red, 0, 255, false, requested_frame);
 	root["color"]["red"] = add_property_json("Red", color.red.GetValue(requested_frame), "float", "", &color.red, 0, 255, false, requested_frame);

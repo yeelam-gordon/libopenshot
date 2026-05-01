@@ -1443,7 +1443,7 @@ void Clip::apply_waveform(std::shared_ptr<Frame> frame, QSize timeline_size) {
 
 	AudioVisualization visualization;
 	visualization.visualization_type = waveform_mode;
-	visualization.style = AUDIO_VISUALIZATION_STYLE_CLEAN;
+	visualization.style = AUDIO_VISUALIZATION_STYLE_MINIMAL;
 	visualization.color = Color(
 		static_cast<unsigned char>(red),
 		static_cast<unsigned char>(green),
