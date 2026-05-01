@@ -480,6 +480,48 @@ TEST_CASE("ReaderInfo constructor", "[libopenshot][timeline]")
 	CHECK(r1->info.channel_layout == t1.info.channel_layout);
 }
 
+TEST_CASE("JSON diff insert keeps audio-only clip at stored timeline dimensions", "[libopenshot][timeline][json]")
+{
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "piano.wav";
+
+	Timeline t(1280, 720, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	std::stringstream diff;
+	diff << "[{\"type\":\"insert\",\"key\":[\"clips\"],\"value\":{"
+		<< "\"id\":\"audio-copy\","
+		<< "\"position\":0,"
+		<< "\"start\":0,"
+		<< "\"end\":1,"
+		<< "\"duration\":1,"
+		<< "\"layer\":1,"
+		<< "\"reader\":{\"type\":\"FFmpegReader\","
+		<< "\"path\":\"" << path.str() << "\","
+		<< "\"has_audio\":true,"
+		<< "\"has_video\":false,"
+		<< "\"width\":1280,"
+		<< "\"height\":720,"
+		<< "\"fps\":{\"num\":30,\"den\":1},"
+		<< "\"sample_rate\":44100,"
+		<< "\"channels\":2,"
+		<< "\"channel_layout\":3,"
+		<< "\"duration\":1.0}"
+		<< "}}]";
+
+	t.ApplyJsonDiff(diff.str());
+
+	std::list<Clip*> clips = t.Clips();
+	REQUIRE(clips.size() == 1);
+	Clip* clip = clips.front();
+	CHECK(clip->ParentTimeline() == &t);
+	CHECK(clip->Reader()->info.width == 1280);
+	CHECK(clip->Reader()->info.height == 720);
+
+	std::shared_ptr<Frame> frame = t.GetFrame(1);
+	REQUIRE(frame);
+	CHECK(frame->GetWidth() == 1280);
+	CHECK(frame->GetHeight() == 720);
+}
+
 TEST_CASE( "width and height functions", "[libopenshot][timeline]" )
 {
 	Fraction fps(30000,1000);

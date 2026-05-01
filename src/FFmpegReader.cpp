@@ -1000,8 +1000,10 @@ void FFmpegReader::UpdateAudioInfo() {
 		info.fps.den = 1;
 		info.video_timebase.num = 1;
 		info.video_timebase.den = 30;
-		info.width = 720;
-		info.height = 480;
+		if (info.width <= 0 || info.height <= 0) {
+			info.width = 720;
+			info.height = 480;
+		}
 
 		// Use timeline to set correct width & height (if any)
 		Clip *parent = static_cast<Clip *>(ParentClip());

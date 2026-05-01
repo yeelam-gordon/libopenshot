@@ -143,6 +143,36 @@ TEST_CASE( "Check_Audio_File", "[libopenshot][ffmpegreader]" )
 	r.Close();
 }
 
+TEST_CASE( "Audio_Only_SetJson_Preserves_Stored_Dimensions", "[libopenshot][ffmpegreader][json]" )
+{
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "piano.wav";
+
+	FFmpegReader r(path.str());
+	std::stringstream json;
+	json << "{\"type\":\"FFmpegReader\","
+		<< "\"path\":\"" << path.str() << "\","
+		<< "\"has_audio\":true,"
+		<< "\"has_video\":false,"
+		<< "\"width\":1280,"
+		<< "\"height\":720,"
+		<< "\"fps\":{\"num\":30,\"den\":1},"
+		<< "\"sample_rate\":44100,"
+		<< "\"channels\":2,"
+		<< "\"channel_layout\":3,"
+		<< "\"duration\":1.0}";
+
+	r.SetJson(json.str());
+	r.Open();
+
+	CHECK(r.info.has_audio);
+	CHECK_FALSE(r.info.has_video);
+	CHECK(r.info.width == 1280);
+	CHECK(r.info.height == 720);
+	CHECK(r.GetFrame(1)->GetWidth() == 1280);
+	CHECK(r.GetFrame(1)->GetHeight() == 720);
+}
+
 TEST_CASE( "Check_Video_File", "[libopenshot][ffmpegreader]" )
 {
 	// Create a reader
