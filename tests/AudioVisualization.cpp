@@ -57,6 +57,18 @@ namespace {
 		}
 		return visible;
 	}
+
+	int count_visible_non_red_pixels(const QImage& image) {
+		int visible = 0;
+		for (int y = 0; y < image.height(); ++y) {
+			for (int x = 0; x < image.width(); ++x) {
+				const QColor pixel = image.pixelColor(x, y);
+				if (pixel.alpha() > 0 && (pixel.green() > pixel.red() || pixel.blue() > pixel.red()))
+					++visible;
+			}
+		}
+		return visible;
+	}
 }
 
 TEST_CASE("AudioVisualization is registered", "[effect][audio-visualization]")
@@ -125,6 +137,21 @@ TEST_CASE("AudioVisualization differentiates combined and overlay waveform chann
 	auto overlay_image = overlay.GetFrame(make_audio_frame(), 1)->GetImage()->copy();
 
 	CHECK(combined_image != overlay_image);
+}
+
+TEST_CASE("AudioVisualization phase scope supports rainbow color mode", "[effect][audio-visualization]")
+{
+	AudioVisualization effect;
+	effect.visualization_type = AUDIO_VISUALIZATION_PHASE_SCOPE;
+	effect.color_mode = AUDIO_VISUALIZATION_COLOR_RAINBOW;
+	effect.color = Color((unsigned char)255, (unsigned char)0, (unsigned char)0, (unsigned char)255);
+	effect.glow = Keyframe(0.0);
+	effect.detail = Keyframe(1.0);
+	effect.background = AUDIO_VISUALIZATION_BACKGROUND_TRANSPARENT;
+
+	auto out = effect.GetFrame(make_audio_frame(), 1)->GetImage();
+	REQUIRE(out != nullptr);
+	CHECK(count_visible_non_red_pixels(*out) > 0);
 }
 
 TEST_CASE("AudioVisualization exposes normalized frequency controls", "[effect][audio-visualization]")

@@ -764,11 +764,13 @@ std::shared_ptr<openshot::Frame> AudioVisualization::GetFrame(std::shared_ptr<op
 			visualization_type = mode;
 			return result;
 		}
-		const int count = clampi(std::lround(96 + detail_value * 416), 64, 512);
+		painter.setRenderHint(QPainter::Antialiasing, false);
+		const int count = clampi(std::lround(96 + detail_value * 224), 64, 320);
 		const int samples = frame->GetAudioSamplesCount();
 		const float *left = frame->GetAudioSampleBuffer()->getReadPointer(0);
 		const float *right = frame->GetAudioSampleBuffer()->getReadPointer(1);
-		QPainterPath trace;
+		QPolygonF trace;
+		trace.reserve(count);
 		float previous_x = width * 0.5f;
 		float previous_y = height * 0.5f;
 		for (int i = 0; i < count; ++i) {
@@ -777,17 +779,42 @@ std::shared_ptr<openshot::Frame> AudioVisualization::GetFrame(std::shared_ptr<op
 			const float raw_y = height * 0.5f - clampf((left[sample] + right[sample]) * gain * 0.38f, -1.0f, 1.0f) * height * 0.42f;
 			const float x = previous_x * 0.72f + raw_x * 0.28f;
 			const float y = previous_y * 0.72f + raw_y * 0.28f;
-			if (i == 0)
-				trace.moveTo(x, y);
-			else
-				trace.lineTo(x, y);
+			trace.append(QPointF(x, y));
 			previous_x = x;
 			previous_y = y;
 		}
 		painter.setPen(QPen(alpha_color(palette.dark, 0.35f), 1.0f));
 		painter.drawLine(QPointF(width * 0.5f, height * 0.12f), QPointF(width * 0.5f, height * 0.88f));
 		painter.drawLine(QPointF(width * 0.12f, height * 0.5f), QPointF(width * 0.88f, height * 0.5f));
-		draw_glow_path(painter, trace, palette, stroke, glow_value);
+		const float trace_width = std::max(1.0f, stroke);
+		if (color_mode == AUDIO_VISUALIZATION_COLOR_RAINBOW) {
+			QRectF rainbow_bounds = trace.boundingRect();
+			const qreal min_span = std::min(width, height) * 0.22;
+			if (rainbow_bounds.width() < min_span)
+				rainbow_bounds.adjust((rainbow_bounds.width() - min_span) * 0.5, 0.0, (min_span - rainbow_bounds.width()) * 0.5, 0.0);
+			if (rainbow_bounds.height() < min_span)
+				rainbow_bounds.adjust(0.0, (rainbow_bounds.height() - min_span) * 0.5, 0.0, (min_span - rainbow_bounds.height()) * 0.5);
+			rainbow_bounds = rainbow_bounds.intersected(QRectF(0, 0, width, height));
+			if (styled_glow > 0.01f) {
+				QLinearGradient glow_grad(rainbow_bounds.left(), rainbow_bounds.center().y(), rainbow_bounds.right(), rainbow_bounds.center().y());
+				set_rainbow_stops(glow_grad, base, color_spread_value, 0.42f);
+				painter.setPen(QPen(QBrush(glow_grad), trace_width + styled_glow * 10.0f, Qt::SolidLine, Qt::FlatCap, Qt::BevelJoin));
+				painter.drawPolyline(trace);
+			}
+			QLinearGradient trace_grad(rainbow_bounds.left(), rainbow_bounds.center().y(), rainbow_bounds.right(), rainbow_bounds.center().y());
+			set_rainbow_stops(trace_grad, base, color_spread_value);
+			painter.setPen(QPen(QBrush(trace_grad), trace_width, Qt::SolidLine, Qt::FlatCap, Qt::BevelJoin));
+			painter.drawPolyline(trace);
+		} else {
+			if (styled_glow > 0.01f) {
+				QPen glow_pen(palette.glow, trace_width + styled_glow * 10.0f, Qt::SolidLine, Qt::FlatCap, Qt::BevelJoin);
+				painter.setPen(glow_pen);
+				painter.drawPolyline(trace);
+			}
+			QPen pen(palette.base, trace_width, Qt::SolidLine, Qt::FlatCap, Qt::BevelJoin);
+			painter.setPen(pen);
+			painter.drawPolyline(trace);
+		}
 	} else if (mode == AUDIO_VISUALIZATION_PARTICLES) {
 		const int count = clampi(std::lround(220 + detail_value * 920), 160, 1280);
 		const float level = reactive_level(frame, -1, gain);
