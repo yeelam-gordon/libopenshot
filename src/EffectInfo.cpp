@@ -29,6 +29,9 @@ EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 	if (effect_type == "AnalogTape")
 		return new AnalogTape();
 
+	if (effect_type == "AudioVisualization")
+		return new AudioVisualization();
+
 	if (effect_type == "Bars")
 		return new Bars();
 
@@ -153,6 +156,7 @@ Json::Value EffectInfo::JsonValue() {
 
 	// Append info JSON from each supported effect
 	root.append(AnalogTape().JsonInfo());
+	root.append(AudioVisualization().JsonInfo());
 	root.append(Bars().JsonInfo());
 	root.append(Blur().JsonInfo());
 	root.append(Brightness().JsonInfo());

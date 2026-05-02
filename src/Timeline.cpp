@@ -1486,6 +1486,10 @@ void Timeline::apply_json_to_clips(Json::Value change) {
 		// Keep track of allocated clip objects
 		allocated_clips.insert(clip);
 
+		// Match full timeline JSON loading: parent timeline must be available
+		// before clip JSON can inflate nested readers/effects.
+		clip->ParentTimeline(this);
+
 		// Set properties of clip from JSON
 		clip->SetJsonValue(change["value"]);
 

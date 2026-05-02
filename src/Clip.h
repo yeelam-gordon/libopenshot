@@ -105,6 +105,7 @@ namespace openshot {
 
 	private:
 		bool waveform; ///< Should a waveform be used instead of the clip's image
+		int waveform_mode; ///< Audio visualization mode used when waveform is enabled
 		std::list<openshot::EffectBase*> effects; ///< List of clips on this timeline
 		bool is_open;	///< Is Reader opened
 		std::string parentObjectId; ///< Id of the bounding box that this clip is attached to
@@ -317,6 +318,8 @@ namespace openshot {
 		// Waveform property
 		bool Waveform() { return waveform; } ///< Get the waveform property of this clip
 		void Waveform(bool value) { waveform = value; } ///< Set the waveform property of this clip
+		int WaveformMode() { return waveform_mode; } ///< Get the waveform visualization mode
+		void WaveformMode(int value) { waveform_mode = value; } ///< Set the waveform visualization mode
 
 		// Scale, Location, and Alpha curves
 		openshot::Keyframe scale_x; ///< Curve representing the horizontal scaling in percent (0 to 1)

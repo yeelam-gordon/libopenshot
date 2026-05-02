@@ -15,6 +15,7 @@
 
 /* Effects */
 #include "effects/AnalogTape.h"
+#include "effects/AudioVisualization.h"
 #include "effects/Bars.h"
 #include "effects/Blur.h"
 #include "effects/Brightness.h"

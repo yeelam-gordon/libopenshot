@@ -8,9 +8,12 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -18,6 +21,7 @@
 #include "Clip.h"
 #include "FFmpegReader.h"
 #include "FFmpegWriter.h"
+#include "Frame.h"
 #include "Fraction.h"
 #include "FrameMapper.h"
 #ifdef USE_IMAGEMAGICK
@@ -31,8 +35,11 @@
 #include "effects/Brightness.h"
 #include "effects/ChromaKey.h"
 #include "effects/Crop.h"
+#include "effects/AudioVisualization.h"
 #include "effects/Mask.h"
 #include "effects/Saturation.h"
+
+#include <QImage>
 
 using namespace openshot;
 using namespace std;
@@ -56,6 +63,47 @@ void read_forward_backward(ReaderBase &reader) {
 		reader.GetFrame(i);
 	for (int64_t i = len; i >= 1; --i)
 		reader.GetFrame(i);
+}
+
+std::shared_ptr<Frame> make_audio_visualization_frame(int64_t frame_number) {
+	const int width = 1280;
+	const int height = 720;
+	const int sample_rate = 48000;
+	const int samples = 1600;
+	constexpr double pi = 3.14159265358979323846;
+
+	auto frame = std::make_shared<Frame>(frame_number, width, height, "#00000000", samples, 2);
+	auto image = std::make_shared<QImage>(width, height, QImage::Format_RGBA8888_Premultiplied);
+	image->fill(Qt::transparent);
+	frame->AddImage(image);
+	frame->ResizeAudio(2, samples, sample_rate, LAYOUT_STEREO);
+
+	std::vector<float> left(samples);
+	std::vector<float> right(samples);
+	for (int i = 0; i < samples; ++i) {
+		const double t = static_cast<double>(i + frame_number * samples) / sample_rate;
+		left[i] = static_cast<float>((std::sin(2.0 * pi * 110.0 * t) * 0.22) +
+									 (std::sin(2.0 * pi * 440.0 * t) * 0.48) +
+									 (std::sin(2.0 * pi * 1760.0 * t) * 0.18));
+		right[i] = static_cast<float>((std::sin(2.0 * pi * 165.0 * t) * 0.18) +
+									  (std::sin(2.0 * pi * 660.0 * t) * 0.42) +
+									  (std::sin(2.0 * pi * 2640.0 * t) * 0.16));
+	}
+	frame->AddAudio(true, 0, 0, left.data(), samples, 1.0f);
+	frame->AddAudio(true, 1, 0, right.data(), samples, 1.0f);
+	return frame;
+}
+
+void run_audio_visualization_mode(int mode, int64_t frames) {
+	AudioVisualization effect;
+	effect.visualization_type = mode;
+	effect.background = AUDIO_VISUALIZATION_BACKGROUND_TRANSPARENT;
+	effect.detail = Keyframe(0.75);
+	effect.glow = Keyframe(0.25);
+	effect.intensity = Keyframe(1.25);
+
+	for (int64_t frame_number = 1; frame_number <= frames; ++frame_number)
+		effect.GetFrame(make_audio_visualization_frame(frame_number), frame_number);
 }
 
 int main(int argc, char* argv[]) {
@@ -288,6 +336,43 @@ int main(int argc, char* argv[]) {
 			clip.GetFrame(i);
 		clip.Close();
 		r.Close();
+	});
+
+	const std::vector<std::pair<std::string, int>> audio_visualization_modes = {
+		{"Effect_AudioVisualization_Waveform", AUDIO_VISUALIZATION_WAVEFORM},
+		{"Effect_AudioVisualization_FilledWaveform", AUDIO_VISUALIZATION_FILLED_WAVEFORM},
+		{"Effect_AudioVisualization_Bars", AUDIO_VISUALIZATION_BARS},
+		{"Effect_AudioVisualization_Radial", AUDIO_VISUALIZATION_RADIAL},
+		{"Effect_AudioVisualization_Spectrum", AUDIO_VISUALIZATION_SPECTRUM},
+		{"Effect_AudioVisualization_PhaseScope", AUDIO_VISUALIZATION_PHASE_SCOPE},
+		{"Effect_AudioVisualization_Particles", AUDIO_VISUALIZATION_PARTICLES},
+		{"Effect_AudioVisualization_VUMeter", AUDIO_VISUALIZATION_VU_METER},
+		{"Effect_AudioVisualization_RadialBars", AUDIO_VISUALIZATION_RADIAL_BARS}
+	};
+
+	std::transform(audio_visualization_modes.begin(), audio_visualization_modes.end(), std::back_inserter(trials),
+		[](const auto& mode) -> Trial {
+			return {mode.first, [mode]() {
+				run_audio_visualization_mode(mode.second, 240);
+			}};
+		});
+
+	trials.emplace_back("Effect_AudioVisualization", [audio_visualization_modes]() {
+		for (const auto& mode : audio_visualization_modes)
+			run_audio_visualization_mode(mode.second, 120);
+	});
+
+	trials.emplace_back("Effect_AudioVisualization_SpectrumModes", [&]() {
+		const std::vector<int> modes = {
+			AUDIO_VISUALIZATION_BARS,
+			AUDIO_VISUALIZATION_RADIAL,
+			AUDIO_VISUALIZATION_SPECTRUM,
+			AUDIO_VISUALIZATION_PARTICLES,
+			AUDIO_VISUALIZATION_RADIAL_BARS
+		};
+
+		for (int mode : modes)
+			run_audio_visualization_mode(mode, 120);
 	});
 
 	if (options.list_only) {

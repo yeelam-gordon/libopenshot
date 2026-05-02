@@ -52,6 +52,7 @@ set(OPENSHOT_TESTS
   Timeline
   VideoCacheThread
   # Effects
+  AudioVisualization
   ColorGrade
   ColorMap
   ChromaKey
