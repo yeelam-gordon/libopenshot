@@ -80,7 +80,44 @@ extern "C" {
 #  include "effects/Shadow.h"
 #  define OPENSHOT_HAS_SHADOW
 #endif
+#if __has_include("effects/Blur.h")
+#  include "effects/Blur.h"
+#  define OPENSHOT_HAS_BLUR
+#endif
+#if __has_include("effects/Sharpen.h")
+#  include "effects/Sharpen.h"
+#  define OPENSHOT_HAS_SHARPEN
+#endif
+#if __has_include("effects/Hue.h")
+#  include "effects/Hue.h"
+#  define OPENSHOT_HAS_HUE
+#endif
+#if __has_include("effects/Negate.h")
+#  include "effects/Negate.h"
+#  define OPENSHOT_HAS_NEGATE
+#endif
+#if __has_include("effects/Pixelate.h")
+#  include "effects/Pixelate.h"
+#  define OPENSHOT_HAS_PIXELATE
+#endif
+#if __has_include("effects/Wave.h")
+#  include "effects/Wave.h"
+#  define OPENSHOT_HAS_WAVE
+#endif
+#if __has_include("effects/Caption.h")
+#  include "effects/Caption.h"
+#  define OPENSHOT_HAS_CAPTION
+#endif
+#if __has_include("effects/Displace.h")
+#  include "effects/Displace.h"
+#  define OPENSHOT_HAS_DISPLACE
+#endif
+#if __has_include("FrameScope.h")
+#  include "FrameScope.h"
+#  define OPENSHOT_HAS_FRAMESCOPE
+#endif
 
+#include <QApplication>
 #include <QImage>
 
 using namespace openshot;
@@ -222,6 +259,13 @@ static TrialResult timed_audio_viz(int mode) {
 #endif // OPENSHOT_HAS_AUDIOVISUALIZATION
 
 int main(int argc, char* argv[]) {
+    // QApplication is required by any effect that renders text (e.g. Caption).
+    // It must be alive for the duration of main.
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+    QGuiApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
+#endif
+    QApplication app(argc, argv);
+
     const string base = TEST_MEDIA_PATH;
     const string video = base + "sintel_trailer-720p.mp4";
     const string overlay = base + "front3.png";
@@ -257,7 +301,7 @@ int main(int argc, char* argv[]) {
     }
 
     vector<Trial> trials;
-    trials.reserve(25);
+    trials.reserve(40);
 
     trials.emplace_back("FFmpegReader", [&]() -> TrialResult {
         FFmpegReader r(video);
@@ -521,6 +565,142 @@ int main(int argc, char* argv[]) {
     });
 #endif
 
+#ifdef OPENSHOT_HAS_BLUR
+    trials.emplace_back("Effect_Blur", [&]() -> TrialResult {
+        FFmpegReader r(video);
+        r.Open();
+        Clip clip(&r);
+        clip.Open();
+        // Gaussian-style: radius=4 px, sigma=3.0, 3 iterations
+        Blur b(Keyframe(4), Keyframe(4), Keyframe(3.0), Keyframe(3));
+        clip.AddEffect(&b);
+        TrialResult result = timed_read(clip);
+        clip.Close();
+        r.Close();
+        return result;
+    });
+#endif
+
+#ifdef OPENSHOT_HAS_SHARPEN
+    trials.emplace_back("Effect_Sharpen", [&]() -> TrialResult {
+        FFmpegReader r(video);
+        r.Open();
+        Clip clip(&r);
+        clip.Open();
+        Sharpen s(Keyframe(1.0), Keyframe(3.0), Keyframe(0.1));
+        clip.AddEffect(&s);
+        TrialResult result = timed_read(clip);
+        clip.Close();
+        r.Close();
+        return result;
+    });
+#endif
+
+#ifdef OPENSHOT_HAS_HUE
+    trials.emplace_back("Effect_Hue", [&]() -> TrialResult {
+        FFmpegReader r(video);
+        r.Open();
+        Clip clip(&r);
+        clip.Open();
+        Hue h(Keyframe(0.25));
+        clip.AddEffect(&h);
+        TrialResult result = timed_read(clip);
+        clip.Close();
+        r.Close();
+        return result;
+    });
+#endif
+
+#ifdef OPENSHOT_HAS_NEGATE
+    trials.emplace_back("Effect_Negate", [&]() -> TrialResult {
+        FFmpegReader r(video);
+        r.Open();
+        Clip clip(&r);
+        clip.Open();
+        Negate n;
+        clip.AddEffect(&n);
+        TrialResult result = timed_read(clip);
+        clip.Close();
+        r.Close();
+        return result;
+    });
+#endif
+
+#ifdef OPENSHOT_HAS_PIXELATE
+    trials.emplace_back("Effect_Pixelate", [&]() -> TrialResult {
+        FFmpegReader r(video);
+        r.Open();
+        Clip clip(&r);
+        clip.Open();
+        // 5 % pixelization across the full frame
+        Pixelate p(Keyframe(0.05), Keyframe(0.0), Keyframe(0.0), Keyframe(0.0), Keyframe(0.0));
+        clip.AddEffect(&p);
+        TrialResult result = timed_read(clip);
+        clip.Close();
+        r.Close();
+        return result;
+    });
+#endif
+
+#ifdef OPENSHOT_HAS_WAVE
+    trials.emplace_back("Effect_Wave", [&]() -> TrialResult {
+        FFmpegReader r(video);
+        r.Open();
+        Clip clip(&r);
+        clip.Open();
+        Wave w(Keyframe(0.5), Keyframe(3.0), Keyframe(0.5), Keyframe(0.0), Keyframe(2.0));
+        clip.AddEffect(&w);
+        TrialResult result = timed_read(clip);
+        clip.Close();
+        r.Close();
+        return result;
+    });
+#endif
+
+#ifdef OPENSHOT_HAS_CAPTION
+    {
+        const char* qt_platform = std::getenv("QT_QPA_PLATFORM");
+        const bool headless = qt_platform && std::string(qt_platform) == "offscreen";
+        if (!headless)
+    trials.emplace_back("Effect_Caption", [&]() -> TrialResult {
+        FFmpegReader r(video);
+        r.Open();
+        Clip clip(&r);
+        clip.Open();
+        Caption c("WEBVTT\n\n"
+                  "00:00:10.000 --> 00:00:15.000\nThis is a test caption.\n\n"
+                  "00:00:15.000 --> 00:00:20.000\nSecond caption line.");
+        clip.AddEffect(&c);
+        TrialResult result = timed_read(clip);
+        clip.Close();
+        r.Close();
+        return result;
+    });
+    }  // headless guard
+#endif
+
+#ifdef OPENSHOT_HAS_DISPLACE
+    trials.emplace_back("Effect_Displace", [&]() -> TrialResult {
+        FFmpegReader r(video);
+        r.Open();
+#  ifdef USE_IMAGEMAGICK
+        ImageReader map_reader(overlay);
+#  else
+        QtImageReader map_reader(overlay);
+#  endif
+        map_reader.Open();
+        Clip clip(&r);
+        clip.Open();
+        Displace d(&map_reader, Keyframe(0.5), Keyframe(0.1), Keyframe(0.1), Keyframe(0.5), Keyframe(1.5));
+        clip.AddEffect(&d);
+        TrialResult result = timed_read(clip);
+        map_reader.Close();
+        clip.Close();
+        r.Close();
+        return result;
+    });
+#endif
+
 #ifdef OPENSHOT_HAS_AUDIOVISUALIZATION
     const std::vector<std::pair<std::string, int>> audio_visualization_modes = {
         {"Effect_AudioVisualization_Waveform",       AUDIO_VISUALIZATION_WAVEFORM},
@@ -539,6 +719,37 @@ int main(int argc, char* argv[]) {
             return timed_audio_viz(mode.second);
         });
     }
+#endif
+
+#ifdef OPENSHOT_HAS_FRAMESCOPE
+    trials.emplace_back("FrameScope", [&]() -> TrialResult {
+        // Mirror the openshot-qt playback path from preview_thread.py:
+        //   FrameScope() → SetWaveformColumns(widget_width) → SetVectorscopeSize(128)
+        //   → SetFrame(frame) → individual typed getters (no JsonValue).
+        // Vectorscope size 128 is the value used during live playback when
+        // both waveform and vectorscope panels are visible.
+        FFmpegReader r(video);
+        r.Open();
+        auto t0 = Clock::now();
+        for (int64_t i = 0; i < BENCH_FRAMES; ++i) {
+            auto frame = r.GetFrame(START_FRAME + i);
+            FrameScope scope;
+            scope.SetWaveformColumns(256);
+            scope.SetVectorscopeSize(128);
+            scope.SetFrame(frame);  // triggers analyze()
+            // Read the same outputs openshot-qt reads
+            scope.GetVideoWaveformLuma();
+            scope.GetVideoHistogramLuma();
+            scope.GetVideoVectorscope();
+            scope.GetVideoAverageLuma();
+            scope.GetVideoClippedShadows();
+            scope.GetVideoClippedHighlights();
+            scope.GetAudioChannels();
+        }
+        double elapsed = chrono::duration<double>(Clock::now() - t0).count();
+        r.Close();
+        return {BENCH_FRAMES, elapsed};
+    });
 #endif
 
     if (options.list_only) {
