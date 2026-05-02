@@ -62,6 +62,9 @@ EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 	else if (effect_type == "Displace")
 		return new Displace();
 
+	else if (effect_type == "FilmGrain")
+		return new FilmGrain();
+
 	else if (effect_type == "Glow")
 		return new Glow();
 
@@ -161,6 +164,7 @@ Json::Value EffectInfo::JsonValue() {
 	root.append(Crop().JsonInfo());
 	root.append(Deinterlace().JsonInfo());
 	root.append(Displace().JsonInfo());
+	root.append(FilmGrain().JsonInfo());
 	root.append(Glow().JsonInfo());
 	root.append(Hue().JsonInfo());
 	root.append(LensFlare().JsonInfo());

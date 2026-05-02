@@ -17,7 +17,10 @@
 #include "openshot_catch.h"
 
 #include <QColor>
+#include <QDir>
+#include <QFile>
 #include <QImage>
+#include <QRect>
 #include <QSize>
 #include <QPainter>
 #include <vector>
@@ -34,11 +37,146 @@
 #include "Frame.h"
 #include "Fraction.h"
 #include "FrameMapper.h"
+#include "QtImageReader.h"
 #include "Timeline.h"
 #include "Json.h"
 #include "effects/Negate.h"
 
 using namespace openshot;
+
+namespace {
+	struct ClipTransformCase {
+		ScaleType scale;
+		double scale_x;
+		double scale_y;
+	};
+
+	QRect visible_bounds(const QImage& image) {
+		int left = image.width();
+		int top = image.height();
+		int right = -1;
+		int bottom = -1;
+
+		for (int y = 0; y < image.height(); ++y) {
+			for (int x = 0; x < image.width(); ++x) {
+				if (image.pixelColor(x, y).alpha() > 0) {
+					left = std::min(left, x);
+					top = std::min(top, y);
+					right = std::max(right, x);
+					bottom = std::max(bottom, y);
+				}
+			}
+		}
+
+		if (right < left || bottom < top) {
+			return QRect();
+		}
+		return QRect(QPoint(left, top), QPoint(right, bottom));
+	}
+
+	QRect red_bounds(const QImage& image) {
+		int left = image.width();
+		int top = image.height();
+		int right = -1;
+		int bottom = -1;
+
+		for (int y = 0; y < image.height(); ++y) {
+			for (int x = 0; x < image.width(); ++x) {
+				const QColor color = image.pixelColor(x, y);
+				if (color.red() > 200 && color.green() < 50 && color.blue() < 50) {
+					left = std::min(left, x);
+					top = std::min(top, y);
+					right = std::max(right, x);
+					bottom = std::max(bottom, y);
+				}
+			}
+		}
+
+		if (right < left || bottom < top) {
+			return QRect();
+		}
+		return QRect(QPoint(left, top), QPoint(right, bottom));
+	}
+
+	QSize expected_scaled_size(QSize source_size, ScaleType scale, int canvas_width, int canvas_height) {
+		switch (scale) {
+			case SCALE_FIT:
+				source_size.scale(canvas_width, canvas_height, Qt::KeepAspectRatio);
+				break;
+			case SCALE_STRETCH:
+				source_size.scale(canvas_width, canvas_height, Qt::IgnoreAspectRatio);
+				break;
+			case SCALE_CROP:
+				source_size.scale(canvas_width, canvas_height, Qt::KeepAspectRatioByExpanding);
+				break;
+			case SCALE_NONE:
+				break;
+		}
+		return source_size;
+	}
+
+	double expected_gravity_x(GravityType gravity, double canvas_width, double clip_width) {
+		switch (gravity) {
+			case GRAVITY_TOP:
+			case GRAVITY_CENTER:
+			case GRAVITY_BOTTOM:
+				return (canvas_width - clip_width) / 2.0;
+			case GRAVITY_TOP_RIGHT:
+			case GRAVITY_RIGHT:
+			case GRAVITY_BOTTOM_RIGHT:
+				return canvas_width - clip_width;
+			case GRAVITY_TOP_LEFT:
+			case GRAVITY_LEFT:
+			case GRAVITY_BOTTOM_LEFT:
+				return 0.0;
+		}
+		return 0.0;
+	}
+
+	double expected_gravity_y(GravityType gravity, double canvas_height, double clip_height) {
+		switch (gravity) {
+			case GRAVITY_LEFT:
+			case GRAVITY_CENTER:
+			case GRAVITY_RIGHT:
+				return (canvas_height - clip_height) / 2.0;
+			case GRAVITY_BOTTOM_LEFT:
+			case GRAVITY_BOTTOM:
+			case GRAVITY_BOTTOM_RIGHT:
+				return canvas_height - clip_height;
+			case GRAVITY_TOP_LEFT:
+			case GRAVITY_TOP:
+			case GRAVITY_TOP_RIGHT:
+				return 0.0;
+		}
+		return 0.0;
+	}
+
+	QRect render_clip_bounds(Clip& clip, int canvas_width, int canvas_height) {
+		clip.GetCache()->Clear();
+		auto background = std::make_shared<Frame>(1, canvas_width, canvas_height, "#00000000", 0, 2);
+		background->AddColor(QColor(Qt::transparent));
+		auto output = clip.GetFrame(background, 1);
+		return visible_bounds(*output->GetImage());
+	}
+
+	void check_location_endpoints_offscreen(Clip& clip, int canvas_width, int canvas_height) {
+		clip.location_x = openshot::Keyframe(-1.0);
+		clip.location_y = openshot::Keyframe(0.0);
+		CHECK(render_clip_bounds(clip, canvas_width, canvas_height).isNull());
+
+		clip.location_x = openshot::Keyframe(1.0);
+		clip.location_y = openshot::Keyframe(0.0);
+		CHECK(render_clip_bounds(clip, canvas_width, canvas_height).isNull());
+
+		clip.location_x = openshot::Keyframe(0.0);
+		clip.location_y = openshot::Keyframe(-1.0);
+		CHECK(render_clip_bounds(clip, canvas_width, canvas_height).isNull());
+
+		clip.location_x = openshot::Keyframe(0.0);
+		clip.location_y = openshot::Keyframe(1.0);
+		CHECK(render_clip_bounds(clip, canvas_width, canvas_height).isNull());
+	}
+}
 
 TEST_CASE( "default constructor", "[libopenshot][clip]" )
 {
@@ -1028,6 +1166,270 @@ TEST_CASE("all_composite_modes_simple_colors", "[libopenshot][clip][composite]")
 		CHECK(std::abs(result.blue()  - expect.blue())  <= 1);
 		CHECK(std::abs(result.alpha() - expect.alpha()) <= 1);
 	}
+}
+
+TEST_CASE("clip_location_minus_one_plus_one_places_scaled_clip_offscreen", "[libopenshot][clip][transform]")
+{
+	const int canvas_w = 160;
+	const int canvas_h = 90;
+	const std::vector<QSize> source_sizes = {
+		QSize(40, 30),
+		QSize(40, 40),
+	};
+
+	const std::vector<ClipTransformCase> cases = {
+		{openshot::SCALE_FIT, 1.0, 1.0},
+		{openshot::SCALE_CROP, 1.0, 1.0},
+		{openshot::SCALE_STRETCH, 1.0, 1.0},
+		{openshot::SCALE_NONE, 1.0, 1.0},
+		{openshot::SCALE_FIT, 0.5, 0.75},
+		{openshot::SCALE_CROP, 0.5, 0.75},
+		{openshot::SCALE_STRETCH, 0.5, 0.75},
+		{openshot::SCALE_NONE, 0.5, 0.75},
+		{openshot::SCALE_FIT, 1.25, 0.6},
+		{openshot::SCALE_CROP, 1.25, 0.6},
+		{openshot::SCALE_STRETCH, 1.25, 0.6},
+		{openshot::SCALE_NONE, 1.25, 0.6},
+	};
+
+	for (const auto& source_size : source_sizes) {
+		INFO("source=" << source_size.width() << "x" << source_size.height());
+		openshot::CacheMemory cache;
+		auto src = std::make_shared<openshot::Frame>(1, source_size.width(), source_size.height(), "#00000000", 0, 2);
+		src->AddColor(QColor(Qt::red));
+		cache.Add(src);
+
+		openshot::DummyReader dummy(openshot::Fraction(30, 1), source_size.width(), source_size.height(), 44100, 2, 1.0, &cache);
+		dummy.Open();
+
+		openshot::Clip clip;
+		clip.Reader(&dummy);
+		clip.Open();
+		clip.display = openshot::FRAME_DISPLAY_NONE;
+		clip.gravity = openshot::GRAVITY_CENTER;
+
+		for (const auto& c : cases) {
+			INFO("scale=" << c.scale << " scale_x=" << c.scale_x << " scale_y=" << c.scale_y);
+			clip.scale = c.scale;
+			clip.scale_x = openshot::Keyframe(c.scale_x);
+			clip.scale_y = openshot::Keyframe(c.scale_y);
+			check_location_endpoints_offscreen(clip, canvas_w, canvas_h);
+		}
+	}
+}
+
+TEST_CASE("clip_location_endpoints_offscreen_for_qt_square_image_reader", "[libopenshot][clip][transform]")
+{
+	const int canvas_w = 160;
+	const int canvas_h = 90;
+	const QString path = QDir::tempPath() + "/libopenshot_square_transform.png";
+
+	QImage source(40, 40, QImage::Format_RGBA8888_Premultiplied);
+	source.fill(QColor(Qt::red));
+	REQUIRE(source.save(path, "PNG"));
+
+	openshot::QtImageReader reader(path.toStdString());
+	openshot::Clip clip;
+	clip.Reader(&reader);
+	clip.Open();
+	clip.display = openshot::FRAME_DISPLAY_NONE;
+	clip.gravity = openshot::GRAVITY_CENTER;
+
+	openshot::Timeline timeline(canvas_w, canvas_h, openshot::Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	timeline.SetMaxSize(canvas_w, canvas_h);
+	clip.ParentTimeline(&timeline);
+
+	const std::vector<openshot::ScaleType> scales = {
+		openshot::SCALE_FIT,
+		openshot::SCALE_CROP,
+	};
+
+	for (auto scale : scales) {
+		INFO("scale=" << scale);
+		clip.scale = scale;
+		clip.scale_x = openshot::Keyframe(1.0);
+		clip.scale_y = openshot::Keyframe(1.0);
+		check_location_endpoints_offscreen(clip, canvas_w, canvas_h);
+	}
+
+	clip.Close();
+	QFile::remove(path);
+}
+
+TEST_CASE("timeline_location_y_endpoints_offscreen_for_qt_square_image_reader", "[libopenshot][clip][transform][timeline]")
+{
+	const int canvas_w = 160;
+	const int canvas_h = 90;
+	const QString path = QDir::tempPath() + "/libopenshot_square_timeline_transform.png";
+
+	QImage source(40, 40, QImage::Format_RGBA8888_Premultiplied);
+	source.fill(QColor(Qt::red));
+	REQUIRE(source.save(path, "PNG"));
+
+	openshot::QtImageReader reader(path.toStdString());
+	openshot::Clip clip;
+	clip.Reader(&reader);
+	clip.Open();
+	clip.display = openshot::FRAME_DISPLAY_NONE;
+	clip.gravity = openshot::GRAVITY_CENTER;
+	clip.Position(0.0);
+	clip.Start(0.0);
+	clip.End(1.0);
+
+	openshot::Timeline timeline(canvas_w, canvas_h, openshot::Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	timeline.SetMaxSize(canvas_w, canvas_h);
+	timeline.AddClip(&clip);
+	timeline.Open();
+
+	const std::vector<openshot::ScaleType> scales = {
+		openshot::SCALE_FIT,
+		openshot::SCALE_CROP,
+	};
+
+	for (auto scale : scales) {
+		INFO("scale=" << scale);
+		clip.scale = scale;
+		clip.scale_x = openshot::Keyframe(1.0);
+		clip.scale_y = openshot::Keyframe(1.0);
+
+		clip.GetCache()->Clear();
+		timeline.GetCache()->Clear();
+		clip.location_x = openshot::Keyframe(0.0);
+		clip.location_y = openshot::Keyframe(0.0);
+		CHECK_FALSE(red_bounds(*timeline.GetFrame(1)->GetImage()).isNull());
+
+		clip.GetCache()->Clear();
+		timeline.GetCache()->Clear();
+		clip.location_y = openshot::Keyframe(-1.0);
+		CHECK(red_bounds(*timeline.GetFrame(1)->GetImage()).isNull());
+
+		clip.GetCache()->Clear();
+		timeline.GetCache()->Clear();
+		clip.location_y = openshot::Keyframe(1.0);
+		CHECK(red_bounds(*timeline.GetFrame(1)->GetImage()).isNull());
+	}
+
+	timeline.Close();
+	clip.Close();
+	QFile::remove(path);
+}
+
+TEST_CASE("clip_gravity_anchors_scaled_clip_when_location_is_zero", "[libopenshot][clip][transform]")
+{
+	const int source_w = 40;
+	const int source_h = 30;
+	const int canvas_w = 160;
+	const int canvas_h = 90;
+
+	openshot::CacheMemory cache;
+	auto src = std::make_shared<openshot::Frame>(1, source_w, source_h, "#00000000", 0, 2);
+	src->AddColor(QColor(Qt::red));
+	cache.Add(src);
+
+	openshot::DummyReader dummy(openshot::Fraction(30, 1), source_w, source_h, 44100, 2, 1.0, &cache);
+	dummy.Open();
+
+	openshot::Clip clip;
+	clip.Reader(&dummy);
+	clip.Open();
+	clip.display = openshot::FRAME_DISPLAY_NONE;
+	clip.location_x = openshot::Keyframe(0.0);
+	clip.location_y = openshot::Keyframe(0.0);
+
+	const std::vector<openshot::GravityType> gravities = {
+		openshot::GRAVITY_TOP_LEFT,
+		openshot::GRAVITY_TOP,
+		openshot::GRAVITY_TOP_RIGHT,
+		openshot::GRAVITY_LEFT,
+		openshot::GRAVITY_CENTER,
+		openshot::GRAVITY_RIGHT,
+		openshot::GRAVITY_BOTTOM_LEFT,
+		openshot::GRAVITY_BOTTOM,
+		openshot::GRAVITY_BOTTOM_RIGHT,
+	};
+	const std::vector<openshot::ScaleType> scales = {
+		openshot::SCALE_FIT,
+		openshot::SCALE_CROP,
+		openshot::SCALE_STRETCH,
+		openshot::SCALE_NONE,
+	};
+	const std::vector<std::pair<double, double>> scale_factors = {
+		{0.5, 0.5},
+		{0.25, 0.75},
+	};
+
+	for (auto scale : scales) {
+		for (auto gravity : gravities) {
+			for (const auto& factor : scale_factors) {
+				INFO("scale=" << scale << " gravity=" << gravity
+					 << " scale_x=" << factor.first << " scale_y=" << factor.second);
+				clip.scale = scale;
+				clip.gravity = gravity;
+				clip.scale_x = openshot::Keyframe(factor.first);
+				clip.scale_y = openshot::Keyframe(factor.second);
+
+				QSize base = expected_scaled_size(QSize(source_w, source_h), scale, canvas_w, canvas_h);
+				const double expected_w = base.width() * factor.first;
+				const double expected_h = base.height() * factor.second;
+				const double expected_x = expected_gravity_x(gravity, canvas_w, expected_w);
+				const double expected_y = expected_gravity_y(gravity, canvas_h, expected_h);
+
+				QRect bounds = render_clip_bounds(clip, canvas_w, canvas_h);
+				REQUIRE_FALSE(bounds.isNull());
+				CHECK(bounds.left() == Approx(expected_x).margin(2.0));
+				CHECK(bounds.top() == Approx(expected_y).margin(2.0));
+				CHECK(bounds.width() == Approx(expected_w).margin(2.0));
+				CHECK(bounds.height() == Approx(expected_h).margin(2.0));
+			}
+		}
+	}
+}
+
+TEST_CASE("clip_location_uses_distance_from_gravity_anchor_to_offscreen_edge", "[libopenshot][clip][transform]")
+{
+	const int source_w = 40;
+	const int source_h = 30;
+	const int canvas_w = 160;
+	const int canvas_h = 90;
+
+	openshot::CacheMemory cache;
+	auto src = std::make_shared<openshot::Frame>(1, source_w, source_h, "#00000000", 0, 2);
+	src->AddColor(QColor(Qt::red));
+	cache.Add(src);
+
+	openshot::DummyReader dummy(openshot::Fraction(30, 1), source_w, source_h, 44100, 2, 1.0, &cache);
+	dummy.Open();
+
+	openshot::Clip clip;
+	clip.Reader(&dummy);
+	clip.Open();
+	clip.display = openshot::FRAME_DISPLAY_NONE;
+	clip.gravity = openshot::GRAVITY_CENTER;
+	clip.scale = openshot::SCALE_CROP;
+	clip.scale_x = openshot::Keyframe(1.0);
+	clip.scale_y = openshot::Keyframe(1.0);
+
+	QSize base = expected_scaled_size(QSize(source_w, source_h), openshot::SCALE_CROP, canvas_w, canvas_h);
+	const double expected_w = base.width();
+	const double expected_h = base.height();
+	const double anchor_x = expected_gravity_x(openshot::GRAVITY_CENTER, canvas_w, expected_w);
+	const double anchor_y = expected_gravity_y(openshot::GRAVITY_CENTER, canvas_h, expected_h);
+
+	clip.location_x = openshot::Keyframe(0.5);
+	clip.location_y = openshot::Keyframe(0.5);
+	QRect positive = render_clip_bounds(clip, canvas_w, canvas_h);
+	REQUIRE_FALSE(positive.isNull());
+	CHECK(positive.left() == Approx(anchor_x + ((canvas_w - anchor_x) * 0.5)).margin(2.0));
+	CHECK(positive.top() == Approx(anchor_y + ((canvas_h - anchor_y) * 0.5)).margin(2.0));
+
+	clip.location_x = openshot::Keyframe(-0.5);
+	clip.location_y = openshot::Keyframe(-0.5);
+	QRect negative = render_clip_bounds(clip, canvas_w, canvas_h);
+	REQUIRE_FALSE(negative.isNull());
+	CHECK(negative.left() == 0);
+	CHECK(negative.top() == 0);
+	CHECK(negative.width() == Approx((anchor_x + expected_w) * 0.5).margin(2.0));
+	CHECK(negative.height() == Approx((anchor_y + expected_h) * 0.5).margin(2.0));
 }
 
 TEST_CASE( "transform_path_identity_vs_scaled", "[libopenshot][clip][pr]" )

@@ -57,6 +57,7 @@ set(OPENSHOT_TESTS
   ChromaKey
   Crop
   Displace
+  FilmGrain
   Glow
   LensFlare
   AnalogTape
