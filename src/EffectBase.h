@@ -43,7 +43,7 @@ namespace openshot
 		bool has_video;	///< Determines if this effect manipulates the image of a frame
 		bool has_audio;	///< Determines if this effect manipulates the audio of a frame
 		bool has_tracked_object; ///< Determines if this effect track objects through the clip
-		bool apply_before_clip; ///< Apply effect before we evaluate the clip's keyframes
+		bool apply_before_clip; ///< Apply effect to source before we evaluate the clip's keyframes
 	};
 
 	/**

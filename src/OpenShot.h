@@ -126,6 +126,7 @@
 #include "FFmpegWriter.h"
 #include "Fraction.h"
 #include "Frame.h"
+#include "FrameScope.h"
 #include "FrameMapper.h"
 #ifdef USE_IMAGEMAGICK
 	#include "ImageReader.h"

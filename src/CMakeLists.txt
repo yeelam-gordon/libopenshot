@@ -47,6 +47,7 @@ add_feature_info("IWYU (include-what-you-use)" ENABLE_IWYU "Scan all source file
 # Main library sources
 set(OPENSHOT_SOURCES
   AudioBufferSource.cpp
+  AnimatedCurve.cpp
   AudioDevices.cpp
   AudioReaderSource.cpp
   AudioResampler.cpp
@@ -71,6 +72,7 @@ set(OPENSHOT_SOURCES
   FFmpegWriter.cpp
   Fraction.cpp
   Frame.cpp
+  FrameScope.cpp
   FrameMapper.cpp
   MemoryTrim.cpp
   Json.cpp
@@ -112,6 +114,7 @@ set(EFFECTS_SOURCES
   effects/Brightness.cpp
   effects/Caption.cpp
   effects/ChromaKey.cpp
+  effects/ColorGrade.cpp
   effects/ColorMap.cpp
   effects/ColorShift.cpp
   effects/Crop.cpp
