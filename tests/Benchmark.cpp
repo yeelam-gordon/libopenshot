@@ -525,10 +525,12 @@ int main(int argc, char* argv[]) {
     const std::vector<std::pair<std::string, int>> audio_visualization_modes = {
         {"Effect_AudioVisualization_Waveform",       AUDIO_VISUALIZATION_WAVEFORM},
         {"Effect_AudioVisualization_FilledWaveform", AUDIO_VISUALIZATION_FILLED_WAVEFORM},
+        {"Effect_AudioVisualization_Bars",           AUDIO_VISUALIZATION_BARS},
         {"Effect_AudioVisualization_Radial",         AUDIO_VISUALIZATION_RADIAL},
         {"Effect_AudioVisualization_Spectrum",       AUDIO_VISUALIZATION_SPECTRUM},
         {"Effect_AudioVisualization_PhaseScope",     AUDIO_VISUALIZATION_PHASE_SCOPE},
         {"Effect_AudioVisualization_Particles",      AUDIO_VISUALIZATION_PARTICLES},
+        {"Effect_AudioVisualization_VUMeter",        AUDIO_VISUALIZATION_VU_METER},
         {"Effect_AudioVisualization_RadialBars",     AUDIO_VISUALIZATION_RADIAL_BARS}
     };
 
