@@ -8,10 +8,12 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -348,11 +350,12 @@ int main(int argc, char* argv[]) {
 		{"Effect_AudioVisualization_RadialBars", AUDIO_VISUALIZATION_RADIAL_BARS}
 	};
 
-	for (const auto& mode : audio_visualization_modes) {
-		trials.emplace_back(mode.first, [mode]() {
-			run_audio_visualization_mode(mode.second, 240);
+	std::transform(audio_visualization_modes.begin(), audio_visualization_modes.end(), std::back_inserter(trials),
+		[](const auto& mode) -> Trial {
+			return {mode.first, [mode]() {
+				run_audio_visualization_mode(mode.second, 240);
+			}};
 		});
-	}
 
 	trials.emplace_back("Effect_AudioVisualization", [audio_visualization_modes]() {
 		for (const auto& mode : audio_visualization_modes)

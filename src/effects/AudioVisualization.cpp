@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 #include <random>
 #include <vector>
 
@@ -261,9 +262,10 @@ namespace {
 			float peak = 0.0f;
 			float peak_magnitude = 0.0f;
 			for (int sample = start; sample < end && sample < samples; ++sample) {
-				float mixed = 0.0f;
-				for (int channel = 0; channel < channels; ++channel)
-					mixed += channel_data[channel][sample];
+				float mixed = std::accumulate(channel_data.begin(), channel_data.end(), 0.0f,
+					[sample](float total, const float* channel) {
+						return total + channel[sample];
+					});
 				mixed /= channels;
 				const float magnitude = std::fabs(mixed);
 				if (magnitude > peak_magnitude) {
@@ -308,9 +310,7 @@ namespace {
 
 		const int first = clampi(std::lround(start * bins.size()), 0, static_cast<int>(bins.size()) - 1);
 		const int last = clampi(std::lround(end * bins.size()), first + 1, static_cast<int>(bins.size()));
-		float total = 0.0f;
-		for (int i = first; i < last; ++i)
-			total += bins[i];
+		const float total = std::accumulate(bins.begin() + first, bins.begin() + last, 0.0f);
 		return clampf(total / (last - first), 0.0f, 1.0f);
 	}
 
@@ -440,8 +440,8 @@ void AudioVisualization::init_effect_details()
 std::shared_ptr<openshot::Frame> AudioVisualization::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
 	const std::shared_ptr<QImage> frame_image = frame->GetImage();
-	int width = std::max(1, frame_image->width());
-	int height = std::max(1, frame_image->height());
+	int width = frame_image ? std::max(1, frame_image->width()) : 1;
+	int height = frame_image ? std::max(1, frame_image->height()) : 1;
 	if ((width <= 1 || height <= 1) && ParentTimeline()) {
 		if (Timeline* timeline = dynamic_cast<Timeline*>(ParentTimeline())) {
 			if (timeline->info.width > 1 && timeline->info.height > 1) {
