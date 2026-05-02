@@ -471,7 +471,9 @@ std::shared_ptr<openshot::Frame> AudioVisualization::GetFrame(std::shared_ptr<op
 		 (mode == AUDIO_VISUALIZATION_WAVEFORM || mode == AUDIO_VISUALIZATION_FILLED_WAVEFORM || mode == AUDIO_VISUALIZATION_VU_METER));
 	const bool overlay = channel_layout == AUDIO_VISUALIZATION_CHANNEL_OVERLAY;
 
-	auto visual = std::make_shared<QImage>(width, height, QImage::Format_RGBA8888_Premultiplied);
+	const bool use_filled_waveform_argb = mode == AUDIO_VISUALIZATION_FILLED_WAVEFORM;
+	auto visual = std::make_shared<QImage>(width, height,
+		use_filled_waveform_argb ? QImage::Format_ARGB32_Premultiplied : QImage::Format_RGBA8888_Premultiplied);
 	if (background == AUDIO_VISUALIZATION_BACKGROUND_SOURCE && frame_image && !frame_image->isNull()) {
 		if (frame_image->width() == width && frame_image->height() == height)
 			*visual = frame_image->copy();
@@ -551,12 +553,16 @@ std::shared_ptr<openshot::Frame> AudioVisualization::GetFrame(std::shared_ptr<op
 					} else {
 						painter.setBrush(alpha_color(lane_palette.glow, 0.78f * alpha_scale));
 					}
+					const int glow_step = 4;
 					const int glow_pad = std::max(1, static_cast<int>(std::ceil(styled_glow * 5.0f)));
-					for (int i = 0; i < static_cast<int>(values.size()); ++i) {
+					for (int i = 0; i < static_cast<int>(values.size()); i += glow_step) {
 						const int x0 = (i * width) / static_cast<int>(values.size());
-						const int x1 = ((i + 1) * width) / static_cast<int>(values.size());
-						const float magnitude = std::fabs(values[i]) * amplitude;
-						const float envelope = values[i] == 0.0f ? 0.0f : std::max(1.0f, magnitude);
+						const int x1 = ((std::min<int>(i + glow_step, values.size())) * width) / static_cast<int>(values.size());
+						float envelope = 0.0f;
+						for (int j = i; j < std::min<int>(i + glow_step, values.size()); ++j) {
+							const float magnitude = std::fabs(values[j]) * amplitude;
+							envelope = std::max(envelope, values[j] == 0.0f ? 0.0f : std::max(1.0f, magnitude));
+						}
 						const int y0 = clampi(static_cast<int>(std::floor(center_y - envelope)) - glow_pad, 0, height);
 						const int y1 = clampi(static_cast<int>(std::ceil(center_y + envelope)) + glow_pad, y0 + 1, height);
 						painter.drawRect(QRect(x0, y0, std::max(1, x1 - x0), y1 - y0));
