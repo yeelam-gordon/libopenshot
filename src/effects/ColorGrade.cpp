@@ -29,19 +29,19 @@ struct WheelBiasParams {
 	float blue_delta;
 };
 
-static float clamp01(float value) {
+static inline float clamp01(float value) {
 	return std::max(0.0f, std::min(1.0f, value));
 }
 
-static int clampByte(float value) {
+static inline int clampByte(float value) {
 	if (value <= 0.0f)
 		return 0;
 	if (value >= 255.0f)
 		return 255;
-	return static_cast<int>(std::round(value));
+	return static_cast<int>(value + 0.5f);
 }
 
-static float smooth_midtones(float luma) {
+static inline float smooth_midtones(float luma) {
 	const float centered = std::abs(luma - 0.5f) * 2.0f;
 	return clamp01(1.0f - centered * centered);
 }
@@ -66,7 +66,7 @@ static std::array<float, 256> build_curve_lut(const AnimatedCurve& curve, int64_
 }
 
 static float sample_curve_lut(const std::array<float, 256>& lut, float value) {
-	return lut[clampByte(clamp01(value) * 255.0f)];
+	return lut[static_cast<int>(value * 255.0f + 0.5f)];
 }
 
 static WheelBiasParams build_wheel_bias(const ColorGradeWheelEntry& wheel, int64_t frame_number) {
@@ -234,13 +234,28 @@ std::shared_ptr<openshot::Frame> ColorGrade::GetFrame(std::shared_ptr<openshot::
 	const float vibrance_value = std::max(-1.0f, std::min(1.0f, static_cast<float>(vibrance.GetValue(frame_number))));
 	const float mix_value = std::max(0.0f, std::min(1.0f, static_cast<float>(mix.GetValue(frame_number))));
 	const float inverse_mix = 1.0f - mix_value;
+	const bool wheels_enabled = wheels.IsEnabled(frame_number);
+	if (temperature_value == 0.0f && tint_value == 0.0f &&
+		exposure_value == 0.0f && contrast_value == 0.0f &&
+		highlights_value == 0.0f && shadows_value == 0.0f &&
+		saturation_value == 1.0f && vibrance_value == 0.0f &&
+		mix_value == 1.0f && !wheels_enabled &&
+		curve_all.enabled.GetValue(frame_number) < 0.5 &&
+		curve_red.enabled.GetValue(frame_number) < 0.5 &&
+		curve_green.enabled.GetValue(frame_number) < 0.5 &&
+		curve_blue.enabled.GetValue(frame_number) < 0.5) {
+		if (!lut_path.empty() && lut_intensity.GetValue(frame_number) > 0.0) {
+			sync_lut_effect();
+			return lut_effect.GetFrame(frame, frame_number);
+		}
+		return frame;
+	}
 	const float exposure_gain = std::pow(2.0f, exposure_value);
 	const float contrast_factor = std::max(0.0f, 1.0f + contrast_value);
 	const std::array<float, 256> curve_all_lut = build_curve_lut(curve_all, frame_number);
 	const std::array<float, 256> curve_red_lut = build_curve_lut(curve_red, frame_number);
 	const std::array<float, 256> curve_green_lut = build_curve_lut(curve_green, frame_number);
 	const std::array<float, 256> curve_blue_lut = build_curve_lut(curve_blue, frame_number);
-	const bool wheels_enabled = wheels.IsEnabled(frame_number);
 	const WheelBiasParams global_wheel = wheels_enabled ? build_wheel_bias(wheels.global, frame_number) : WheelBiasParams{0.0f, 0.0f, 0.0f};
 	const WheelBiasParams shadows_wheel = wheels_enabled ? build_wheel_bias(wheels.shadows, frame_number) : WheelBiasParams{0.0f, 0.0f, 0.0f};
 	const WheelBiasParams midtones_wheel = wheels_enabled ? build_wheel_bias(wheels.midtones, frame_number) : WheelBiasParams{0.0f, 0.0f, 0.0f};
