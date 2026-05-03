@@ -17,6 +17,7 @@
 #include "effects/AnalogTape.h"
 #include "effects/AudioVisualization.h"
 #include "effects/Bars.h"
+#include "effects/BeatSync.h"
 #include "effects/Blur.h"
 #include "effects/Brightness.h"
 #include "effects/Caption.h"

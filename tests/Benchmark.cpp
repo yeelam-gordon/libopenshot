@@ -44,6 +44,10 @@ extern "C" {
 #  include "effects/AudioVisualization.h"
 #  define OPENSHOT_HAS_AUDIOVISUALIZATION
 #endif
+#if __has_include("effects/BeatSync.h")
+#  include "effects/BeatSync.h"
+#  define OPENSHOT_HAS_BEATSYNC
+#endif
 #if __has_include("effects/Brightness.h")
 #  include "effects/Brightness.h"
 #  define OPENSHOT_HAS_BRIGHTNESS
@@ -207,7 +211,7 @@ static TrialResult timed_read(ReaderBase& r) {
     return {BENCH_FRAMES, chrono::duration<double>(Clock::now() - t0).count()};
 }
 
-#ifdef OPENSHOT_HAS_AUDIOVISUALIZATION
+#if defined(OPENSHOT_HAS_AUDIOVISUALIZATION) || defined(OPENSHOT_HAS_BEATSYNC)
 static std::shared_ptr<Frame> make_audio_visualization_frame(int64_t frame_number) {
     const int width = 1280;
     const int height = 720;
@@ -236,7 +240,9 @@ static std::shared_ptr<Frame> make_audio_visualization_frame(int64_t frame_numbe
     frame->AddAudio(true, 1, 0, right.data(), samples, 1.0f);
     return frame;
 }
+#endif
 
+#ifdef OPENSHOT_HAS_AUDIOVISUALIZATION
 static void run_audio_visualization_mode(int mode, int64_t start_frame, int64_t frames) {
     AudioVisualization effect;
     effect.visualization_type = mode;
@@ -719,6 +725,40 @@ int main(int argc, char* argv[]) {
             return timed_audio_viz(mode.second);
         });
     }
+
+    trials.emplace_back("Effect_AudioVisualization_SpectrumModes", [&]() -> TrialResult {
+        const std::vector<int> modes = {
+            AUDIO_VISUALIZATION_BARS,
+            AUDIO_VISUALIZATION_RADIAL,
+            AUDIO_VISUALIZATION_SPECTRUM,
+            AUDIO_VISUALIZATION_PARTICLES,
+            AUDIO_VISUALIZATION_RADIAL_BARS
+        };
+
+        auto t0 = Clock::now();
+        for (int mode : modes)
+            run_audio_visualization_mode(mode, START_FRAME, BENCH_FRAMES);
+        double elapsed = chrono::duration<double>(Clock::now() - t0).count();
+        return {static_cast<int64_t>(modes.size()) * BENCH_FRAMES, elapsed};
+    });
+#endif
+
+#ifdef OPENSHOT_HAS_BEATSYNC
+    trials.emplace_back("Effect_BeatSync", [&]() -> TrialResult {
+        BeatSync effect;
+        effect.frequency_low  = Keyframe(0.0);   // full band
+        effect.frequency_high = Keyframe(1.0);
+        effect.threshold      = Keyframe(0.05);
+        effect.attack_ms      = Keyframe(10.0);
+        effect.decay_ms       = Keyframe(200.0);
+
+        auto t0 = Clock::now();
+        for (int64_t i = 0; i < BENCH_FRAMES; ++i) {
+            int64_t fn = START_FRAME + i;
+            effect.GetFrame(make_audio_visualization_frame(fn), fn);
+        }
+        return {BENCH_FRAMES, chrono::duration<double>(Clock::now() - t0).count()};
+    });
 #endif
 
 #ifdef OPENSHOT_HAS_FRAMESCOPE

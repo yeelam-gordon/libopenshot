@@ -35,6 +35,9 @@ EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 	if (effect_type == "Bars")
 		return new Bars();
 
+	if (effect_type == "BeatSync")
+		return new BeatSync();
+
 	if (effect_type == "Blur")
 		return new Blur();
 
@@ -158,6 +161,7 @@ Json::Value EffectInfo::JsonValue() {
 	root.append(AnalogTape().JsonInfo());
 	root.append(AudioVisualization().JsonInfo());
 	root.append(Bars().JsonInfo());
+	root.append(BeatSync().JsonInfo());
 	root.append(Blur().JsonInfo());
 	root.append(Brightness().JsonInfo());
 	root.append(Caption().JsonInfo());
