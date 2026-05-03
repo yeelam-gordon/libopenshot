@@ -111,6 +111,7 @@ set(OPENSHOT_CV_SOURCES
 set(EFFECTS_SOURCES
   effects/AudioVisualization.cpp
   effects/Bars.cpp
+  effects/BeatSync.cpp
   effects/Blur.cpp
   effects/Brightness.cpp
   effects/Caption.cpp

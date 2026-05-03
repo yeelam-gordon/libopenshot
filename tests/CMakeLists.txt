@@ -53,6 +53,7 @@ set(OPENSHOT_TESTS
   VideoCacheThread
   # Effects
   AudioVisualization
+  BeatSync
   ColorGrade
   ColorMap
   ChromaKey

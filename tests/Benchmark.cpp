@@ -36,6 +36,7 @@
 #include "effects/ChromaKey.h"
 #include "effects/Crop.h"
 #include "effects/AudioVisualization.h"
+#include "effects/BeatSync.h"
 #include "effects/Mask.h"
 #include "effects/Saturation.h"
 
@@ -360,6 +361,17 @@ int main(int argc, char* argv[]) {
 	trials.emplace_back("Effect_AudioVisualization", [audio_visualization_modes]() {
 		for (const auto& mode : audio_visualization_modes)
 			run_audio_visualization_mode(mode.second, 120);
+	});
+
+	trials.emplace_back("Effect_BeatSync", [&]() {
+		BeatSync effect;
+		effect.frequency_low  = Keyframe(0.0);   // full band
+		effect.frequency_high = Keyframe(1.0);
+		effect.threshold      = Keyframe(0.05);
+		effect.attack_ms      = Keyframe(10.0);
+		effect.decay_ms       = Keyframe(200.0);
+		for (int64_t i = 1; i <= 120; ++i)
+			effect.GetFrame(make_audio_visualization_frame(i), i);
 	});
 
 	trials.emplace_back("Effect_AudioVisualization_SpectrumModes", [&]() {
