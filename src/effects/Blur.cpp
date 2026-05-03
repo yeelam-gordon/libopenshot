@@ -134,59 +134,99 @@ void Blur::ApplyCustomMaskBlend(std::shared_ptr<QImage> original_image, std::sha
 // Credit: http://blog.ivank.net/fastest-gaussian-blur.html (MIT License)
 // Modified to process all four channels in a pixel array
 void Blur::boxBlurH(unsigned char *scl, unsigned char *tcl, int w, int h, int r) {
-	float iarr = 1.0 / (r + r + 1);
+	const float iarr = 1.0f / (r + r + 1);
 
-	#pragma omp parallel for shared (scl, tcl)
+	#pragma omp parallel for shared(scl, tcl)
 	for (int i = 0; i < h; ++i) {
-		for (int ch = 0; ch < 4; ++ch) {
-			int ti = i * w, li = ti, ri = ti + r;
-			int fv = scl[ti * 4 + ch], lv = scl[(ti + w - 1) * 4 + ch], val = (r + 1) * fv;
-			for (int j = 0; j < r; ++j) {
-				val += scl[(ti + j) * 4 + ch];
+		const unsigned char* src = scl + i * w * 4;
+		unsigned char* dst = tcl + i * w * 4;
+
+		const unsigned char* first = src;
+		const unsigned char* last  = src + (w - 1) * 4;
+
+		int val[4];
+		for (int c = 0; c < 4; ++c)
+			val[c] = (r + 1) * first[c];
+		for (int j = 0; j < r; ++j) {
+			const unsigned char* p = src + j * 4;
+			for (int c = 0; c < 4; ++c)
+				val[c] += p[c];
+		}
+
+		int li = 0, ri = r;
+		for (int j = 0; j <= r; ++j, ++ri) {
+			const unsigned char* add = src + ri * 4;
+			unsigned char* out = dst + j * 4;
+			for (int c = 0; c < 4; ++c) {
+				val[c] += add[c] - first[c];
+				out[c] = (unsigned char)(val[c] * iarr + 0.5f);
 			}
-			for (int j = 0; j <= r; ++j) {
-				val += scl[ri++ * 4 + ch] - fv;
-				tcl[ti++ * 4 + ch] = round(val * iarr);
+		}
+		for (int j = r + 1; j < w - r; ++j, ++li, ++ri) {
+			const unsigned char* add = src + ri * 4;
+			const unsigned char* sub = src + li * 4;
+			unsigned char* out = dst + j * 4;
+			for (int c = 0; c < 4; ++c) {
+				val[c] += add[c] - sub[c];
+				out[c] = (unsigned char)(val[c] * iarr + 0.5f);
 			}
-			for (int j = r + 1; j < w - r; ++j) {
-				val += scl[ri++ * 4 + ch] - scl[li++ * 4 + ch];
-				tcl[ti++ * 4 + ch] = round(val * iarr);
-			}
-			for (int j = w - r; j < w; ++j) {
-				val += lv - scl[li++ * 4 + ch];
-				tcl[ti++ * 4 + ch] = round(val * iarr);
+		}
+		for (int j = w - r; j < w; ++j, ++li) {
+			const unsigned char* sub = src + li * 4;
+			unsigned char* out = dst + j * 4;
+			for (int c = 0; c < 4; ++c) {
+				val[c] += last[c] - sub[c];
+				out[c] = (unsigned char)(val[c] * iarr + 0.5f);
 			}
 		}
 	}
 }
 
 void Blur::boxBlurT(unsigned char *scl, unsigned char *tcl, int w, int h, int r) {
-	float iarr = 1.0 / (r + r + 1);
+	const float iarr = 1.0f / (r + r + 1);
+	const int stride = w * 4;
 
-	#pragma omp parallel for shared (scl, tcl)
-	for (int i = 0; i < w; i++) {
-		for (int ch = 0; ch < 4; ++ch) {
-			int ti = i, li = ti, ri = ti + r * w;
-			int fv = scl[ti * 4 + ch], lv = scl[(ti + w * (h - 1)) * 4 + ch], val = (r + 1) * fv;
-			for (int j = 0; j < r; j++) val += scl[(ti + j * w) * 4 + ch];
-			for (int j = 0; j <= r; j++) {
-				val += scl[ri * 4 + ch] - fv;
-				tcl[ti * 4 + ch] = round(val * iarr);
-				ri += w;
-				ti += w;
+	#pragma omp parallel for shared(scl, tcl)
+	for (int i = 0; i < w; ++i) {
+		const unsigned char* col_src = scl + i * 4;
+		unsigned char* col_dst = tcl + i * 4;
+
+		const unsigned char* first = col_src;
+		const unsigned char* last  = col_src + (h - 1) * stride;
+
+		int val[4];
+		for (int c = 0; c < 4; ++c)
+			val[c] = (r + 1) * first[c];
+		for (int j = 0; j < r; ++j) {
+			const unsigned char* p = col_src + j * stride;
+			for (int c = 0; c < 4; ++c)
+				val[c] += p[c];
+		}
+
+		int li = 0, ri = r;
+		for (int j = 0; j <= r; ++j, ++ri) {
+			const unsigned char* add = col_src + ri * stride;
+			unsigned char* out = col_dst + j * stride;
+			for (int c = 0; c < 4; ++c) {
+				val[c] += add[c] - first[c];
+				out[c] = (unsigned char)(val[c] * iarr + 0.5f);
 			}
-			for (int j = r + 1; j < h - r; j++) {
-				val += scl[ri * 4 + ch] - scl[li * 4 + ch];
-				tcl[ti * 4 + ch] = round(val * iarr);
-				li += w;
-				ri += w;
-				ti += w;
+		}
+		for (int j = r + 1; j < h - r; ++j, ++li, ++ri) {
+			const unsigned char* add = col_src + ri * stride;
+			const unsigned char* sub = col_src + li * stride;
+			unsigned char* out = col_dst + j * stride;
+			for (int c = 0; c < 4; ++c) {
+				val[c] += add[c] - sub[c];
+				out[c] = (unsigned char)(val[c] * iarr + 0.5f);
 			}
-			for (int j = h - r; j < h; j++) {
-				val += lv - scl[li * 4 + ch];
-				tcl[ti * 4 + ch] = round(val * iarr);
-				li += w;
-				ti += w;
+		}
+		for (int j = h - r; j < h; ++j, ++li) {
+			const unsigned char* sub = col_src + li * stride;
+			unsigned char* out = col_dst + j * stride;
+			for (int c = 0; c < 4; ++c) {
+				val[c] += last[c] - sub[c];
+				out[c] = (unsigned char)(val[c] * iarr + 0.5f);
 			}
 		}
 	}

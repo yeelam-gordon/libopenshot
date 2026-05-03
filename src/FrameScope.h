@@ -52,6 +52,7 @@ namespace openshot {
 		int video_height;
 		int waveform_bins;
 		std::vector<int> waveform_column_map;
+		std::vector<size_t> waveform_offset_map;  // pre-multiplied: waveform_column_map[x] * waveform_bins
 		int waveform_column_map_width;
 		int waveform_column_map_columns;
 		double avg_luma;

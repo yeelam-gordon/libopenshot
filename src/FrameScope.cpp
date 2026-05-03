@@ -28,10 +28,6 @@ static int clamp_int(int value, int min_value, int max_value) {
 	return std::max(min_value, std::min(max_value, value));
 }
 
-static int byte_bin(float value) {
-	return clamp_int(static_cast<int>(std::round(value * 255.0f)), 0, 255);
-}
-
 static const std::array<float, 256>& inv_alpha_lut() {
 	static const std::array<float, 256> lut = [] {
 		std::array<float, 256> values{};
@@ -167,9 +163,13 @@ void FrameScope::rebuild_waveform_column_map(int width) {
 		return;
 
 	waveform_column_map.resize(static_cast<size_t>(width));
+	waveform_offset_map.resize(static_cast<size_t>(width));
 	const int waveform_column_limit = waveform_columns - 1;
-	for (int x = 0; x < width; ++x)
-		waveform_column_map[static_cast<size_t>(x)] = clamp_int((x * waveform_columns) / std::max(1, width), 0, waveform_column_limit);
+	for (int x = 0; x < width; ++x) {
+		const int col = clamp_int((x * waveform_columns) / std::max(1, width), 0, waveform_column_limit);
+		waveform_column_map[static_cast<size_t>(x)] = col;
+		waveform_offset_map[static_cast<size_t>(x)] = static_cast<size_t>(col) * static_cast<size_t>(waveform_bins);
+	}
 
 	waveform_column_map_width = width;
 	waveform_column_map_columns = waveform_columns;
@@ -258,7 +258,7 @@ void FrameScope::analyze_video() {
 	ensure_video_buffers();
 
 	double luma_sum = 0.0;
-	double pixel_total = 0.0;
+	int64_t pixel_count = 0;
 	clipped_shadows = 0;
 	clipped_highlights = 0;
 	clipped_red = 0;
@@ -273,9 +273,11 @@ void FrameScope::analyze_video() {
 	const float vectorscope_scale = vectorscope_center;
 
 	for (int y = start_y; y < end_y; ++y) {
-		const unsigned char* row = bits + (static_cast<size_t>(y) * bytes_per_line);
-		for (int x = start_x; x < end_x; ++x) {
-			const unsigned char* pixel = row + (static_cast<size_t>(x) * 4);
+		// Use pointer increment instead of per-pixel index arithmetic (x * 4).
+		const unsigned char* pixel = bits + (static_cast<size_t>(y) * bytes_per_line)
+		                                   + (static_cast<size_t>(start_x) * 4);
+		int roi_column = 0;
+		for (int x = start_x; x < end_x; ++x, ++roi_column, pixel += 4) {
 			const int red   = pixel[0];  // RGBA8888: [R=0, G=1, B=2, A=3]
 			const int green = pixel[1];
 			const int blue  = pixel[2];
@@ -283,33 +285,43 @@ void FrameScope::analyze_video() {
 			if (alpha <= 0)
 				continue;
 
-			float redf = 0.0f;
-			float greenf = 0.0f;
-			float bluef = 0.0f;
+			int red_idx, green_idx, blue_idx;
+			float redf, greenf, bluef;
 			if (alpha == 255) {
-				redf = red * kInv255;
+				redf   = red   * kInv255;
 				greenf = green * kInv255;
-				bluef = blue * kInv255;
+				bluef  = blue  * kInv255;
+				// For fully-opaque pixels the bin index is just the raw byte
+				// value — no float rounding needed (round(byte/255 * 255) == byte).
+				red_idx   = red;
+				green_idx = green;
+				blue_idx  = blue;
 			} else {
-				const float unpremultiply = inv_alpha[alpha];
-				redf = std::min(1.0f, (red * unpremultiply) * kInv255);
-				greenf = std::min(1.0f, (green * unpremultiply) * kInv255);
-				bluef = std::min(1.0f, (blue * unpremultiply) * kInv255);
+				const float inv_a = inv_alpha[alpha];
+				redf   = std::min(1.0f, (red   * inv_a) * kInv255);
+				greenf = std::min(1.0f, (green * inv_a) * kInv255);
+				bluef  = std::min(1.0f, (blue  * inv_a) * kInv255);
+				// All values clamped to [0,1], so val*255+0.5 ∈ [0,255.5] — cast is safe.
+				red_idx   = static_cast<int>(redf   * 255.0f + 0.5f);
+				green_idx = static_cast<int>(greenf * 255.0f + 0.5f);
+				blue_idx  = static_cast<int>(bluef  * 255.0f + 0.5f);
 			}
-			const float luma = (0.299f * redf) + (0.587f * greenf) + (0.114f * bluef);
+			const float luma = 0.299f * redf + 0.587f * greenf + 0.114f * bluef;
+			// luma ∈ [0,1] (weighted sum of [0,1] values), so luma*255+0.5 ∈ [0,255.5].
+			const int luma_idx = static_cast<int>(luma * 255.0f + 0.5f);
 
-			const int luma_idx = byte_bin(luma);
-			const int red_idx = byte_bin(redf);
-			const int green_idx = byte_bin(greenf);
-			const int blue_idx = byte_bin(bluef);
-			const int roi_column = x - start_x;
-			const size_t waveform_offset = static_cast<size_t>(waveform_column_map[static_cast<size_t>(roi_column)]) * static_cast<size_t>(waveform_bins);
+			// Pre-multiplied offset: eliminates a runtime multiply per pixel.
+			const size_t waveform_offset = waveform_offset_map[static_cast<size_t>(roi_column)];
+
 			const float u = -0.14713f * redf - 0.28886f * greenf + 0.43600f * bluef;
-			const float v = 0.61500f * redf - 0.51499f * greenf - 0.10001f * bluef;
+			const float v =  0.61500f * redf - 0.51499f * greenf - 0.10001f * bluef;
 			const float normalized_u = u / kVectorscopeUMax;
 			const float normalized_v = v / kVectorscopeVMax;
-			const int vector_x = clamp_int(static_cast<int>(std::round(vectorscope_center + (normalized_u * vectorscope_scale))), 0, vectorscope_size - 1);
-			const int vector_y = clamp_int(static_cast<int>(std::round(vectorscope_center - (normalized_v * vectorscope_scale))), 0, vectorscope_size - 1);
+			// vectorscope_center + normalized_{u,v} * vectorscope_scale is always in
+			// [0, vectorscope_size-1]; adding 0.5 before truncation equals std::round
+			// for all non-negative values.
+			const int vector_x = clamp_int(static_cast<int>(vectorscope_center + (normalized_u * vectorscope_scale) + 0.5f), 0, vectorscope_size - 1);
+			const int vector_y = clamp_int(static_cast<int>(vectorscope_center - (normalized_v * vectorscope_scale) + 0.5f), 0, vectorscope_size - 1);
 			const size_t vector_offset = (static_cast<size_t>(vector_y) * static_cast<size_t>(vectorscope_size)) + static_cast<size_t>(vector_x);
 
 			histogram_luma[luma_idx]++;
@@ -323,21 +335,16 @@ void FrameScope::analyze_video() {
 			vectorscope[vector_offset]++;
 
 			luma_sum += luma;
-			pixel_total += 1.0;
-			if (luma_idx <= 2)
-				clipped_shadows++;
-			if (luma_idx >= 253)
-				clipped_highlights++;
-			if (red_idx >= 253)
-				clipped_red++;
-			if (green_idx >= 253)
-				clipped_green++;
-			if (blue_idx >= 253)
-				clipped_blue++;
+			++pixel_count;
+			if (luma_idx <= 2)   ++clipped_shadows;
+			if (luma_idx >= 253) ++clipped_highlights;
+			if (red_idx   >= 253) ++clipped_red;
+			if (green_idx >= 253) ++clipped_green;
+			if (blue_idx  >= 253) ++clipped_blue;
 		}
 	}
 
-	avg_luma = pixel_total > 0.0 ? (luma_sum / pixel_total) : 0.0;
+	avg_luma = pixel_count > 0 ? (luma_sum / static_cast<double>(pixel_count)) : 0.0;
 }
 
 void FrameScope::analyze_audio() {
