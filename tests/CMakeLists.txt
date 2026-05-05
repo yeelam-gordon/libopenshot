@@ -138,12 +138,21 @@ foreach(tname ${OPENSHOT_TESTS})
     openshot
   )
 
+  set(test_properties
+    LABELS ${tname}
+  )
+  if(tname STREQUAL "Caption")
+    list(APPEND test_properties
+      ENVIRONMENT "QT_QPA_PLATFORM=minimal"
+    )
+  endif()
+
   # Automatically configure CTest targets from Catch2 test cases
   catch_discover_tests(
     openshot-${tname}-test
     TEST_PREFIX ${tname}:
     PROPERTIES
-      LABELS ${tname}
+      ${test_properties}
   )
   list(APPEND CATCH2_TEST_TARGETS openshot-${tname}-test)
   list(APPEND CATCH2_TEST_NAMES ${tname})
