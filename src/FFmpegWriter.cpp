@@ -811,6 +811,9 @@ void FFmpegWriter::flush_encoders() {
 					avcodec_flush_buffers(video_codec_ctx);
 					break;
 				}
+				if (pkt->duration <= 0) {
+					pkt->duration = av_rescale_q(1, av_make_q(info.fps.den, info.fps.num), video_codec_ctx->time_base);
+				}
 				av_packet_rescale_ts(pkt, video_codec_ctx->time_base, video_st->time_base);
 				pkt->stream_index = video_st->index;
 				error_code = av_interleaved_write_frame(oc, pkt);
@@ -833,6 +836,9 @@ void FFmpegWriter::flush_encoders() {
 			}
 
 			// set the timestamp
+			if (pkt->duration <= 0) {
+				pkt->duration = av_rescale_q(1, av_make_q(info.fps.den, info.fps.num), video_codec_ctx->time_base);
+			}
 			av_packet_rescale_ts(pkt, video_codec_ctx->time_base, video_st->time_base);
 			pkt->stream_index = video_st->index;
 
@@ -1274,6 +1280,7 @@ AVStream *FFmpegWriter::add_video_stream() {
 	c->framerate = av_inv_q(c->time_base);
 #endif
 	st->avg_frame_rate = av_inv_q(c->time_base);
+	st->r_frame_rate = av_inv_q(c->time_base);
 	st->time_base.num = info.video_timebase.num;
 	st->time_base.den = info.video_timebase.den;
 
@@ -1556,6 +1563,8 @@ void FFmpegWriter::open_video(AVFormatContext *oc, AVStream *st) {
 	if (avcodec_open2(video_codec_ctx, codec, &opts) < 0)
 		throw InvalidCodec("Could not open video codec", path);
 	AV_COPY_PARAMS_FROM_CONTEXT(st, video_codec_ctx);
+	st->avg_frame_rate = av_make_q(info.fps.num, info.fps.den);
+	st->r_frame_rate = av_make_q(info.fps.num, info.fps.den);
 
 	// Free options
 	av_dict_free(&opts);
@@ -2229,6 +2238,7 @@ bool FFmpegWriter::write_video_packet(std::shared_ptr<Frame> frame, AVFrame *fra
 
 		// Set PTS (in frames and scaled to the codec's timebase)
 		pkt->pts = video_timestamp;
+		pkt->duration = av_rescale_q(1, av_make_q(info.fps.den, info.fps.num), video_codec_ctx->time_base);
 
 		/* write the compressed frame in the media file */
 		int error_code = av_interleaved_write_frame(oc, pkt);
@@ -2335,6 +2345,9 @@ bool FFmpegWriter::write_video_packet(std::shared_ptr<Frame> frame, AVFrame *fra
 		/* if zero size, it means the image was buffered */
 		if (error_code == 0 && got_packet_ptr) {
 			// set the timestamp
+			if (pkt->duration <= 0) {
+				pkt->duration = av_rescale_q(1, av_make_q(info.fps.den, info.fps.num), video_codec_ctx->time_base);
+			}
 			av_packet_rescale_ts(pkt, video_codec_ctx->time_base, video_st->time_base);
 			pkt->stream_index = video_st->index;
 
