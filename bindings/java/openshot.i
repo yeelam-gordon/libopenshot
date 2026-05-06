@@ -223,6 +223,7 @@ typedef struct OpenShotByteBuffer {
 %include "QtPlayer.h"
 %include "QtTextReader.h"
 %include "KeyFrame.h"
+%include "AnimatedCurve.h"
 %include "RendererBase.h"
 %include "Settings.h"
 %include "TimelineBase.h"
@@ -256,6 +257,7 @@ typedef struct OpenShotByteBuffer {
 %include "effects/Sharpen.h"
 %include "effects/Shift.h"
 %include "effects/SphericalProjection.cpp"
+%include "effects/DenoiseImage.h"
 %include "effects/Wave.h"
 #ifdef USE_OPENCV
     %include "effects/Stabilizer.h"

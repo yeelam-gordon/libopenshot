@@ -69,6 +69,7 @@ set(OPENSHOT_TESTS
   Sharpen
   Shadow
   SphericalEffect
+  DenoiseImage
   WaveEffect
 )
 

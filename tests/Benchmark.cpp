@@ -92,6 +92,10 @@ extern "C" {
 #  include "effects/Sharpen.h"
 #  define OPENSHOT_HAS_SHARPEN
 #endif
+#if __has_include("effects/DenoiseImage.h")
+#  include "effects/DenoiseImage.h"
+#  define OPENSHOT_HAS_DENOISEIMAGE
+#endif
 #if __has_include("effects/Hue.h")
 #  include "effects/Hue.h"
 #  define OPENSHOT_HAS_HUE
@@ -595,6 +599,21 @@ int main(int argc, char* argv[]) {
         clip.Open();
         Sharpen s(Keyframe(1.0), Keyframe(3.0), Keyframe(0.1));
         clip.AddEffect(&s);
+        TrialResult result = timed_read(clip);
+        clip.Close();
+        r.Close();
+        return result;
+    });
+#endif
+
+#ifdef OPENSHOT_HAS_DENOISEIMAGE
+    trials.emplace_back("Effect_DenoiseImage", [&]() -> TrialResult {
+        FFmpegReader r(video);
+        r.Open();
+        Clip clip(&r);
+        clip.Open();
+        DenoiseImage d;
+        clip.AddEffect(&d);
         TrialResult result = timed_read(clip);
         clip.Close();
         r.Close();
