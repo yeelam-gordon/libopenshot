@@ -40,6 +40,7 @@
 #include "effects/Shadow.h"
 #include "effects/SphericalProjection.h"
 #include "effects/Shift.h"
+#include "effects/DenoiseImage.h"
 #include "effects/Wave.h"
 
 /* Audio Effects */
