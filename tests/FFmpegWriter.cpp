@@ -18,13 +18,30 @@
 
 #include "FFmpegWriter.h"
 #include "Exceptions.h"
+#include "DummyReader.h"
 #include "FFmpegReader.h"
 #include "Fraction.h"
 #include "Frame.h"
 #include "Timeline.h"
 
+extern "C" {
+	#include <libavformat/avformat.h>
+}
+
 using namespace std;
 using namespace openshot;
+
+namespace {
+AVStream* first_video_stream(AVFormatContext* format_context)
+{
+	for (unsigned int index = 0; index < format_context->nb_streams; ++index) {
+		AVStream* stream = format_context->streams[index];
+		if (stream && stream->codecpar && stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
+			return stream;
+	}
+	return nullptr;
+}
+}
 
 TEST_CASE( "Webm", "[libopenshot][ffmpegwriter]" )
 {
@@ -233,6 +250,34 @@ TEST_CASE( "Gif", "[libopenshot][ffmpegwriter]" )
 
     // Close reader
     r1.Close();
+}
+
+TEST_CASE( "MP4_30fps_duration_exact_with_b_frames", "[libopenshot][ffmpegwriter][fps]" )
+{
+	const std::string out_name = "MP4_30fps_duration_exact_with_b_frames.mp4";
+	DummyReader reader(Fraction(30, 1), 1280, 720, 48000, 2, 1.0f);
+	reader.Open();
+
+	FFmpegWriter writer(out_name);
+	writer.SetVideoOptions(true, "mpeg4", Fraction(30, 1), 1280, 720, Fraction(1, 1), false, false, 15000000);
+	writer.Open();
+	writer.WriteFrame(&reader, 1, 30);
+	writer.Close();
+	reader.Close();
+
+	AVFormatContext* format_context = nullptr;
+	REQUIRE(avformat_open_input(&format_context, out_name.c_str(), nullptr, nullptr) == 0);
+	REQUIRE(avformat_find_stream_info(format_context, nullptr) >= 0);
+	AVStream* stream = first_video_stream(format_context);
+	REQUIRE(stream != nullptr);
+
+	CHECK(stream->r_frame_rate.num == 30);
+	CHECK(stream->r_frame_rate.den == 1);
+	CHECK(stream->avg_frame_rate.num == 30);
+	CHECK(stream->avg_frame_rate.den == 1);
+	CHECK(stream->duration == av_rescale_q(30, av_make_q(1, 30), stream->time_base));
+
+	avformat_close_input(&format_context);
 }
 
 TEST_CASE( "SizeOrdering_x264_CRF", "[libopenshot][ffmpegwriter][filesize]" )
