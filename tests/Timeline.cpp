@@ -1835,3 +1835,24 @@ TEST_CASE("GetFrame past-end requests are not cached", "[libopenshot][timeline][
 	CHECK(second->number == end + 120);
 	CHECK(t.GetCache()->Count() == count_before);
 }
+
+TEST_CASE("GetMaxFrame ignores tiny float overshoot at clip end", "[libopenshot][timeline][frames]") {
+	TimelineSolidColorReader reader(
+		64, 64,
+		30, 1,
+		600,
+		QColor(10, 20, 30, 255));
+	Clip clip(&reader);
+	clip.Layer(1);
+	clip.Position(0.0);
+	clip.End(16.83333396911621f);
+
+	Timeline t(640, 480, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	t.AddClip(&clip);
+
+	// This value reproduces an exported project where 505 frames at 30 FPS
+	// reloaded from JSON as a tiny float overshoot beyond the frame boundary.
+	REQUIRE(t.GetMaxTime() * t.info.fps.ToDouble() > 505.0);
+	REQUIRE(t.GetMaxTime() * t.info.fps.ToDouble() < 505.0001);
+	CHECK(t.GetMaxFrame() == 505);
+}
