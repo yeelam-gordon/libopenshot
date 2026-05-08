@@ -479,8 +479,13 @@ double Timeline::GetMaxTime() {
 int64_t Timeline::GetMaxFrame() {
 	const double fps = info.fps.ToDouble();
 	const double t = GetMaxTime();
-	// Inclusive start, exclusive end -> ceil at the end boundary
-	return static_cast<int64_t>(std::ceil(t * fps));
+	const double frames = t * fps;
+	constexpr double frame_boundary_epsilon = 1e-4;
+
+	// End is exclusive; ignore tiny float overshoots at frame boundaries.
+	if (frames > 0.0 && frames < frame_boundary_epsilon)
+		return 1;
+	return static_cast<int64_t>(std::ceil(frames - frame_boundary_epsilon));
 }
 
 // Compute the first frame# based on the first clip position
