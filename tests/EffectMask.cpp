@@ -27,6 +27,7 @@
 #include "effects/Pixelate.h"
 #include "effects/Saturation.h"
 #include "effects/Sharpen.h"
+#include "effects/Tracker.h"
 #include "QtImageReader.h"
 #include "openshot_catch.h"
 
@@ -153,17 +154,70 @@ TEST_CASE("EffectBase mask fields serialize and deserialize", "[effect][mask][js
 
 	Brightness effect(Keyframe(0.0), Keyframe(0.0));
 	effect.mask_invert = true;
+	effect.MaskSourceId("tracker-effect-id");
 	effect.MaskReader(new QtImageReader(mask_path));
 
 	const Json::Value json = effect.JsonValue();
 	CHECK(json["mask_invert"].asBool());
+	CHECK(json["mask_source_id"].asString() == "tracker-effect-id");
 	REQUIRE(json["mask_reader"].isObject());
 	CHECK(json["mask_reader"]["type"].asString() == "QtImageReader");
 
 	Brightness copy(Keyframe(0.0), Keyframe(0.0));
 	copy.SetJsonValue(json);
 	CHECK(copy.mask_invert);
+	CHECK(copy.MaskSourceId() == "tracker-effect-id");
 	CHECK(copy.MaskReader() != nullptr);
+}
+
+TEST_CASE("EffectBase can use tracker effect bbox as generated mask source", "[effect][mask][tracker]") {
+	Clip parent_clip;
+	Tracker tracker;
+	tracker.Id("tracker-source");
+	tracker.trackedData->SetBaseFPS(Fraction(30, 1));
+	tracker.trackedData->AddBox(1, 0.25f, 0.5f, 0.5f, 1.0f, 0.0f);
+	tracker.trackedData->draw_box = Keyframe(0.0);
+
+	Brightness brightness(Keyframe(0.8), Keyframe(0.0));
+	brightness.MaskSourceId("tracker-source");
+
+	parent_clip.AddEffect(&tracker);
+	parent_clip.AddEffect(&brightness);
+
+	auto frame = std::make_shared<Frame>(1, 4, 1, "#000000");
+	frame->GetImage()->fill(QColor(80, 80, 80, 255));
+
+	auto out = brightness.ProcessFrame(frame, 1);
+	auto out_image = out->GetImage();
+
+	CHECK(out_image->pixelColor(0, 0).red() > 80);
+	CHECK(out_image->pixelColor(1, 0).red() > 80);
+	CHECK(out_image->pixelColor(2, 0).red() == 80);
+	CHECK(out_image->pixelColor(3, 0).red() == 80);
+}
+
+TEST_CASE("EffectBase tracker mask source with no visible bbox preserves original frame", "[effect][mask][tracker]") {
+	Clip parent_clip;
+	Tracker tracker;
+	tracker.Id("tracker-source");
+	tracker.trackedData->SetBaseFPS(Fraction(30, 1));
+	tracker.trackedData->AddBox(1, 0.25f, 0.5f, 0.5f, 1.0f, 0.0f);
+	tracker.trackedData->visible = Keyframe(0.0);
+
+	Brightness brightness(Keyframe(0.8), Keyframe(0.0));
+	brightness.MaskSourceId("tracker-source");
+
+	parent_clip.AddEffect(&tracker);
+	parent_clip.AddEffect(&brightness);
+
+	auto frame = std::make_shared<Frame>(1, 4, 1, "#000000");
+	frame->GetImage()->fill(QColor(80, 80, 80, 255));
+
+	auto out = brightness.ProcessFrame(frame, 1);
+	auto out_image = out->GetImage();
+
+	for (int x = 0; x < 4; ++x)
+		CHECK(out_image->pixelColor(x, 0).red() == 80);
 }
 
 TEST_CASE("Blur mask mode drive amount differs from post blend", "[effect][mask][blur]") {
