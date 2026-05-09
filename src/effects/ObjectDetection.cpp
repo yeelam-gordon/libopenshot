@@ -104,7 +104,8 @@ std::shared_ptr<Frame> ObjectDetection::GetFrame(std::shared_ptr<Frame> frame, i
 
                     // Set the pen for the border
                     QPen pen(QColor(stroke_rgba[0], stroke_rgba[1], stroke_rgba[2], 255 * stroke_alpha));
-                    pen.setWidth(stroke_width);
+                    pen.setWidthF(trackedObject->ScaledStrokeWidth(
+                        frame_number, frame_image->width(), frame_image->height()));
                     painter.setPen(pen);
 
                     // Set the brush for the background

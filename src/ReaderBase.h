@@ -80,6 +80,7 @@ namespace openshot
 		openshot::ClipBase* clip; ///< Pointer to the parent clip instance (if any)
 		int max_decode_width; ///< Optional maximum decoded frame width (0 disables the limit)
 		int max_decode_height; ///< Optional maximum decoded frame height (0 disables the limit)
+		bool apply_orientation_metadata; ///< Apply source orientation metadata while reading frames
 
 	public:
 
@@ -106,6 +107,12 @@ namespace openshot
 
 		/// Return true when a maximum decoded frame size is active.
 		bool HasMaxDecodeSize() const;
+
+		/// Set whether readers should apply source orientation metadata to returned frames.
+		void ApplyOrientationMetadata(bool value);
+
+		/// Return whether readers apply source orientation metadata to returned frames.
+		bool ApplyOrientationMetadata() const;
 
 		/// Close the reader (and any resources it was consuming)
 		virtual void Close() = 0;

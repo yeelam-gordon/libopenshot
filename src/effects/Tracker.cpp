@@ -110,7 +110,8 @@ std::shared_ptr<Frame> Tracker::GetFrame(std::shared_ptr<Frame> frame, int64_t f
 			stroke_rgba[0], stroke_rgba[1], stroke_rgba[2],
 			int(255 * stroke_alpha)
 		));
-		pen.setWidth(stroke_width);
+		pen.setWidthF(trackedData->ScaledStrokeWidth(
+			frame_number, frame_image->width(), frame_image->height()));
 		painter.setPen(pen);
 
 		QBrush brush(QColor(

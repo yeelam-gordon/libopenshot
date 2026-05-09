@@ -184,6 +184,9 @@ namespace openshot
 			return const_cast<TrackedObjectBBox *>(this)->GetBox(frame_number);
 		}
 
+		/// Return stroke width adjusted for source-to-output raster scaling
+		double ScaledStrokeWidth(int64_t frame_number, int image_width, int image_height) const;
+
 		/// Load the bounding-boxes information from the protobuf file
 		bool LoadBoxData(std::string inputFilePath);
 

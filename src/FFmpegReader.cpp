@@ -20,6 +20,8 @@
 #include <sstream>
 #include <unistd.h>
 
+#include <QTransform>
+
 #include "FFmpegUtilities.h"
 #include "effects/CropHelpers.h"
 
@@ -110,7 +112,7 @@ FFmpegReader::FFmpegReader(const std::string &path, DurationStrategy duration_st
 		  seek_audio_frame_found(0), seek_video_frame_found(0), last_seek_max_frame(-1), seek_stagnant_count(0),
 		  last_frame(0), largest_frame_processed(0), current_video_frame(0), audio_pts(0), video_pts(0),
 		  hold_packet(false), pts_offset_seconds(0.0), audio_pts_seconds(0.0), video_pts_seconds(0.0),
-		  NO_PTS_OFFSET(-99999), enable_seek(true) {
+		  NO_PTS_OFFSET(-99999), source_width(0), source_height(0), source_rotation(0.0), enable_seek(true) {
 
 	// Initialize FFMpeg, and register all formats and codecs
 	AV_REGISTER_ALL
@@ -713,6 +715,7 @@ void FFmpegReader::Open() {
 				break;
 			}
 		}
+		UpdateOrientedVideoInfo();
 
 		// Init previous audio location to zero
 		previous_packet_location.frame = -1;
@@ -1032,7 +1035,13 @@ void FFmpegReader::UpdateAudioInfo() {
 
 void FFmpegReader::UpdateVideoInfo() {
 	if (info.vcodec.length() > 0) {
-		// Skip init - if info struct already populated
+		// JSON-loaded readers may already have display-oriented info populated,
+		// but decoding still needs the raw stream dimensions for orientation.
+		if (info.has_video && pStream && pCodecCtx) {
+			source_height = AV_GET_CODEC_ATTRIBUTES(pStream, pCodecCtx)->height;
+			source_width = AV_GET_CODEC_ATTRIBUTES(pStream, pCodecCtx)->width;
+			UpdateOrientedVideoInfo();
+		}
 		return;
 	}
 
@@ -1044,8 +1053,10 @@ void FFmpegReader::UpdateVideoInfo() {
 	// Set values of FileInfo struct
 	info.has_video = true;
 	info.file_size = pFormatCtx->pb ? avio_size(pFormatCtx->pb) : -1;
-	info.height = AV_GET_CODEC_ATTRIBUTES(pStream, pCodecCtx)->height;
-	info.width = AV_GET_CODEC_ATTRIBUTES(pStream, pCodecCtx)->width;
+	source_height = AV_GET_CODEC_ATTRIBUTES(pStream, pCodecCtx)->height;
+	source_width = AV_GET_CODEC_ATTRIBUTES(pStream, pCodecCtx)->width;
+	info.height = source_height;
+	info.width = source_width;
 	info.vcodec = pCodecCtx->codec->name;
 	info.video_bit_rate = (pFormatCtx->bit_rate / 8);
 
@@ -1190,6 +1201,55 @@ void FFmpegReader::UpdateVideoInfo() {
 		QString str_value = tag->value;
 		info.metadata[str_key.toStdString()] = str_value.trimmed().toStdString();
 	}
+
+	UpdateOrientedVideoInfo();
+}
+
+void FFmpegReader::UpdateOrientedVideoInfo() {
+	if (!ApplyOrientationMetadata() || !info.has_video)
+		return;
+
+	if (source_width <= 0 || source_height <= 0) {
+		source_width = info.width;
+		source_height = info.height;
+	}
+	if (source_width <= 0 || source_height <= 0)
+		return;
+
+	source_rotation = 0.0;
+	const auto rotate_meta = info.metadata.find("rotate");
+	if (rotate_meta != info.metadata.end())
+		source_rotation = strtod(rotate_meta->second.c_str(), nullptr);
+
+	const double radians = source_rotation * M_PI / 180.0;
+	const int oriented_width = static_cast<int>(std::round(
+		std::fabs(source_width * std::cos(radians)) +
+		std::fabs(source_height * std::sin(radians))));
+	const int oriented_height = static_cast<int>(std::round(
+		std::fabs(source_width * std::sin(radians)) +
+		std::fabs(source_height * std::cos(radians))));
+
+	if (oriented_width > 0 && oriented_height > 0) {
+		info.width = oriented_width;
+		info.height = oriented_height;
+
+		Fraction size(info.width * info.pixel_ratio.num, info.height * info.pixel_ratio.den);
+		size.Reduce();
+		info.display_ratio.num = size.num;
+		info.display_ratio.den = size.den;
+	}
+}
+
+void FFmpegReader::ApplyFrameOrientation(std::shared_ptr<openshot::Frame> frame) {
+	if (!ApplyOrientationMetadata() || std::fabs(source_rotation) < 0.0001 || !frame || !frame->has_image_data)
+		return;
+
+	auto image = frame->GetImage();
+	if (!image || image->isNull())
+		return;
+
+	QImage oriented = image->transformed(QTransform().rotate(source_rotation), Qt::SmoothTransformation);
+	frame->AddImage(std::make_shared<QImage>(oriented));
 }
 
 bool FFmpegReader::GetIsDurationKnown() {
@@ -1672,14 +1732,16 @@ bool FFmpegReader::GetAVFrame() {
 			AVPixelFormat decoded_pix_fmt = (AVPixelFormat)(decoded_frame->format);
 			if (decoded_pix_fmt == AV_PIX_FMT_NONE)
 				decoded_pix_fmt = (AVPixelFormat)(pStream->codecpar->format);
-			if (AV_ALLOCATE_IMAGE(pFrame, decoded_pix_fmt, info.width, info.height) <= 0) {
+			const int decoded_width = decoded_frame->width > 0 ? decoded_frame->width : info.width;
+			const int decoded_height = decoded_frame->height > 0 ? decoded_frame->height : info.height;
+			if (AV_ALLOCATE_IMAGE(pFrame, decoded_pix_fmt, decoded_width, decoded_height) <= 0) {
 				throw OutOfMemory("Failed to allocate image buffer", path);
 			}
 			av_image_copy(pFrame->data, pFrame->linesize, (const uint8_t**)decoded_frame->data, decoded_frame->linesize,
-										decoded_pix_fmt, info.width, info.height);
+										decoded_pix_fmt, decoded_width, decoded_height);
 			pFrame->format = decoded_pix_fmt;
-			pFrame->width = info.width;
-			pFrame->height = info.height;
+			pFrame->width = decoded_width;
+			pFrame->height = decoded_height;
 			pFrame->color_range = decoded_frame->color_range;
 			pFrame->colorspace = decoded_frame->colorspace;
 			pFrame->color_primaries = decoded_frame->color_primaries;
@@ -1957,6 +2019,14 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
 		}
 	}
 
+	// Max-size calculations above are in display-oriented coordinates. Scaling
+	// happens before orientation is applied, so swap the decode bounds for
+	// quarter-turn sources to preserve detail after rotation.
+	const int quarter_turn = ((static_cast<int>(std::round(source_rotation / 90.0)) * 90) % 360 + 360) % 360;
+	if (ApplyOrientationMetadata() && (quarter_turn == 90 || quarter_turn == 270)) {
+		std::swap(max_width, max_height);
+	}
+
 	// Determine if image needs to be scaled (for performance reasons)
 	int original_height = src_height;
 	if (max_width != 0 && max_height != 0 && max_width < width && max_height < height) {
@@ -2056,6 +2126,7 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
 		// Add image with alpha channel (this will be converted to premultipled when needed, but is slower)
 		f->AddImage(width, height, bytes_per_pixel, QImage::Format_RGBA8888, buffer);
 	}
+	ApplyFrameOrientation(f);
 
 	// Update working cache
 	working_cache.Add(f);

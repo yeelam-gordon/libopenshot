@@ -82,6 +82,7 @@ void Clip::init_settings()
 	composite = COMPOSITE_SOURCE_OVER;
 	waveform = false;
 	waveform_mode = AUDIO_VISUALIZATION_FILLED_WAVEFORM;
+	reader_orientation_mode = ReaderOrientationMode::Reader;
 	previous_properties = "";
 	parentObjectId = "";
 
@@ -151,6 +152,11 @@ void Clip::init_reader_rotation() {
 	// Only apply metadata rotation if clip rotation has not been explicitly set.
 	if (rotation.GetCount() > 0 || !reader)
 		return;
+
+	if (reader->ApplyOrientationMetadata()) {
+		rotation = Keyframe(0.0f);
+		return;
+	}
 
 	const auto rotate_meta = reader->info.metadata.find("rotate");
 	if (rotate_meta == reader->info.metadata.end()) {
@@ -359,6 +365,7 @@ void Clip::Reader(ReaderBase* new_reader)
 
 	// set parent
 	if (reader) {
+		reader->ApplyOrientationMetadata(reader_orientation_mode == ReaderOrientationMode::Reader);
 		reader->ParentClip(this);
 
 		// Init reader info struct
@@ -962,6 +969,15 @@ Json::Value Clip::JsonValue() const {
 	root["composite"] = composite;
 	root["waveform"] = waveform;
 	root["waveform_mode"] = waveform_mode;
+	switch (reader_orientation_mode) {
+		case ReaderOrientationMode::LegacyClipTransform:
+			root["reader_orientation_mode"] = "legacy_clip_transform";
+			break;
+		case ReaderOrientationMode::Reader:
+		default:
+			root["reader_orientation_mode"] = "reader";
+			break;
+	}
 	root["scale_x"] = scale_x.JsonValue();
 	root["scale_y"] = scale_y.JsonValue();
 	root["location_x"] = location_x.JsonValue();
@@ -1033,6 +1049,19 @@ void Clip::SetJsonValue(const Json::Value root) {
 
 	// Set parent data
 	ClipBase::SetJsonValue(root);
+
+	// Older project files predate reader-applied orientation metadata and stored
+	// phone/camera rotation as ordinary clip rotation/scale keyframes.
+	if (root["reader_orientation_mode"].isNull()) {
+		reader_orientation_mode = ReaderOrientationMode::LegacyClipTransform;
+	} else {
+		const std::string mode = root["reader_orientation_mode"].asString();
+		if (mode == "legacy_clip_transform") {
+			reader_orientation_mode = ReaderOrientationMode::LegacyClipTransform;
+		} else {
+			reader_orientation_mode = ReaderOrientationMode::Reader;
+		}
+	}
 
 	// Set data from Json (if key is found)
 	if (!root["parentObjectId"].isNull()){
@@ -1213,6 +1242,7 @@ void Clip::SetJsonValue(const Json::Value root) {
 
 			// mark as managed reader and set parent
 			if (reader) {
+				reader->ApplyOrientationMetadata(reader_orientation_mode == ReaderOrientationMode::Reader);
 				reader->ParentClip(this);
 				allocated_reader = reader;
 			}

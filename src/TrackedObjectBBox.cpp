@@ -11,11 +11,14 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
+#include <algorithm>
+#include <cmath>
 #include <fstream>
 
 #include "TrackedObjectBBox.h"
 
 #include "Clip.h"
+#include "TimelineBase.h"
 
 #include "trackerdata.pb.h"
 #include <google/protobuf/util/time_util.h>
@@ -172,6 +175,46 @@ BBox TrackedObjectBBox::GetBox(int64_t frame_number)
 	interpolatedBBox.angle += this->rotation.GetValue(frame_number);
 
 	return interpolatedBBox;
+}
+
+double TrackedObjectBBox::ScaledStrokeWidth(int64_t frame_number, int image_width, int image_height) const
+{
+	const double base_width = std::max(0.0, static_cast<double>(stroke_width.GetValue(frame_number)));
+	Clip* parent_clip = static_cast<Clip*>(ParentClip());
+	if (!parent_clip || image_width <= 0 || image_height <= 0)
+		return base_width;
+
+	int target_width = image_width;
+	int target_height = image_height;
+	if (parent_clip->ParentTimeline()) {
+		TimelineBase* timeline = static_cast<TimelineBase*>(parent_clip->ParentTimeline());
+		if (timeline->preview_width > 0)
+			target_width = timeline->preview_width;
+		if (timeline->preview_height > 0)
+			target_height = timeline->preview_height;
+	}
+
+	QSize output_size(image_width, image_height);
+	switch (parent_clip->scale) {
+		case SCALE_FIT:
+			output_size.scale(target_width, target_height, Qt::KeepAspectRatio);
+			break;
+		case SCALE_STRETCH:
+			output_size.scale(target_width, target_height, Qt::IgnoreAspectRatio);
+			break;
+		case SCALE_CROP:
+			output_size.scale(target_width, target_height, Qt::KeepAspectRatioByExpanding);
+			break;
+		case SCALE_NONE:
+		default:
+			break;
+	}
+	if (output_size.width() <= 0 || output_size.height() <= 0)
+		return base_width;
+
+	const double raster_scale_x = static_cast<double>(image_width) / output_size.width();
+	const double raster_scale_y = static_cast<double>(image_height) / output_size.height();
+	return base_width * std::sqrt(raster_scale_x * raster_scale_y);
 }
 
 // Interpolate the bouding-boxes properties
