@@ -360,7 +360,7 @@ TEST_CASE( "Metadata rotation does not override manual scaling", "[libopenshot][
 	CHECK(clip.scale_y.GetPoint(0).co.Y == Approx(0.5).margin(0.00001));
 }
 
-TEST_CASE( "Metadata rotation scales only default clips", "[libopenshot][clip]" )
+TEST_CASE( "Metadata rotation defaults to reader orientation for new clips", "[libopenshot][clip]" )
 {
 	DummyReader rotated(Fraction(24, 1), 640, 480, 48000, 2, 5.0f);
 	rotated.info.metadata["rotate"] = "90";
@@ -369,9 +369,10 @@ TEST_CASE( "Metadata rotation scales only default clips", "[libopenshot][clip]" 
 	auto_clip.Reader(&rotated);
 
 	REQUIRE(auto_clip.rotation.GetCount() == 1);
-	CHECK(auto_clip.rotation.GetPoint(0).co.Y == Approx(90.0).margin(0.00001));
-	CHECK(auto_clip.scale_x.GetPoint(0).co.Y == Approx(0.75).margin(0.00001));
-	CHECK(auto_clip.scale_y.GetPoint(0).co.Y == Approx(0.75).margin(0.00001));
+	CHECK(auto_clip.rotation.GetPoint(0).co.Y == Approx(0.0).margin(0.00001));
+	CHECK(auto_clip.scale_x.GetPoint(0).co.Y == Approx(1.0).margin(0.00001));
+	CHECK(auto_clip.scale_y.GetPoint(0).co.Y == Approx(1.0).margin(0.00001));
+	CHECK(auto_clip.Reader()->ApplyOrientationMetadata() == true);
 
 	DummyReader rotated_custom(Fraction(24, 1), 640, 480, 48000, 2, 5.0f);
 	rotated_custom.info.metadata["rotate"] = "90";
@@ -382,9 +383,30 @@ TEST_CASE( "Metadata rotation scales only default clips", "[libopenshot][clip]" 
 	custom_clip.Reader(&rotated_custom);
 
 	REQUIRE(custom_clip.rotation.GetCount() == 1);
-	CHECK(custom_clip.rotation.GetPoint(0).co.Y == Approx(90.0).margin(0.00001));
+	CHECK(custom_clip.rotation.GetPoint(0).co.Y == Approx(0.0).margin(0.00001));
 	CHECK(custom_clip.scale_x.GetPoint(0).co.Y == Approx(0.5).margin(0.00001));
 	CHECK(custom_clip.scale_y.GetPoint(0).co.Y == Approx(0.5).margin(0.00001));
+}
+
+TEST_CASE( "Clip JSON stores internal reader orientation compatibility mode", "[libopenshot][clip][json]" )
+{
+	Clip new_clip;
+	Json::Value new_json = new_clip.JsonValue();
+	REQUIRE(new_json["reader_orientation_mode"].asString() == "reader");
+
+	Clip legacy_clip;
+	legacy_clip.SetJson("{\"reader\":{\"type\":\"DummyReader\",\"width\":640,\"height\":480,\"metadata\":{\"rotate\":\"90\"}}}");
+	Json::Value legacy_json = legacy_clip.JsonValue();
+	CHECK(legacy_json["reader_orientation_mode"].asString() == "legacy_clip_transform");
+	REQUIRE(legacy_clip.Reader() != nullptr);
+	CHECK_FALSE(legacy_clip.Reader()->ApplyOrientationMetadata());
+
+	Clip reader_clip;
+	reader_clip.SetJson("{\"reader_orientation_mode\":\"reader\",\"reader\":{\"type\":\"DummyReader\",\"width\":480,\"height\":640,\"metadata\":{\"rotate\":\"90\"}}}");
+	Json::Value reader_json = reader_clip.JsonValue();
+	CHECK(reader_json["reader_orientation_mode"].asString() == "reader");
+	REQUIRE(reader_clip.Reader() != nullptr);
+	CHECK(reader_clip.Reader()->ApplyOrientationMetadata());
 }
 
 TEST_CASE( "SetJsonValue restores defaults for empty core transform keyframes", "[libopenshot][clip][json]" )

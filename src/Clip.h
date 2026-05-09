@@ -104,8 +104,14 @@ namespace openshot {
 		void init_reader_rotation();
 
 	private:
+		enum class ReaderOrientationMode {
+			Reader,
+			LegacyClipTransform
+		};
+
 		bool waveform; ///< Should a waveform be used instead of the clip's image
 		int waveform_mode; ///< Audio visualization mode used when waveform is enabled
+		ReaderOrientationMode reader_orientation_mode; ///< Internal project compatibility mode
 		std::list<openshot::EffectBase*> effects; ///< List of clips on this timeline
 		bool is_open;	///< Is Reader opened
 		std::string parentObjectId; ///< Id of the bounding box that this clip is attached to
