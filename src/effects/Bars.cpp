@@ -167,10 +167,10 @@ std::string Bars::PropertiesJSON(int64_t requested_frame) const {
 	root["color"]["red"] = add_property_json("Red", color.red.GetValue(requested_frame), "float", "", &color.red, 0, 255, false, requested_frame);
 	root["color"]["blue"] = add_property_json("Blue", color.blue.GetValue(requested_frame), "float", "", &color.blue, 0, 255, false, requested_frame);
 	root["color"]["green"] = add_property_json("Green", color.green.GetValue(requested_frame), "float", "", &color.green, 0, 255, false, requested_frame);
-	root["left"] = add_property_json("Left Size", left.GetValue(requested_frame), "float", "", &left, 0.0, 0.5, false, requested_frame);
-	root["top"] = add_property_json("Top Size", top.GetValue(requested_frame), "float", "", &top, 0.0, 0.5, false, requested_frame);
-	root["right"] = add_property_json("Right Size", right.GetValue(requested_frame), "float", "", &right, 0.0, 0.5, false, requested_frame);
-	root["bottom"] = add_property_json("Bottom Size", bottom.GetValue(requested_frame), "float", "", &bottom, 0.0, 0.5, false, requested_frame);
+	root["left"] = add_property_json("Margin: Left", left.GetValue(requested_frame), "float", "", &left, 0.0, 0.5, false, requested_frame);
+	root["top"] = add_property_json("Margin: Top", top.GetValue(requested_frame), "float", "", &top, 0.0, 0.5, false, requested_frame);
+	root["right"] = add_property_json("Margin: Right", right.GetValue(requested_frame), "float", "", &right, 0.0, 0.5, false, requested_frame);
+	root["bottom"] = add_property_json("Margin: Bottom", bottom.GetValue(requested_frame), "float", "", &bottom, 0.0, 0.5, false, requested_frame);
 
 	// Return formatted string
 	return root.toStyledString();

@@ -54,6 +54,7 @@ set(OPENSHOT_TESTS
   # Effects
   AudioVisualization
   BeatSync
+  Blur
   ColorGrade
   ColorMap
   ChromaKey

@@ -494,9 +494,9 @@ std::string Caption::PropertiesJSON(int64_t requested_frame) const {
 	root["fade_in"] = add_property_json("Fade In (Seconds)", fade_in.GetValue(requested_frame), "float", "", &fade_in, 0.0, 3.0, false, requested_frame);
 	root["fade_out"] = add_property_json("Fade Out (Seconds)", fade_out.GetValue(requested_frame), "float", "", &fade_out, 0.0, 3.0, false, requested_frame);
 	root["line_spacing"] = add_property_json("Line Spacing", line_spacing.GetValue(requested_frame), "float", "", &line_spacing, 0.0, 5.0, false, requested_frame);
-	root["left"] = add_property_json("Left Size", left.GetValue(requested_frame), "float", "", &left, 0.0, 0.5, false, requested_frame);
-	root["top"] = add_property_json("Top Size", top.GetValue(requested_frame), "float", "", &top, 0.0, 1.0, false, requested_frame);
-	root["right"] = add_property_json("Right Size", right.GetValue(requested_frame), "float", "", &right, 0.0, 0.5, false, requested_frame);
+	root["left"] = add_property_json("Margin: Left", left.GetValue(requested_frame), "float", "", &left, 0.0, 0.5, false, requested_frame);
+	root["top"] = add_property_json("Margin: Top", top.GetValue(requested_frame), "float", "", &top, 0.0, 1.0, false, requested_frame);
+	root["right"] = add_property_json("Margin: Right", right.GetValue(requested_frame), "float", "", &right, 0.0, 0.5, false, requested_frame);
 	root["caption_text"] = add_property_json("Captions", 0.0, "caption", caption_text, NULL, -1, -1, false, requested_frame);
 	root["caption_font"] = add_property_json("Font", 0.0, "font", font_name, NULL, -1, -1, false, requested_frame);
 
