@@ -104,6 +104,9 @@ namespace openshot
         /// Get the indexes and IDs of all visible objects in the given frame
         std::string GetVisibleObjects(int64_t frame_number) const override;
 
+        /// Generate a black/white mask from visible detected bounding boxes.
+        std::shared_ptr<QImage> TrackedObjectMask(std::shared_ptr<QImage> target_image, int64_t frame_number) const override;
+
         // Get and Set JSON methods
         std::string Json() const override; ///< Generate JSON string of this object
         void SetJson(const std::string value) override; ///< Load JSON string into this object

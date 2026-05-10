@@ -20,12 +20,17 @@
 #include "Exceptions.h"
 #include "Clip.h"
 #include "Timeline.h"
+#include "TrackedObjectBBox.h"
 #include "ReaderBase.h"
 #include "ChunkReader.h"
 #include "FFmpegReader.h"
 #include "QtImageReader.h"
 #include "ZmqLogger.h"
 #include <omp.h>
+#include <QBrush>
+#include <QColor>
+#include <QPainter>
+#include <QRectF>
 
 #ifdef USE_IMAGEMAGICK
 	#include "ImageReader.h"
@@ -46,6 +51,7 @@ void EffectBase::InitEffectInfo()
 	parentEffect = NULL;
 	mask_invert = false;
 	mask_reader = NULL;
+	mask_source_id = "";
 	mask_time_mode = MASK_TIME_SOURCE_FPS;
 	mask_loop_mode = MASK_LOOP_PLAY_ONCE;
 
@@ -107,6 +113,7 @@ Json::Value EffectBase::JsonValue() const {
 	root["apply_before_clip"] = info.apply_before_clip;
 	root["order"] = Order();
 	root["mask_invert"] = mask_invert;
+	root["mask_source_id"] = mask_source_id;
 	root["mask_time_mode"] = mask_time_mode;
 	root["mask_loop_mode"] = mask_loop_mode;
 	if (mask_reader)
@@ -184,6 +191,8 @@ void EffectBase::SetJsonValue(const Json::Value root) {
 
 	if (!my_root["mask_invert"].isNull())
 		mask_invert = my_root["mask_invert"].asBool();
+	if (!my_root["mask_source_id"].isNull())
+		MaskSourceId(my_root["mask_source_id"].asString());
 	if (!my_root["mask_time_mode"].isNull()) {
 		const int time_mode = my_root["mask_time_mode"].asInt();
 		mask_time_mode = (time_mode == MASK_TIME_TIMELINE || time_mode == MASK_TIME_SOURCE_FPS)
@@ -269,6 +278,8 @@ Json::Value EffectBase::BasePropertiesJSON(int64_t requested_frame) const {
 			root["mask_reader"] = add_property_json("Mask: Source", 0.0, "reader", mask_reader->Json(), NULL, 0, 1, false, requested_frame);
 		else
 			root["mask_reader"] = add_property_json("Mask: Source", 0.0, "reader", "{}", NULL, 0, 1, false, requested_frame);
+
+		root["mask_source_id"] = add_property_json("Mask: Effect Source", 0.0, "string", mask_source_id, NULL, -1, -1, false, requested_frame);
 	}
 
 	return root;
@@ -320,6 +331,36 @@ void EffectBase::MaskReader(ReaderBase* new_reader) {
 	cached_single_mask_height = 0;
 	if (mask_reader)
 		mask_reader->ParentClip(clip);
+}
+
+void EffectBase::MaskSourceId(const std::string& new_mask_source_id) {
+	mask_source_id = new_mask_source_id;
+	cached_single_mask_image.reset();
+	cached_single_mask_width = 0;
+	cached_single_mask_height = 0;
+}
+
+EffectBase* EffectBase::ResolveMaskSourceEffect() {
+	if (mask_source_id.empty())
+		return NULL;
+
+	Clip* parent_clip = dynamic_cast<Clip*>(clip);
+	if (parent_clip) {
+		EffectBase* source = parent_clip->GetEffect(mask_source_id);
+		if (source && source != this)
+			return source;
+	}
+
+	Timeline* parent_timeline = dynamic_cast<Timeline*>(ParentTimeline());
+	if (parent_timeline) {
+		EffectBase* source = parent_timeline->GetClipEffect(mask_source_id);
+		if (!source)
+			source = parent_timeline->GetEffect(mask_source_id);
+		if (source && source != this)
+			return source;
+	}
+
+	return NULL;
 }
 
 double EffectBase::ResolveMaskHostFps() {
@@ -430,7 +471,22 @@ int64_t EffectBase::MapMaskFrameNumber(int64_t frame_number) {
 }
 
 std::shared_ptr<QImage> EffectBase::GetMaskImage(std::shared_ptr<QImage> target_image, int64_t frame_number) {
-	if (!mask_reader || !target_image || target_image->isNull())
+	if (!target_image || target_image->isNull())
+		return {};
+
+	EffectBase* source_effect = ResolveMaskSourceEffect();
+	if (source_effect) {
+		auto generated_mask = source_effect->TrackedObjectMask(target_image, frame_number);
+		if (generated_mask && !generated_mask->isNull())
+			return generated_mask;
+
+		auto empty_mask = std::make_shared<QImage>(
+			target_image->width(), target_image->height(), QImage::Format_RGBA8888_Premultiplied);
+		empty_mask->fill(QColor(0, 0, 0, 255));
+		return empty_mask;
+	}
+
+	if (!mask_reader)
 		return {};
 
 	std::shared_ptr<QImage> source_mask;
@@ -479,6 +535,55 @@ std::shared_ptr<QImage> EffectBase::GetMaskImage(std::shared_ptr<QImage> target_
 	return scaled_mask;
 }
 
+std::shared_ptr<QImage> EffectBase::TrackedObjectMask(std::shared_ptr<QImage> target_image, int64_t frame_number) const {
+	if (!target_image || target_image->isNull() || trackedObjects.empty())
+		return {};
+
+	auto mask_image = std::make_shared<QImage>(
+		target_image->width(), target_image->height(), QImage::Format_RGBA8888_Premultiplied);
+	mask_image->fill(QColor(0, 0, 0, 255));
+
+	QPainter painter(mask_image.get());
+	painter.setRenderHint(QPainter::Antialiasing, false);
+	painter.setPen(Qt::NoPen);
+	painter.setBrush(QBrush(QColor(255, 255, 255, 255)));
+
+	bool drew_any_box = false;
+	for (auto const& trackedObject : trackedObjects) {
+		auto bbox = std::dynamic_pointer_cast<TrackedObjectBBox>(trackedObject.second);
+		if (!bbox)
+			continue;
+		if (!bbox->Contains(frame_number) || bbox->visible.GetValue(frame_number) != 1)
+			continue;
+
+		BBox box = bbox->GetBox(frame_number);
+		if (box.width <= 0.0f || box.height <= 0.0f || box.cx < 0.0f || box.cy < 0.0f)
+			continue;
+
+		const double x = (box.cx - box.width / 2.0) * target_image->width();
+		const double y = (box.cy - box.height / 2.0) * target_image->height();
+		const double w = box.width * target_image->width();
+		const double h = box.height * target_image->height();
+		QRectF rect(x, y, w, h);
+
+		if (std::abs(box.angle) > 0.0001f) {
+			painter.save();
+			painter.translate(rect.center());
+			painter.rotate(box.angle);
+			painter.drawRect(QRectF(-w / 2.0, -h / 2.0, w, h));
+			painter.restore();
+		} else {
+			painter.drawRect(rect);
+		}
+		drew_any_box = true;
+	}
+
+	painter.end();
+	if (!drew_any_box)
+		return {};
+	return mask_image;
+}
+
 void EffectBase::BlendWithMask(std::shared_ptr<QImage> original_image, std::shared_ptr<QImage> effected_image,
 							   std::shared_ptr<QImage> mask_image) const {
 	if (!original_image || !effected_image || !mask_image)
@@ -513,7 +618,7 @@ void EffectBase::BlendWithMask(std::shared_ptr<QImage> original_image, std::shar
 
 std::shared_ptr<openshot::Frame> EffectBase::ProcessFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number) {
 	// Audio-only effects skip common mask handling.
-	if (!info.has_video || !mask_reader)
+	if (!info.has_video || (!mask_reader && mask_source_id.empty()))
 		return GetFrame(frame, frame_number);
 
 	// Effects that already apply masks inside GetFrame() should bypass common blend handling.

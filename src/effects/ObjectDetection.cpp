@@ -23,6 +23,8 @@
 
 #include <QImage>
 #include <QPainter>
+#include <QBrush>
+#include <QColor>
 #include <QRectF>
 #include <QString>
 #include <QStringList>
@@ -305,6 +307,68 @@ std::string ObjectDetection::GetVisibleObjects(int64_t frame_number) const{
 	}
 
 	return root.toStyledString();
+}
+
+std::shared_ptr<QImage> ObjectDetection::TrackedObjectMask(std::shared_ptr<QImage> target_image, int64_t frame_number) const {
+	if (!target_image || target_image->isNull())
+		return {};
+
+	auto detections_it = detectionsData.find(frame_number);
+	if (detections_it == detectionsData.end())
+		return {};
+
+	auto mask_image = std::make_shared<QImage>(
+		target_image->width(), target_image->height(), QImage::Format_RGBA8888_Premultiplied);
+	mask_image->fill(QColor(0, 0, 0, 255));
+
+	QPainter painter(mask_image.get());
+	painter.setRenderHint(QPainter::Antialiasing, false);
+	painter.setPen(Qt::NoPen);
+	painter.setBrush(QBrush(QColor(255, 255, 255, 255)));
+
+	bool drew_any_box = false;
+	const DetectionData& detections = detections_it->second;
+	for (int i = 0; i < detections.boxes.size(); i++) {
+		if (detections.confidences.at(i) < confidence_threshold)
+			continue;
+
+		const int class_id = detections.classIds.at(i);
+		if (class_id < 0 || class_id >= classNames.size())
+			continue;
+
+		const std::string class_name = classNames[class_id];
+		if (!display_classes.empty() &&
+			std::find(display_classes.begin(), display_classes.end(), class_name) == display_classes.end()) {
+			continue;
+		}
+
+		int object_id = detections.objectIds.at(i);
+		auto tracked_object_it = trackedObjects.find(object_id);
+		if (tracked_object_it == trackedObjects.end() || !tracked_object_it->second)
+			continue;
+
+		auto tracked_object = std::static_pointer_cast<TrackedObjectBBox>(tracked_object_it->second);
+		if (!tracked_object->ExactlyContains(frame_number) ||
+			tracked_object->visible.GetValue(frame_number) != 1) {
+			continue;
+		}
+
+		BBox box = tracked_object->GetBox(frame_number);
+		if (box.width <= 0.0f || box.height <= 0.0f || box.cx < 0.0f || box.cy < 0.0f)
+			continue;
+
+		const double x = (box.cx - box.width / 2.0) * target_image->width();
+		const double y = (box.cy - box.height / 2.0) * target_image->height();
+		const double w = box.width * target_image->width();
+		const double h = box.height * target_image->height();
+		painter.drawRect(QRectF(x, y, w, h));
+		drew_any_box = true;
+	}
+
+	painter.end();
+	if (!drew_any_box)
+		return {};
+	return mask_image;
 }
 
 // Generate JSON string of this object

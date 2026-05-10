@@ -13,10 +13,28 @@
 #include "Blur.h"
 #include "Exceptions.h"
 
+#include <QMargins>
+#include <QPainter>
+#include <QPoint>
+#include <QRect>
+
+#include <algorithm>
+
 using namespace openshot;
+
+namespace {
+double clamp_margin(double value) {
+	if (value < 0.0)
+		return 0.0;
+	if (value > 1.0)
+		return 1.0;
+	return value;
+}
+}
 
 /// Blank constructor, useful when using Json to load the effect properties
 Blur::Blur() : horizontal_radius(6.0), vertical_radius(6.0), sigma(3.0), iterations(3.0),
+	left(0.0), top(0.0), right(0.0), bottom(0.0),
 	mask_mode(BLUR_MASK_POST_BLEND) {
 	// Init effect properties
 	init_effect_details();
@@ -25,7 +43,21 @@ Blur::Blur() : horizontal_radius(6.0), vertical_radius(6.0), sigma(3.0), iterati
 // Default constructor
 Blur::Blur(Keyframe new_horizontal_radius, Keyframe new_vertical_radius, Keyframe new_sigma, Keyframe new_iterations) :
 		horizontal_radius(new_horizontal_radius), vertical_radius(new_vertical_radius),
-		sigma(new_sigma), iterations(new_iterations), mask_mode(BLUR_MASK_POST_BLEND)
+		sigma(new_sigma), iterations(new_iterations),
+		left(0.0), top(0.0), right(0.0), bottom(0.0),
+		mask_mode(BLUR_MASK_POST_BLEND)
+{
+	// Init effect properties
+	init_effect_details();
+}
+
+// Default constructor
+Blur::Blur(Keyframe new_horizontal_radius, Keyframe new_vertical_radius, Keyframe new_sigma, Keyframe new_iterations,
+		   Keyframe new_left, Keyframe new_top, Keyframe new_right, Keyframe new_bottom) :
+		horizontal_radius(new_horizontal_radius), vertical_radius(new_vertical_radius),
+		sigma(new_sigma), iterations(new_iterations),
+		left(new_left), top(new_top), right(new_right), bottom(new_bottom),
+		mask_mode(BLUR_MASK_POST_BLEND)
 {
 	// Init effect properties
 	init_effect_details();
@@ -61,31 +93,59 @@ std::shared_ptr<openshot::Frame> Blur::GetFrame(std::shared_ptr<openshot::Frame>
 
 	int w = frame_image->width();
 	int h = frame_image->height();
+	if (w <= 0 || h <= 0 || iteration_value <= 0)
+		return frame;
+
+	// Define area we're working on in terms of a QRect with QMargins applied.
+	QRect area(QPoint(0, 0), frame_image->size());
+	area = area.marginsRemoved({
+		int(clamp_margin(left.GetValue(frame_number)) * w),
+		int(clamp_margin(top.GetValue(frame_number)) * h),
+		int(clamp_margin(right.GetValue(frame_number)) * w),
+		int(clamp_margin(bottom.GetValue(frame_number)) * h)
+	});
+	area = area.intersected(QRect(QPoint(0, 0), frame_image->size()));
+	if (area.isEmpty())
+		return frame;
 
 	// Grab two copies of the image pixel data
-	QImage image_copy = frame_image->copy();
+	QImage image_copy = frame_image->copy(area);
+	std::shared_ptr<QImage> blur_image = std::make_shared<QImage>(image_copy);
 	std::shared_ptr<QImage> frame_image_2 = std::make_shared<QImage>(image_copy);
+	const int area_w = blur_image->width();
+	const int area_h = blur_image->height();
+	const int horizontal_area_radius = std::min(std::max(0, horizontal_radius_value), std::max(0, area_w - 1));
+	const int vertical_area_radius = std::min(std::max(0, vertical_radius_value), std::max(0, area_h - 1));
+	bool blurred = false;
 
 	// Loop through each iteration
 	for (int iteration = 0; iteration < iteration_value; ++iteration)
 	{
 		// HORIZONTAL BLUR (if any)
-		if (horizontal_radius_value > 0.0) {
+		if (horizontal_area_radius > 0.0) {
 			// Apply horizontal blur to target RGBA channels
-			boxBlurH(frame_image->bits(), frame_image_2->bits(), w, h, horizontal_radius_value);
+			boxBlurH(blur_image->bits(), frame_image_2->bits(), area_w, area_h, horizontal_area_radius);
 
 			// Swap output image back to input
-			frame_image.swap(frame_image_2);
+			blur_image.swap(frame_image_2);
+			blurred = true;
 		}
 
 		// VERTICAL BLUR (if any)
-		if (vertical_radius_value > 0.0) {
+		if (vertical_area_radius > 0.0) {
 			// Apply vertical blur to target RGBA channels
-			boxBlurT(frame_image->bits(), frame_image_2->bits(), w, h, vertical_radius_value);
+			boxBlurT(blur_image->bits(), frame_image_2->bits(), area_w, area_h, vertical_area_radius);
 
 			// Swap output image back to input
-			frame_image.swap(frame_image_2);
+			blur_image.swap(frame_image_2);
+			blurred = true;
 		}
+	}
+
+	if (blurred) {
+		QPainter painter(frame_image.get());
+		painter.drawImage(area, *blur_image);
+		painter.end();
 	}
 
 	// return the modified frame
@@ -249,6 +309,10 @@ Json::Value Blur::JsonValue() const {
 	root["vertical_radius"] = vertical_radius.JsonValue();
 	root["sigma"] = sigma.JsonValue();
 	root["iterations"] = iterations.JsonValue();
+	root["left"] = left.JsonValue();
+	root["top"] = top.JsonValue();
+	root["right"] = right.JsonValue();
+	root["bottom"] = bottom.JsonValue();
 	root["mask_mode"] = mask_mode;
 
 	// return JsonValue
@@ -287,6 +351,14 @@ void Blur::SetJsonValue(const Json::Value root) {
 		sigma.SetJsonValue(root["sigma"]);
 	if (!root["iterations"].isNull())
 		iterations.SetJsonValue(root["iterations"]);
+	if (!root["left"].isNull())
+		left.SetJsonValue(root["left"]);
+	if (!root["top"].isNull())
+		top.SetJsonValue(root["top"]);
+	if (!root["right"].isNull())
+		right.SetJsonValue(root["right"]);
+	if (!root["bottom"].isNull())
+		bottom.SetJsonValue(root["bottom"]);
 	if (!root["mask_mode"].isNull())
 		mask_mode = root["mask_mode"].asInt();
 }
@@ -302,6 +374,10 @@ std::string Blur::PropertiesJSON(int64_t requested_frame) const {
 	root["vertical_radius"] = add_property_json("Vertical Radius", vertical_radius.GetValue(requested_frame), "float", "", &vertical_radius, 0, 100, false, requested_frame);
 	root["sigma"] = add_property_json("Sigma", sigma.GetValue(requested_frame), "float", "", &sigma, 0, 100, false, requested_frame);
 	root["iterations"] = add_property_json("Iterations", iterations.GetValue(requested_frame), "float", "", &iterations, 0, 100, false, requested_frame);
+	root["left"] = add_property_json("Margin: Left", left.GetValue(requested_frame), "float", "", &left, 0.0, 1.0, false, requested_frame);
+	root["top"] = add_property_json("Margin: Top", top.GetValue(requested_frame), "float", "", &top, 0.0, 1.0, false, requested_frame);
+	root["right"] = add_property_json("Margin: Right", right.GetValue(requested_frame), "float", "", &right, 0.0, 1.0, false, requested_frame);
+	root["bottom"] = add_property_json("Margin: Bottom", bottom.GetValue(requested_frame), "float", "", &bottom, 0.0, 1.0, false, requested_frame);
 	root["mask_mode"] = add_property_json("Mask Mode", mask_mode, "int", "", NULL, 0, 1, false, requested_frame);
 	root["mask_mode"]["choices"].append(add_property_choice_json("Limit to Mask", BLUR_MASK_POST_BLEND, mask_mode));
 	root["mask_mode"]["choices"].append(add_property_choice_json("Vary Strength", BLUR_MASK_DRIVE_AMOUNT, mask_mode));

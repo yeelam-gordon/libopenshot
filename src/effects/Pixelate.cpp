@@ -198,10 +198,10 @@ std::string Pixelate::PropertiesJSON(int64_t requested_frame) const {
 
 	// Keyframes
 	root["pixelization"] = add_property_json("Pixelization", pixelization.GetValue(requested_frame), "float", "", &pixelization, 0.0, 0.9999, false, requested_frame);
-	root["left"] = add_property_json("Left Margin", left.GetValue(requested_frame), "float", "", &left, 0.0, 1.0, false, requested_frame);
-	root["top"] = add_property_json("Top Margin", top.GetValue(requested_frame), "float", "", &top, 0.0, 1.0, false, requested_frame);
-	root["right"] = add_property_json("Right Margin", right.GetValue(requested_frame), "float", "", &right, 0.0, 1.0, false, requested_frame);
-	root["bottom"] = add_property_json("Bottom Margin", bottom.GetValue(requested_frame), "float", "", &bottom, 0.0, 1.0, false, requested_frame);
+	root["left"] = add_property_json("Margin: Left", left.GetValue(requested_frame), "float", "", &left, 0.0, 1.0, false, requested_frame);
+	root["top"] = add_property_json("Margin: Top", top.GetValue(requested_frame), "float", "", &top, 0.0, 1.0, false, requested_frame);
+	root["right"] = add_property_json("Margin: Right", right.GetValue(requested_frame), "float", "", &right, 0.0, 1.0, false, requested_frame);
+	root["bottom"] = add_property_json("Margin: Bottom", bottom.GetValue(requested_frame), "float", "", &bottom, 0.0, 1.0, false, requested_frame);
 	root["mask_mode"] = add_property_json("Mask Mode", mask_mode, "int", "", NULL, 0, 1, false, requested_frame);
 	root["mask_mode"]["choices"].append(add_property_choice_json("Limit to Mask", PIXELATE_MASK_LIMIT_TO_AREA, mask_mode));
 	root["mask_mode"]["choices"].append(add_property_choice_json("Vary Strength", PIXELATE_MASK_VARY_STRENGTH, mask_mode));
