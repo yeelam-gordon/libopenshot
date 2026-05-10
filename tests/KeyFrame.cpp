@@ -584,10 +584,10 @@ TEST_CASE( "TrackedObjectBBox init", "[libopenshot][keyframe]" )
 	CHECK(kfb.scale_x.GetInt(1) == 1);
 	CHECK(kfb.scale_y.GetInt(1) == 1);
 
-	CHECK(kfb.rotation.GetInt(1) == 0);
-
 	CHECK(kfb.stroke_width.GetInt(1) == 2);
     CHECK(kfb.stroke_alpha.GetValue(1) == Approx(0.7f).margin(0.0001));
+	CHECK(kfb.draw_box.GetInt(1) == 1);
+	CHECK(kfb.draw_text.GetInt(1) == 1);
 
 	CHECK(kfb.background_alpha .GetInt(1) == 0);
 	CHECK(kfb.background_corner.GetInt(1) == 12);

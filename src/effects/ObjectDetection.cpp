@@ -31,6 +31,36 @@
 using namespace std;
 using namespace openshot;
 
+namespace {
+cv::Scalar default_class_color(const std::string& class_name, int index)
+{
+    const QString normalized = QString::fromStdString(class_name).trimmed().toLower();
+
+    // RGB values. Keep common object-detection classes on clear, saturated colors
+    // instead of the previous deterministic random palette.
+    if (normalized == "person") return cv::Scalar(83, 160, 237);
+    if (normalized == "car") return cv::Scalar(42, 200, 185);
+    if (normalized == "truck") return cv::Scalar(239, 126, 92);
+    if (normalized == "bus") return cv::Scalar(250, 196, 72);
+    if (normalized == "bicycle") return cv::Scalar(122, 201, 67);
+    if (normalized == "motorbike" || normalized == "motorcycle") return cv::Scalar(180, 126, 235);
+    if (normalized == "dog") return cv::Scalar(237, 92, 140);
+    if (normalized == "cat") return cv::Scalar(101, 214, 128);
+
+    static const cv::Scalar palette[] = {
+        cv::Scalar(83, 160, 237),
+        cv::Scalar(42, 200, 185),
+        cv::Scalar(239, 126, 92),
+        cv::Scalar(250, 196, 72),
+        cv::Scalar(122, 201, 67),
+        cv::Scalar(180, 126, 235),
+        cv::Scalar(237, 92, 140),
+        cv::Scalar(72, 190, 230),
+    };
+    return palette[index % (sizeof(palette) / sizeof(palette[0]))];
+}
+}
+
 
 // Default constructor
 ObjectDetection::ObjectDetection()
@@ -99,7 +129,6 @@ std::shared_ptr<Frame> ObjectDetection::GetFrame(std::shared_ptr<Frame> frame, i
                     // Get properties of tracked object (i.e. colors, stroke width, etc...)
                     std::vector<int> stroke_rgba = trackedObject->stroke.GetColorRGBA(frame_number);
                     std::vector<int> bg_rgba = trackedObject->background.GetColorRGBA(frame_number);
-                    int stroke_width = trackedObject->stroke_width.GetValue(frame_number);
                     float stroke_alpha = trackedObject->stroke_alpha.GetValue(frame_number);
                     float bg_alpha = trackedObject->background_alpha.GetValue(frame_number);
                     float bg_corner = trackedObject->background_corner.GetValue(frame_number);
@@ -119,7 +148,7 @@ std::shared_ptr<Frame> ObjectDetection::GetFrame(std::shared_ptr<Frame> frame, i
                         painter.drawRoundedRect(boxRect, bg_corner, bg_corner);
                     }
 
-                    if(display_box_text.GetValue(frame_number) == 1) {
+                    if(display_box_text.GetValue(frame_number) == 1 && trackedObject->draw_text.GetValue(frame_number) == 1) {
                         // Draw text label above bounding box
                         // Get the confidence and classId for the current detection
                         int classId = detections.classIds.at(i);
@@ -170,18 +199,15 @@ bool ObjectDetection::LoadObjDetectdData(std::string inputFilePath)
 
     // Clear out any old state
     classNames.clear();
+    classesColor.clear();
     detectionsData.clear();
     trackedObjects.clear();
 
     // Seed colors for each class
-    std::srand(1);
     for (int i = 0; i < objMessage.classnames_size(); ++i) {
-        classNames.push_back(objMessage.classnames(i));
-        classesColor.push_back(cv::Scalar(
-            std::rand() % 205 + 50,
-            std::rand() % 205 + 50,
-            std::rand() % 205 + 50
-        ));
+        const std::string class_name = objMessage.classnames(i);
+        classNames.push_back(class_name);
+        classesColor.push_back(default_class_color(class_name, i));
     }
 
     // Walk every frame in the protobuf

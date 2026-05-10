@@ -32,7 +32,7 @@ namespace openshot
 	 *
 	 * The bounding-box structure holds five floating-point properties:
 	 * the x and y coordinates of the rectangle's center point (cx, cy),
-	 * the rectangle's width, height and rotation.
+	 * the rectangle's width, height and source rotation.
 	 */
 	struct BBox
 	{
@@ -120,7 +120,7 @@ namespace openshot
 	 * and functions to manipulate it.
 	 *
 	 * The bounding-box displacement in X and Y directions, it's width,
-	 * height and rotation variation over the frames are set as
+	 * and height variation over the frames are set as
 	 * openshot::Keyframe objects.
 	 *
 	 * The bounding-box information over the clip's frames are
@@ -139,7 +139,6 @@ namespace openshot
 		Keyframe delta_y; ///< Y-direction displacement Keyframe
 		Keyframe scale_x; ///< X-direction scale Keyframe
 		Keyframe scale_y; ///< Y-direction scale Keyframe
-		Keyframe rotation; ///< Rotation Keyframe
 		Keyframe background_alpha; ///< Background box opacity
 		Keyframe background_corner; ///< Radius of rounded corners
 		Keyframe stroke_width; ///< Thickness of border line

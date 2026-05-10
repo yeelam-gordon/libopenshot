@@ -35,7 +35,7 @@ TrackedObjectBBox::TrackedObjectBBox()
 // displacement as 0 and the scales as 1 for the first frame
 TrackedObjectBBox::TrackedObjectBBox(int Red, int Green, int Blue, int Alfa)
 	: delta_x(0.0), delta_y(0.0),
-	  scale_x(1.0), scale_y(1.0), rotation(0.0),
+	  scale_x(1.0), scale_y(1.0),
 	  background_alpha(0.0), background_corner(12),
 	  stroke_width(2) , stroke_alpha(0.7),
 	  stroke(Red, Green, Blue, Alfa),
@@ -153,8 +153,6 @@ BBox TrackedObjectBBox::GetBox(int64_t frame_number)
 		currentBBox.cy += this->delta_y.GetValue(frame_number);
 		currentBBox.width *= this->scale_x.GetValue(frame_number);
 		currentBBox.height *= this->scale_y.GetValue(frame_number);
-		currentBBox.angle += this->rotation.GetValue(frame_number);
-
 		return currentBBox;
 	}
 
@@ -172,8 +170,6 @@ BBox TrackedObjectBBox::GetBox(int64_t frame_number)
 	interpolatedBBox.cy += this->delta_y.GetValue(frame_number);
 	interpolatedBBox.width *= this->scale_x.GetValue(frame_number);
 	interpolatedBBox.height *= this->scale_y.GetValue(frame_number);
-	interpolatedBBox.angle += this->rotation.GetValue(frame_number);
-
 	return interpolatedBBox;
 }
 
@@ -212,9 +208,10 @@ double TrackedObjectBBox::ScaledStrokeWidth(int64_t frame_number, int image_widt
 	if (output_size.width() <= 0 || output_size.height() <= 0)
 		return base_width;
 
-	const double raster_scale_x = static_cast<double>(image_width) / output_size.width();
-	const double raster_scale_y = static_cast<double>(image_height) / output_size.height();
-	return base_width * std::sqrt(raster_scale_x * raster_scale_y);
+	const double raster_scale_x = static_cast<double>(output_size.width()) / image_width;
+	const double raster_scale_y = static_cast<double>(output_size.height()) / image_height;
+	const double raster_scale = std::sqrt(raster_scale_x * raster_scale_y);
+	return base_width * std::max(raster_scale, 1.0 / std::max(raster_scale, 0.000001));
 }
 
 // Interpolate the bouding-boxes properties
@@ -240,7 +237,7 @@ BBox TrackedObjectBBox::InterpolateBoxes(double t1, double t2, BBox left, BBox r
 	Point height_right(t2, right.height, openshot::InterpolationType::LINEAR);
 	Point height = InterpolateBetween(height_left, height_right, target, 0.01);
 
-	// Interpolate the rotation angle
+	// Interpolate the source bounding-box angle
 	Point angle_left(t1, left.angle, openshot::InterpolationType::LINEAR);
 	Point angle_right(t1, right.angle, openshot::InterpolationType::LINEAR);
 	Point angle = InterpolateBetween(angle_left, angle_right, target, 0.01);
@@ -363,9 +360,9 @@ Json::Value TrackedObjectBBox::JsonValue() const
 	root["delta_y"] = delta_y.JsonValue();
 	root["scale_x"] = scale_x.JsonValue();
 	root["scale_y"] = scale_y.JsonValue();
-	root["rotation"] = rotation.JsonValue();
 	root["visible"] = visible.JsonValue();
 	root["draw_box"] = draw_box.JsonValue();
+	root["draw_text"] = draw_text.JsonValue();
 	root["stroke"] = stroke.JsonValue();
 	root["background_alpha"] = background_alpha.JsonValue();
 	root["background_corner"] = background_corner.JsonValue();
@@ -430,12 +427,12 @@ void TrackedObjectBBox::SetJsonValue(const Json::Value root)
 		scale_x.SetJsonValue(root["scale_x"]);
 	if (!root["scale_y"].isNull())
 		scale_y.SetJsonValue(root["scale_y"]);
-	if (!root["rotation"].isNull())
-		rotation.SetJsonValue(root["rotation"]);
 	if (!root["visible"].isNull())
 		visible.SetJsonValue(root["visible"]);
 	if (!root["draw_box"].isNull())
 		draw_box.SetJsonValue(root["draw_box"]);
+	if (!root["draw_text"].isNull())
+		draw_text.SetJsonValue(root["draw_text"]);
 	if (!root["stroke"].isNull())
 		stroke.SetJsonValue(root["stroke"]);
 	if (!root["background_alpha"].isNull())
@@ -473,12 +470,15 @@ Json::Value TrackedObjectBBox::PropertiesJSON(int64_t requested_frame) const
 	root["delta_y"] = add_property_json("Displacement Y-axis", delta_y.GetValue(requested_frame), "float", "", &delta_y, -1.0, 1.0, false, requested_frame);
 	root["scale_x"] = add_property_json("Scale (Width)", scale_x.GetValue(requested_frame), "float", "", &scale_x, 0.0, 1.0, false, requested_frame);
 	root["scale_y"] = add_property_json("Scale (Height)", scale_y.GetValue(requested_frame), "float", "", &scale_y, 0.0, 1.0, false, requested_frame);
-	root["rotation"] = add_property_json("Rotation", rotation.GetValue(requested_frame), "float", "", &rotation, 0, 360, false, requested_frame);
 	root["visible"] = add_property_json("Visible", visible.GetValue(requested_frame), "int", "", &visible, 0, 1, true, requested_frame);
 
 	root["draw_box"] = add_property_json("Draw Box", draw_box.GetValue(requested_frame), "int", "", &draw_box, 0, 1, false, requested_frame);
-    root["draw_box"]["choices"].append(add_property_choice_json("Yes", true, draw_box.GetValue(requested_frame)));
+	root["draw_box"]["choices"].append(add_property_choice_json("Yes", true, draw_box.GetValue(requested_frame)));
 	root["draw_box"]["choices"].append(add_property_choice_json("No", false, draw_box.GetValue(requested_frame)));
+
+	root["draw_text"] = add_property_json("Draw Text", draw_text.GetValue(requested_frame), "int", "", &draw_text, 0, 1, false, requested_frame);
+	root["draw_text"]["choices"].append(add_property_choice_json("Yes", true, draw_text.GetValue(requested_frame)));
+	root["draw_text"]["choices"].append(add_property_choice_json("No", false, draw_text.GetValue(requested_frame)));
 
 	root["stroke"] = add_property_json("Border", 0.0, "color", "", NULL, 0, 255, false, requested_frame);
 	root["stroke"]["red"] = add_property_json("Red", stroke.red.GetValue(requested_frame), "float", "", &stroke.red, 0, 255, false, requested_frame);
@@ -558,8 +558,5 @@ std::map<std::string, float> TrackedObjectBBox::GetBoxValues(int64_t frame_numbe
 	boxValues["sy"] = this->scale_y.GetValue(frame_number);
 	boxValues["dx"] = this->delta_x.GetValue(frame_number);
 	boxValues["dy"] = this->delta_y.GetValue(frame_number);
-	boxValues["r"] = this->rotation.GetValue(frame_number);
-
-
 	return boxValues;
 }
