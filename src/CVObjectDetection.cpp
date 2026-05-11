@@ -98,6 +98,14 @@ void CVObjectDetection::detectObjectsClip(openshot::Clip &video, size_t _start, 
         processingController->SetError(true, error_text);
         error = true;
         return;
+    } catch (const std::exception& e) {
+        processingController->SetError(true, std::string("Failed to load ONNX model: ") + e.what());
+        error = true;
+        return;
+    } catch (...) {
+        processingController->SetError(true, "Failed to load ONNX model: unknown error");
+        error = true;
+        return;
     }
     setProcessingDevice();
 
