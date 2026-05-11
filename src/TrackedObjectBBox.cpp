@@ -39,7 +39,7 @@ TrackedObjectBBox::TrackedObjectBBox(int Red, int Green, int Blue, int Alfa)
 	  background_alpha(0.0), background_corner(12),
 	  stroke_width(2) , stroke_alpha(0.7),
 	  stroke(Red, Green, Blue, Alfa),
-	  background(0, 0, 255, Alfa)
+	  background(Red, Green, Blue, Alfa)
 {
 	this->TimeScale = 1.0;
 }

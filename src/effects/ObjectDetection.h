@@ -23,6 +23,10 @@
 #include "Json.h"
 #include "KeyFrame.h"
 
+namespace openshot {
+	class TrackedObjectBBox;
+}
+
 // Struct that stores the detected bounding boxes for all the clip frames
 struct DetectionData{
     DetectionData(){}
@@ -69,11 +73,14 @@ namespace openshot
         Keyframe display_boxes;
 
         /// Minimum confidence value to display the detected objects
-        float confidence_threshold = 0.5;
+        float confidence_threshold = 0.25;
 
         /// Contain the user selected classes for visualization
         std::vector<std::string> display_classes;
         std::string class_filter;
+
+        /// Last explicit "All Objects" settings, used for stable UI readback
+        std::shared_ptr<TrackedObjectBBox> allObjectsProperties;
 
         /// Init effect settings
         void init_effect_details();

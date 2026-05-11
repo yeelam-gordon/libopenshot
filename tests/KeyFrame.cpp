@@ -597,9 +597,9 @@ TEST_CASE( "TrackedObjectBBox init", "[libopenshot][keyframe]" )
 	CHECK(kfb.stroke.blue.GetInt(1) == 0);
 	CHECK(kfb.stroke.alpha.GetInt(1) == 212);
 
-	CHECK(kfb.background.red.GetInt(1) == 0);
-	CHECK(kfb.background.green.GetInt(1) == 0);
-	CHECK(kfb.background.blue.GetInt(1) == 255);
+	CHECK(kfb.background.red.GetInt(1) == 62);
+	CHECK(kfb.background.green.GetInt(1) == 143);
+	CHECK(kfb.background.blue.GetInt(1) == 0);
 	CHECK(kfb.background.alpha.GetInt(1) == 212);
 }
 

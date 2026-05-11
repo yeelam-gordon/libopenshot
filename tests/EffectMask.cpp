@@ -24,10 +24,12 @@
 #include "effects/Blur.h"
 #include "effects/Brightness.h"
 #include "effects/Hue.h"
+#include "effects/ObjectDetection.h"
 #include "effects/Pixelate.h"
 #include "effects/Saturation.h"
 #include "effects/Sharpen.h"
 #include "effects/Tracker.h"
+#include "TrackedObjectBBox.h"
 #include "QtImageReader.h"
 #include "openshot_catch.h"
 
@@ -149,6 +151,116 @@ TEST_CASE("EffectBase common mask blend applies to ProcessFrame", "[effect][mask
 	CHECK(out_image->pixelColor(3, 0).red() == 80);
 }
 
+TEST_CASE("ObjectDetection all object update applies sparse style keys", "[effect][object_detection]") {
+	ObjectDetection effect;
+	auto first = std::make_shared<TrackedObjectBBox>(10, 20, 30, 255);
+	auto second = std::make_shared<TrackedObjectBBox>(200, 210, 220, 255);
+	first->AddBox(1, 0.25f, 0.25f, 0.2f, 0.2f, 0.0f);
+	second->AddBox(1, 0.75f, 0.75f, 0.2f, 0.2f, 0.0f);
+	effect.trackedObjects[1] = first;
+	effect.trackedObjects[2] = second;
+
+	Json::Value update;
+	update["objects"]["all"]["background_alpha"] = Keyframe(0.0).JsonValue();
+	update["objects"]["all"]["stroke_width"] = Keyframe(5.0).JsonValue();
+	effect.SetJsonValue(update);
+
+	CHECK(first->background_alpha.GetValue(1) == Approx(0.0));
+	CHECK(second->background_alpha.GetValue(1) == Approx(0.0));
+	CHECK(first->stroke_width.GetValue(1) == Approx(5.0));
+	CHECK(second->stroke_width.GetValue(1) == Approx(5.0));
+
+	CHECK(first->stroke.red.GetValue(1) == Approx(10.0));
+	CHECK(second->stroke.red.GetValue(1) == Approx(200.0));
+	CHECK(first->background.red.GetValue(1) == Approx(10.0));
+	CHECK(second->background.red.GetValue(1) == Approx(200.0));
+}
+
+TEST_CASE("ObjectDetection individual style overrides all object style", "[effect][object_detection]") {
+	ObjectDetection effect;
+	auto first = std::make_shared<TrackedObjectBBox>(10, 20, 30, 255);
+	auto second = std::make_shared<TrackedObjectBBox>(200, 210, 220, 255);
+	first->Id("effect-1");
+	second->Id("effect-2");
+	first->AddBox(1, 0.25f, 0.25f, 0.2f, 0.2f, 0.0f);
+	second->AddBox(1, 0.75f, 0.75f, 0.2f, 0.2f, 0.0f);
+	effect.trackedObjects[1] = first;
+	effect.trackedObjects[2] = second;
+	effect.selectedObjectIndex = 1;
+
+	Json::Value update;
+	update["objects"]["effect-1"]["stroke"]["red"] = Keyframe(255.0).JsonValue();
+	update["objects"]["effect-1"]["stroke"]["green"] = Keyframe(0.0).JsonValue();
+	update["objects"]["effect-1"]["stroke"]["blue"] = Keyframe(0.0).JsonValue();
+	update["objects"]["all"]["stroke"]["red"] = Keyframe(0.0).JsonValue();
+	update["objects"]["all"]["stroke"]["green"] = Keyframe(255.0).JsonValue();
+	update["objects"]["all"]["stroke"]["blue"] = Keyframe(0.0).JsonValue();
+	effect.SetJsonValue(update);
+
+	CHECK(first->stroke.red.GetValue(1) == Approx(255.0));
+	CHECK(first->stroke.green.GetValue(1) == Approx(0.0));
+	CHECK(first->stroke.blue.GetValue(1) == Approx(0.0));
+	CHECK(second->stroke.red.GetValue(1) == Approx(0.0));
+	CHECK(second->stroke.green.GetValue(1) == Approx(255.0));
+	CHECK(second->stroke.blue.GetValue(1) == Approx(0.0));
+
+	Json::Value props = stringToJson(effect.PropertiesJSON(1));
+	REQUIRE(props["objects"].isMember("effect-1"));
+	CHECK(props["objects"]["effect-1"]["stroke"]["red"]["value"].asDouble() == Approx(255.0));
+	CHECK(props["objects"]["effect-1"]["stroke"]["green"]["value"].asDouble() == Approx(0.0));
+	CHECK(props["objects"]["effect-1"]["stroke"]["blue"]["value"].asDouble() == Approx(0.0));
+}
+
+TEST_CASE("ObjectDetection all object selection exposes tracked object properties", "[effect][object_detection]") {
+	ObjectDetection effect;
+	auto tracked = std::make_shared<TrackedObjectBBox>(10, 20, 30, 255);
+	tracked->AddBox(1, 0.25f, 0.25f, 0.2f, 0.2f, 0.0f);
+	effect.trackedObjects[1] = tracked;
+	effect.selectedObjectIndex = -1;
+
+	Json::Value props = stringToJson(effect.PropertiesJSON(1));
+	REQUIRE(props["objects"].isMember("all"));
+	CHECK(props["selected_object_index"]["min"].asInt() == -1);
+	CHECK(props["objects"]["all"].isMember("background_alpha"));
+	CHECK(props["objects"]["all"].isMember("stroke"));
+	CHECK(props["objects"]["all"].isMember("delta_x"));
+	CHECK(props["objects"]["all"].isMember("scale_x"));
+	CHECK_FALSE(props["objects"]["all"].isMember("x1"));
+	CHECK_FALSE(props.isMember("display_box_text"));
+	CHECK_FALSE(props.isMember("display_boxes"));
+}
+
+TEST_CASE("ObjectDetection all object properties keep explicit all values", "[effect][object_detection]") {
+	ObjectDetection effect;
+	auto first = std::make_shared<TrackedObjectBBox>(10, 20, 30, 255);
+	auto second = std::make_shared<TrackedObjectBBox>(200, 210, 220, 255);
+	first->Id("effect-1");
+	second->Id("effect-2");
+	first->AddBox(1, 0.25f, 0.25f, 0.2f, 0.2f, 0.0f);
+	second->AddBox(1, 0.75f, 0.75f, 0.2f, 0.2f, 0.0f);
+	effect.trackedObjects[1] = first;
+	effect.trackedObjects[2] = second;
+
+	Json::Value update;
+	update["objects"]["all"]["stroke_width"] = Keyframe(6.0).JsonValue();
+	update["objects"]["all"]["stroke_alpha"] = Keyframe(0.25).JsonValue();
+	update["objects"]["effect-1"]["stroke_width"] = Keyframe(3.0).JsonValue();
+	update["objects"]["effect-1"]["stroke_alpha"] = Keyframe(0.75).JsonValue();
+	effect.SetJsonValue(update);
+
+	effect.selectedObjectIndex = -1;
+	Json::Value all_props = stringToJson(effect.PropertiesJSON(1));
+	REQUIRE(all_props["objects"].isMember("all"));
+	CHECK(all_props["objects"]["all"]["stroke_width"]["value"].asDouble() == Approx(6.0));
+	CHECK(all_props["objects"]["all"]["stroke_alpha"]["value"].asDouble() == Approx(0.25));
+
+	effect.selectedObjectIndex = 1;
+	Json::Value first_props = stringToJson(effect.PropertiesJSON(1));
+	REQUIRE(first_props["objects"].isMember("effect-1"));
+	CHECK(first_props["objects"]["effect-1"]["stroke_width"]["value"].asDouble() == Approx(3.0));
+	CHECK(first_props["objects"]["effect-1"]["stroke_alpha"]["value"].asDouble() == Approx(0.75));
+}
+
 TEST_CASE("EffectBase mask fields serialize and deserialize", "[effect][mask][json]") {
 	const std::string mask_path = create_mask_png({255, 0});
 
@@ -194,6 +306,30 @@ TEST_CASE("EffectBase can use tracker effect bbox as generated mask source", "[e
 	CHECK(out_image->pixelColor(1, 0).red() > 80);
 	CHECK(out_image->pixelColor(2, 0).red() == 80);
 	CHECK(out_image->pixelColor(3, 0).red() == 80);
+}
+
+TEST_CASE("EffectBase tracker mask source honors corner radius", "[effect][mask][tracker]") {
+	Clip parent_clip;
+	Tracker tracker;
+	tracker.Id("tracker-source");
+	tracker.trackedData->SetBaseFPS(Fraction(30, 1));
+	tracker.trackedData->AddBox(1, 0.5f, 0.5f, 1.0f, 1.0f, 0.0f);
+	tracker.trackedData->background_corner = Keyframe(12.0);
+
+	Brightness brightness(Keyframe(0.8), Keyframe(0.0));
+	brightness.MaskSourceId("tracker-source");
+
+	parent_clip.AddEffect(&tracker);
+	parent_clip.AddEffect(&brightness);
+
+	auto frame = std::make_shared<Frame>(1, 20, 20, "#000000");
+	frame->GetImage()->fill(QColor(80, 80, 80, 255));
+
+	auto out = brightness.ProcessFrame(frame, 1);
+	auto out_image = out->GetImage();
+
+	CHECK(out_image->pixelColor(0, 0).red() == 80);
+	CHECK(out_image->pixelColor(10, 10).red() > 80);
 }
 
 TEST_CASE("EffectBase tracker mask source with no visible bbox preserves original frame", "[effect][mask][tracker]") {

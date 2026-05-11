@@ -544,7 +544,7 @@ std::shared_ptr<QImage> EffectBase::TrackedObjectMask(std::shared_ptr<QImage> ta
 	mask_image->fill(QColor(0, 0, 0, 255));
 
 	QPainter painter(mask_image.get());
-	painter.setRenderHint(QPainter::Antialiasing, false);
+	painter.setRenderHint(QPainter::Antialiasing, true);
 	painter.setPen(Qt::NoPen);
 	painter.setBrush(QBrush(QColor(255, 255, 255, 255)));
 
@@ -564,16 +564,17 @@ std::shared_ptr<QImage> EffectBase::TrackedObjectMask(std::shared_ptr<QImage> ta
 		const double y = (box.cy - box.height / 2.0) * target_image->height();
 		const double w = box.width * target_image->width();
 		const double h = box.height * target_image->height();
+		const double corner = bbox->background_corner.GetValue(frame_number);
 		QRectF rect(x, y, w, h);
 
 		if (std::abs(box.angle) > 0.0001f) {
 			painter.save();
 			painter.translate(rect.center());
 			painter.rotate(box.angle);
-			painter.drawRect(QRectF(-w / 2.0, -h / 2.0, w, h));
+			painter.drawRoundedRect(QRectF(-w / 2.0, -h / 2.0, w, h), corner, corner);
 			painter.restore();
 		} else {
-			painter.drawRect(rect);
+			painter.drawRoundedRect(rect, corner, corner);
 		}
 		drew_any_box = true;
 	}

@@ -32,6 +32,22 @@ using namespace std;
 using namespace openshot;
 
 namespace {
+bool is_all_objects_key(const std::string& name)
+{
+    const QString normalized = QString::fromStdString(name).trimmed().toLower();
+    return normalized == "all" || normalized == "*" || normalized == "-1";
+}
+
+std::shared_ptr<TrackedObjectBBox> make_all_objects_properties(
+	const std::shared_ptr<TrackedObjectBase>& source)
+{
+	auto properties = std::make_shared<TrackedObjectBBox>();
+	if (source)
+		properties->SetJsonValue(source->JsonValue());
+	properties->Id("All Objects");
+	return properties;
+}
+
 cv::Scalar default_class_color(const std::string& class_name, int index)
 {
     const QString normalized = QString::fromStdString(class_name).trimmed().toLower();
@@ -249,6 +265,7 @@ bool ObjectDetection::LoadObjDetectdData(std::string inputFilePath)
                     /*alpha=*/0
                 );
                 tmpObj.stroke_alpha = Keyframe(1.0);
+                tmpObj.background_alpha = Keyframe(0.15);
                 tmpObj.AddBox(frameId, x + w/2, y + h/2, w, h, 0.0);
 
 				auto ptr = std::make_shared<TrackedObjectBBox>(tmpObj);
@@ -271,9 +288,9 @@ bool ObjectDetection::LoadObjDetectdData(std::string inputFilePath)
 
     google::protobuf::ShutdownProtobufLibrary();
 
-    // Finally, pick a default selectedObjectIndex if we have any
+    // Default to the pseudo-selection that edits every tracked object.
     if (!trackedObjects.empty()) {
-        selectedObjectIndex = trackedObjects.begin()->first;
+        selectedObjectIndex = -1;
     }
 
     return true;
@@ -293,6 +310,12 @@ std::string ObjectDetection::GetVisibleObjects(int64_t frame_number) const{
 		return root.toStyledString();
 	}
 	DetectionData detections = detectionsData.at(frame_number);
+
+	if (!trackedObjects.empty()) {
+		root["visible_objects_index"].append(-1);
+		root["visible_objects_id"].append("All Objects");
+		root["visible_class_names"].append("All Objects");
+	}
 
 	// Iterate through the tracked objects
 	for(int i = 0; i<detections.boxes.size(); i++){
@@ -348,7 +371,7 @@ std::shared_ptr<QImage> ObjectDetection::TrackedObjectMask(std::shared_ptr<QImag
 	mask_image->fill(QColor(0, 0, 0, 255));
 
 	QPainter painter(mask_image.get());
-	painter.setRenderHint(QPainter::Antialiasing, false);
+	painter.setRenderHint(QPainter::Antialiasing, true);
 	painter.setPen(Qt::NoPen);
 	painter.setBrush(QBrush(QColor(255, 255, 255, 255)));
 
@@ -387,7 +410,8 @@ std::shared_ptr<QImage> ObjectDetection::TrackedObjectMask(std::shared_ptr<QImag
 		const double y = (box.cy - box.height / 2.0) * target_image->height();
 		const double w = box.width * target_image->width();
 		const double h = box.height * target_image->height();
-		painter.drawRect(QRectF(x, y, w, h));
+		const double corner = tracked_object->background_corner.GetValue(frame_number);
+		painter.drawRoundedRect(QRectF(x, y, w, h), corner, corner);
 		drew_any_box = true;
 	}
 
@@ -457,6 +481,7 @@ void ObjectDetection::SetJsonValue(const Json::Value root)
 		std::string new_path = root["protobuf_data_path"].asString();
 		if (protobuf_data_path != new_path || trackedObjects.empty()) {
 			protobuf_data_path = new_path;
+			allObjectsProperties.reset();
 			if (!LoadObjDetectdData(protobuf_data_path)) {
 				throw InvalidFile("Invalid protobuf data path", "");
 			}
@@ -491,6 +516,25 @@ void ObjectDetection::SetJsonValue(const Json::Value root)
 		const auto memberNames = root["objects"].getMemberNames();
 		for (const auto& name : memberNames)
 		{
+			if (is_all_objects_key(name)) {
+				if (!allObjectsProperties) {
+					std::shared_ptr<TrackedObjectBase> firstObject;
+					if (!trackedObjects.empty())
+						firstObject = trackedObjects.begin()->second;
+					allObjectsProperties = make_all_objects_properties(firstObject);
+				}
+				allObjectsProperties->SetJsonValue(root["objects"][name]);
+				for (auto& trackedObject : trackedObjects) {
+					if (trackedObject.second)
+						trackedObject.second->SetJsonValue(root["objects"][name]);
+				}
+			}
+		}
+
+		for (const auto& name : memberNames)
+		{
+			if (is_all_objects_key(name))
+				continue;
 			// Determine the numeric index of this object
 			int index = -1;
 			bool numeric_key = std::all_of(name.begin(), name.end(), ::isdigit);
@@ -534,7 +578,19 @@ std::string ObjectDetection::PropertiesJSON(int64_t requested_frame) const {
 	Json::Value root = BasePropertiesJSON(requested_frame);
 
 	Json::Value objects;
-	if(trackedObjects.count(selectedObjectIndex) != 0){
+	if(selectedObjectIndex == -1 && !trackedObjects.empty()){
+		auto selectedObject = allObjectsProperties ? allObjectsProperties : trackedObjects.begin()->second;
+		if (selectedObject){
+			Json::Value trackedObjectJSON = selectedObject->PropertiesJSON(requested_frame);
+			trackedObjectJSON["box_id"]["memo"] = "All Objects";
+			trackedObjectJSON.removeMember("x1");
+			trackedObjectJSON.removeMember("y1");
+			trackedObjectJSON.removeMember("x2");
+			trackedObjectJSON.removeMember("y2");
+			objects["all"] = trackedObjectJSON;
+		}
+	}
+	else if(trackedObjects.count(selectedObjectIndex) != 0){
 		auto selectedObject = trackedObjects.at(selectedObjectIndex);
 		if (selectedObject){
 			Json::Value trackedObjectJSON = selectedObject->PropertiesJSON(requested_frame);
@@ -544,17 +600,9 @@ std::string ObjectDetection::PropertiesJSON(int64_t requested_frame) const {
 	}
 	root["objects"] = objects;
 
-	root["selected_object_index"] = add_property_json("Selected Object", selectedObjectIndex, "int", "", NULL, 0, 200, false, requested_frame);
-	root["confidence_threshold"] = add_property_json("Confidence Theshold", confidence_threshold, "float", "", NULL, 0, 1, false, requested_frame);
+	root["selected_object_index"] = add_property_json("Selected Object", selectedObjectIndex, "int", "", NULL, -1, 200, false, requested_frame);
+	root["confidence_threshold"] = add_property_json("Confidence Threshold", confidence_threshold, "float", "", NULL, 0, 1, false, requested_frame);
 	root["class_filter"] = add_property_json("Class Filter", 0.0, "string", class_filter, NULL, -1, -1, false, requested_frame);
-
-	root["display_box_text"] = add_property_json("Draw All Text", display_box_text.GetValue(requested_frame), "int", "", &display_box_text, 0, 1, false, requested_frame);
-	root["display_box_text"]["choices"].append(add_property_choice_json("Yes", true, display_box_text.GetValue(requested_frame)));
-	root["display_box_text"]["choices"].append(add_property_choice_json("No", false, display_box_text.GetValue(requested_frame)));
-
-	root["display_boxes"] = add_property_json("Draw All Boxes", display_boxes.GetValue(requested_frame), "int", "", &display_boxes, 0, 1, false, requested_frame);
-	root["display_boxes"]["choices"].append(add_property_choice_json("Yes", true, display_boxes.GetValue(requested_frame)));
-	root["display_boxes"]["choices"].append(add_property_choice_json("No", false, display_boxes.GetValue(requested_frame)));
 
 	// Return formatted string
 	return root.toStyledString();

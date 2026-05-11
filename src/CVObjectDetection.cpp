@@ -14,6 +14,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <algorithm>
 
 #include "CVObjectDetection.h"
 #include "Exceptions.h"
@@ -26,10 +27,10 @@ using namespace openshot;
 using google::protobuf::util::TimeUtil;
 
 CVObjectDetection::CVObjectDetection(std::string processInfoJson, ProcessingController &processingController)
-: processingController(&processingController), processingDevice("CPU"){
-    SetJson(processInfoJson);
-    confThreshold = 0.5;
+: processingController(&processingController), processingDevice("CPU"), inpWidth(640), inpHeight(640){
+    confThreshold = 0.25;
     nmsThreshold = 0.1;
+    SetJson(processInfoJson);
 }
 
 void CVObjectDetection::setProcessingDevice(){
@@ -56,15 +57,48 @@ void CVObjectDetection::detectObjectsClip(openshot::Clip &video, size_t _start, 
 
     processingController->SetError(false, "");
 
+    if(modelPath.empty()) {
+        processingController->SetError(true, "Missing path to YOLOv5 ONNX model file");
+        error = true;
+        return;
+    }
+    if(classesFile.empty()) {
+        processingController->SetError(true, "Missing path to class name file");
+        error = true;
+        return;
+    }
+
+    std::ifstream model_file(modelPath);
+    if(!model_file.good()){
+        processingController->SetError(true, "Incorrect path to YOLOv5 ONNX model file");
+        error = true;
+        return;
+    }
+    std::ifstream classes_file(classesFile);
+    if(!classes_file.good()){
+        processingController->SetError(true, "Incorrect path to class name file");
+        error = true;
+        return;
+    }
+
     // Load names of classes
-    std::ifstream ifs(classesFile.c_str());
+    classNames.clear();
     std::string line;
-    while (std::getline(ifs, line)) classNames.push_back(line);
+    while (std::getline(classes_file, line)) classNames.push_back(line);
 
     // Load the network
-    if(classesFile == "" || modelConfiguration == "" || modelWeights == "")
+    try {
+        net = cv::dnn::readNetFromONNX(modelPath);
+    } catch (const cv::Exception& e) {
+        std::string error_text = std::string("Failed to load model: ") + e.what();
+        if (error_text.find("Unsupported data type: FLOAT16") != std::string::npos) {
+            error_text = "Failed to load ONNX model: FLOAT16 is not supported by this OpenCV build. "
+                         "Please use an FP32 ONNX model.";
+        }
+        processingController->SetError(true, error_text);
+        error = true;
         return;
-    net = cv::dnn::readNetFromDarknet(modelConfiguration, modelWeights);
+    }
     setProcessingDevice();
 
     size_t frame_number;
@@ -99,17 +133,19 @@ void CVObjectDetection::DetectObjects(const cv::Mat &frame, size_t frameId){
     cv::Mat blob;
 
     // Create a 4D blob from the frame.
-    int inpWidth, inpHeight;
-    inpWidth = inpHeight = 416;
-
     cv::dnn::blobFromImage(frame, blob, 1/255.0, cv::Size(inpWidth, inpHeight), cv::Scalar(0,0,0), true, false);
 
-    //Sets the input to the network
-    net.setInput(blob);
-
-    // Runs the forward pass to get output of the output layers
     std::vector<cv::Mat> outs;
-    net.forward(outs, getOutputsNames(net));
+    try {
+        // Sets the input to the network
+        net.setInput(blob);
+        // Runs the forward pass to get output of the output layers
+        net.forward(outs, getOutputsNames(net));
+    } catch (const cv::Exception& e) {
+        processingController->SetError(true, std::string("Object detection inference failed: ") + e.what());
+        error = true;
+        return;
+    }
 
     // Remove the bounding boxes with low confidence
     postprocess(frame.size(), outs, frameId);
@@ -123,33 +159,71 @@ void CVObjectDetection::postprocess(const cv::Size &frameDims, const std::vector
     std::vector<int> classIds;
     std::vector<float> confidences;
     std::vector<cv::Rect> boxes;
+    std::vector<std::vector<ClassScore>> detectionClassScores;
     std::vector<int> objectIds;
+    const int maxClassCandidates = 5;
 
-    for (size_t i = 0; i < outs.size(); ++i)
-    {
-        // Scan through all the bounding boxes output from the network and keep only the
-        // ones with high confidence scores. Assign the box's class label as the class
-        // with the highest score for the box.
-        float* data = (float*)outs[i].data;
-        for (int j = 0; j < outs[i].rows; ++j, data += outs[i].cols)
-        {
-            cv::Mat scores = outs[i].row(j).colRange(5, outs[i].cols);
-            cv::Point classIdPoint;
-            double confidence;
-            // Get the value and location of the maximum score
-            cv::minMaxLoc(scores, 0, &confidence, 0, &classIdPoint);
-            if (confidence > confThreshold)
-            {
-                int centerX = (int)(data[0] * frameDims.width);
-                int centerY = (int)(data[1] * frameDims.height);
-                int width = (int)(data[2] * frameDims.width);
-                int height = (int)(data[3] * frameDims.height);
+    for (size_t i = 0; i < outs.size(); ++i) {
+        cv::Mat det = outs[i];
+
+        // YOLOv5 ONNX output is usually [1, num_boxes, num_classes + 5].
+        if (det.dims == 3) {
+            det = det.reshape(1, det.size[1]);
+        }
+        if (det.dims != 2 || det.cols < 6) {
+            continue;
+        }
+
+        const float xFactor = static_cast<float>(frameDims.width) / static_cast<float>(inpWidth);
+        const float yFactor = static_cast<float>(frameDims.height) / static_cast<float>(inpHeight);
+
+        float* data = reinterpret_cast<float*>(det.data);
+        for (int j = 0; j < det.rows; ++j, data += det.cols) {
+            std::vector<ClassScore> rowClassScores;
+            rowClassScores.reserve(maxClassCandidates);
+            for (int classIndex = 5; classIndex < det.cols; ++classIndex) {
+                const float classConfidence = data[classIndex] * data[4];
+                if (rowClassScores.size() < static_cast<size_t>(maxClassCandidates)) {
+                    rowClassScores.emplace_back(classIndex - 5, classConfidence);
+                    std::sort(rowClassScores.begin(), rowClassScores.end(),
+                        [](const ClassScore& a, const ClassScore& b) { return a.score > b.score; });
+                } else if (classConfidence > rowClassScores.back().score) {
+                    rowClassScores.back() = ClassScore(classIndex - 5, classConfidence);
+                    std::sort(rowClassScores.begin(), rowClassScores.end(),
+                        [](const ClassScore& a, const ClassScore& b) { return a.score > b.score; });
+                }
+            }
+            if (rowClassScores.empty()) {
+                continue;
+            }
+
+            float confidence = rowClassScores.front().score;
+
+            if (confidence > confThreshold) {
+                int centerX = 0;
+                int centerY = 0;
+                int width = 0;
+                int height = 0;
+
+                if (data[0] > 1.0f || data[1] > 1.0f || data[2] > 1.0f || data[3] > 1.0f) {
+                    centerX = static_cast<int>(data[0] * xFactor);
+                    centerY = static_cast<int>(data[1] * yFactor);
+                    width = static_cast<int>(data[2] * xFactor);
+                    height = static_cast<int>(data[3] * yFactor);
+                } else {
+                    centerX = static_cast<int>(data[0] * frameDims.width);
+                    centerY = static_cast<int>(data[1] * frameDims.height);
+                    width = static_cast<int>(data[2] * frameDims.width);
+                    height = static_cast<int>(data[3] * frameDims.height);
+                }
+
                 int left = centerX - width / 2;
                 int top = centerY - height / 2;
 
-                classIds.push_back(classIdPoint.x);
-                confidences.push_back((float)confidence);
+                classIds.push_back(rowClassScores.front().classId);
+                confidences.push_back(confidence);
                 boxes.push_back(cv::Rect(left, top, width, height));
+                detectionClassScores.push_back(rowClassScores);
             }
         }
     }
@@ -161,9 +235,16 @@ void CVObjectDetection::postprocess(const cv::Size &frameDims, const std::vector
 
     // Pass boxes to SORT algorithm
     std::vector<cv::Rect> sortBoxes;
-    for(auto box : boxes)
-        sortBoxes.push_back(box);
-    sort.update(sortBoxes, frameId, sqrt(pow(frameDims.width,2) + pow(frameDims.height, 2)), confidences, classIds);
+    std::vector<float> sortConfidences;
+    std::vector<int> sortClassIds;
+    std::vector<std::vector<ClassScore>> sortClassScores;
+    for(auto index : indices) {
+        sortBoxes.push_back(boxes[index]);
+        sortConfidences.push_back(confidences[index]);
+        sortClassIds.push_back(classIds[index]);
+        sortClassScores.push_back(detectionClassScores[index]);
+    }
+    sort.update(sortBoxes, frameId, sqrt(pow(frameDims.width,2) + pow(frameDims.height, 2)), sortConfidences, sortClassIds, sortClassScores);
 
     // Clear data vectors
     boxes.clear(); confidences.clear(); classIds.clear(); objectIds.clear();
@@ -180,8 +261,8 @@ void CVObjectDetection::postprocess(const cv::Size &frameDims, const std::vector
     // Remove boxes based on controids distance
     for(uint i = 0; i<boxes.size(); i++){
         for(uint j = i+1; j<boxes.size(); j++){
-            int xc_1 = boxes[i].x + (int)(boxes[i].width/2), yc_1 = boxes[i].y + (int)(boxes[i].width/2);
-            int xc_2 = boxes[j].x + (int)(boxes[j].width/2), yc_2 = boxes[j].y + (int)(boxes[j].width/2);
+            int xc_1 = boxes[i].x + (int)(boxes[i].width/2), yc_1 = boxes[i].y + (int)(boxes[i].height/2);
+            int xc_2 = boxes[j].x + (int)(boxes[j].width/2), yc_2 = boxes[j].y + (int)(boxes[j].height/2);
 
             if(fabs(xc_1 - xc_2) < 10 && fabs(yc_1 - yc_2) < 10){
                 if(classIds[i] == classIds[j]){
@@ -272,8 +353,6 @@ bool CVObjectDetection::iou(cv::Rect pred_box, cv::Rect sort_box){
 // Get the names of the output layers
 std::vector<cv::String> CVObjectDetection::getOutputsNames(const cv::dnn::Net& net)
 {
-    static std::vector<cv::String> names;
-
     //Get the indices of the output layers, i.e. the layers with unconnected outputs
     std::vector<int> outLayers = net.getUnconnectedOutLayers();
 
@@ -281,6 +360,7 @@ std::vector<cv::String> CVObjectDetection::getOutputsNames(const cv::dnn::Net& n
     std::vector<cv::String> layersNames = net.getLayerNames();
 
     // Get the names of the output layers in names
+    std::vector<cv::String> names;
     names.resize(outLayers.size());
     for (size_t i = 0; i < outLayers.size(); ++i)
         names[i] = layersNames[outLayers[i] - 1];
@@ -299,6 +379,11 @@ CVDetectionData CVObjectDetection::GetDetectionData(size_t frameId){
 }
 
 bool CVObjectDetection::SaveObjDetectedData(){
+    if(protobuf_data_path.empty()) {
+        cerr << "Missing path to object detection protobuf data file." << endl;
+        return false;
+    }
+
     // Create tracker message
     pb_objdetect::ObjDetect objMessage;
 
@@ -311,7 +396,6 @@ bool CVObjectDetection::SaveObjDetectedData(){
     // Iterate over all frames data and save in protobuf message
     for(std::map<size_t,CVDetectionData>::iterator it=detectionsData.begin(); it!=detectionsData.end(); ++it){
         CVDetectionData dData = it->second;
-        pb_objdetect::Frame* pbFrameData;
         AddFrameDataToProto(objMessage.add_frame(), dData);
     }
 
@@ -380,37 +464,49 @@ void CVObjectDetection::SetJsonValue(const Json::Value root) {
 	if (!root["protobuf_data_path"].isNull()){
 		protobuf_data_path = (root["protobuf_data_path"].asString());
 	}
+
     if (!root["processing-device"].isNull()){
 		processingDevice = (root["processing-device"].asString());
 	}
-    if (!root["model-config"].isNull()){
-		modelConfiguration = (root["model-config"].asString());
-        std::ifstream infile(modelConfiguration);
-        if(!infile.good()){
-            processingController->SetError(true, "Incorrect path to model config file");
-            error = true;
-        }
-
-	}
-    if (!root["model-weights"].isNull()){
-		modelWeights= (root["model-weights"].asString());
-        std::ifstream infile(modelWeights);
-        if(!infile.good()){
-            processingController->SetError(true, "Incorrect path to model weight file");
-            error = true;
-        }
-
+    if (!root["processing_device"].isNull()){
+		processingDevice = (root["processing_device"].asString());
 	}
     if (!root["class-names"].isNull()){
 		classesFile = (root["class-names"].asString());
-
-        std::ifstream infile(classesFile);
-        if(!infile.good()){
-            processingController->SetError(true, "Incorrect path to class name file");
-            error = true;
-        }
-
 	}
+    if (!root["classes_file"].isNull()){
+		classesFile = (root["classes_file"].asString());
+	}
+    if (!root["model"].isNull()){
+        modelPath = (root["model"].asString());
+    }
+    if (!root["model_path"].isNull()){
+        modelPath = (root["model_path"].asString());
+    }
+    if (!root["input-width"].isNull()){
+        inpWidth = root["input-width"].asInt();
+    }
+    if (!root["input_width"].isNull()){
+        inpWidth = root["input_width"].asInt();
+    }
+    if (!root["input-height"].isNull()){
+        inpHeight = root["input-height"].asInt();
+    }
+    if (!root["input_height"].isNull()){
+        inpHeight = root["input_height"].asInt();
+    }
+    if (!root["confidence-threshold"].isNull()){
+        confThreshold = root["confidence-threshold"].asFloat();
+    }
+    if (!root["confidence_threshold"].isNull()){
+        confThreshold = root["confidence_threshold"].asFloat();
+    }
+    if (!root["nms-threshold"].isNull()){
+        nmsThreshold = root["nms-threshold"].asFloat();
+    }
+    if (!root["nms_threshold"].isNull()){
+        nmsThreshold = root["nms_threshold"].asFloat();
+    }
 }
 
 /*
@@ -421,6 +517,11 @@ void CVObjectDetection::SetJsonValue(const Json::Value root) {
 
 // Load protobuf data file
 bool CVObjectDetection::_LoadObjDetectdData(){
+    if(protobuf_data_path.empty()) {
+        cerr << "Missing path to object detection protobuf data file." << endl;
+        return false;
+    }
+
     // Create tracker message
     pb_objdetect::ObjDetect objMessage;
 
@@ -472,6 +573,7 @@ bool CVObjectDetection::_LoadObjDetectdData(){
 
             // Push back data into vectors
             boxes.push_back(box); classIds.push_back(classId); confidences.push_back(confidence);
+            objectIds.push_back(objectId);
         }
 
         // Assign data to object detector map
