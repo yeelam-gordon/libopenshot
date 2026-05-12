@@ -217,6 +217,9 @@ namespace openshot {
 		/// Increment the cache invalidation epoch.
 		void BumpCacheEpoch();
 
+		/// Remove cached timeline frames covered by a clip and notify cache clients.
+		void InvalidateCacheForClip(const openshot::Clip* clip);
+
 	public:
 
 		/// @brief Constructor for the timeline (which configures the default frame properties)

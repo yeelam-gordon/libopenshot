@@ -353,6 +353,8 @@ void Timeline::AddClip(Clip* clip)
 		apply_mapper_to_clip(clip);
 	}
 
+	InvalidateCacheForClip(clip);
+
 	// Add clip to list
 	clips.push_back(clip);
 
@@ -1378,6 +1380,7 @@ void Timeline::ApplyJsonDiff(std::string value) {
 	try
 	{
 		const Json::Value root = openshot::stringToJson(value);
+		const uint64_t initial_cache_epoch = CacheEpoch();
 		// Process the JSON change array, loop through each item
 		for (const Json::Value change : root) {
 			std::string change_key = change["key"][(uint)0].asString();
@@ -1398,7 +1401,7 @@ void Timeline::ApplyJsonDiff(std::string value) {
 		}
 
 		// Timeline content changed: notify cache clients to rescan active window.
-		if (!root.empty()) {
+		if (!root.empty() && CacheEpoch() == initial_cache_epoch) {
 			BumpCacheEpoch();
 		}
 	}
@@ -1411,6 +1414,18 @@ void Timeline::ApplyJsonDiff(std::string value) {
 
 void Timeline::BumpCacheEpoch() {
 	cache_epoch.fetch_add(1, std::memory_order_relaxed);
+}
+
+void Timeline::InvalidateCacheForClip(const Clip* clip) {
+	if (!clip || !final_cache) {
+		return;
+	}
+
+	const double fpsD = info.fps.ToDouble();
+	const int64_t starting_frame = static_cast<int64_t>(std::llround(clip->Position() * fpsD)) + 1;
+	const int64_t ending_frame = static_cast<int64_t>(std::llround((clip->Position() + clip->Duration()) * fpsD)) + 1;
+	final_cache->Remove(starting_frame - 8, ending_frame + 8);
+	BumpCacheEpoch();
 }
 
 // Apply JSON diff to clips
@@ -1500,11 +1515,6 @@ void Timeline::apply_json_to_clips(Json::Value change) {
 
 		// Add clip to timeline
 		AddClip(clip);
-
-		// Calculate start and end frames that this impacts, and remove those frames from the cache
-		int64_t new_starting_frame = (clip->Position() * info.fps.ToDouble()) + 1;
-		int64_t new_ending_frame = ((clip->Position() + clip->Duration()) * info.fps.ToDouble()) + 1;
-		final_cache->Remove(new_starting_frame - 8, new_ending_frame + 8);
 
 	} else if (change_type == "update") {
 

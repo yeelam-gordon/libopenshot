@@ -1562,6 +1562,47 @@ TEST_CASE( "ApplyJSONDiff insert invalidates overlapping timeline cache", "[libo
 	CHECK(!t.GetCache()->Contains(10));
 }
 
+TEST_CASE( "AddClip replaces stale cached black timeline frames with new clip content", "[libopenshot][timeline][cache]" )
+{
+	Timeline t(640, 480, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	t.Open();
+
+	// Cache two frames while the timeline has no clips. This reproduces the
+	// stale final_cache state VideoCacheThread can build before a simple edit.
+	std::shared_ptr<Frame> cached_before = t.GetFrame(10);
+	std::shared_ptr<Frame> cached_far = t.GetFrame(400);
+	REQUIRE(cached_before != nullptr);
+	REQUIRE(cached_far != nullptr);
+	REQUIRE(t.GetCache() != nullptr);
+	REQUIRE(t.GetCache()->Contains(10));
+	REQUIRE(t.GetCache()->Contains(400));
+	CHECK(cached_before->GetImage()->pixelColor(320, 240) == QColor(0, 0, 0, 255));
+
+	TimelineSolidColorReader red_reader(
+		/*width=*/640, /*height=*/480, /*fps_num=*/30, /*fps_den=*/1, /*length_frames=*/300,
+		QColor(220, 20, 30, 255)
+	);
+	Clip clip(&red_reader);
+	clip.Id("ADDCLIP_CACHE_INVALIDATE");
+	clip.Layer(1);
+	clip.Position(0.0);
+	clip.Start(0.0);
+	clip.End(10.0);
+	t.AddClip(&clip);
+
+	CHECK(!t.GetCache()->Contains(10));
+	CHECK(t.GetCache()->Contains(400));
+
+	std::shared_ptr<Frame> refreshed = t.GetFrame(10);
+	REQUIRE(refreshed != nullptr);
+	const QColor refreshed_pixel = refreshed->GetImage()->pixelColor(320, 240);
+	CHECK(refreshed_pixel.red() == Approx(220).margin(2));
+	CHECK(refreshed_pixel.green() == Approx(20).margin(2));
+	CHECK(refreshed_pixel.blue() == Approx(30).margin(2));
+
+	t.RemoveClip(&clip);
+}
+
 TEST_CASE( "ApplyJSONDiff alpha updates refresh fixed-frame preview content", "[libopenshot][timeline]" )
 {
 	// Deterministic solid-color readers avoid any fixture/image ambiguity.
