@@ -53,6 +53,7 @@ set(OPENSHOT_TESTS
   VideoCacheThread
   # Effects
   AudioVisualization
+  Bars
   BeatSync
   Blur
   ColorGrade
@@ -67,6 +68,7 @@ set(OPENSHOT_TESTS
   BenchmarkArgs
   EffectMask
   Mask
+  Pixelate
   Saturation
   Sharpen
   Shadow

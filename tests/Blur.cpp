@@ -40,6 +40,25 @@ TEST_CASE("Blur margins limit affected area", "[effect][blur]") {
 	CHECK(out_image->pixelColor(5, 0).red() > 0);
 }
 
+TEST_CASE("Blur margins handle small affected area", "[effect][blur]") {
+	auto frame = std::make_shared<Frame>(1, 8, 8, "#000000");
+	auto image = frame->GetImage();
+
+	for (int y = 0; y < image->height(); ++y) {
+		for (int x = 0; x < image->width(); ++x) {
+			image->setPixelColor(x, y, ((x + y) % 2 == 0)
+								 ? QColor(255, 255, 255, 255)
+								 : QColor(0, 0, 0, 255));
+		}
+	}
+
+	Blur effect(Keyframe(6.0), Keyframe(6.0), Keyframe(3.0), Keyframe(1.0),
+				Keyframe(0.25), Keyframe(0.25), Keyframe(0.25), Keyframe(0.25));
+
+	REQUIRE_NOTHROW(effect.GetFrame(frame, 1));
+	CHECK(image->size() == QSize(8, 8));
+}
+
 TEST_CASE("Blur margin properties serialize", "[effect][blur][json]") {
 	Blur effect(Keyframe(6.0), Keyframe(6.0), Keyframe(3.0), Keyframe(3.0),
 				Keyframe(0.1), Keyframe(0.2), Keyframe(0.3), Keyframe(0.4));

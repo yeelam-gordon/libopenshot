@@ -201,42 +201,26 @@ void Blur::boxBlurH(unsigned char *scl, unsigned char *tcl, int w, int h, int r)
 		const unsigned char* src = scl + i * w * 4;
 		unsigned char* dst = tcl + i * w * 4;
 
-		const unsigned char* first = src;
-		const unsigned char* last  = src + (w - 1) * 4;
-
-		int val[4];
-		for (int c = 0; c < 4; ++c)
-			val[c] = (r + 1) * first[c];
-		for (int j = 0; j < r; ++j) {
-			const unsigned char* p = src + j * 4;
+		int val[4] = {0, 0, 0, 0};
+		for (int j = -r; j <= r; ++j) {
+			const int sample_x = std::min(std::max(j, 0), w - 1);
+			const unsigned char* p = src + sample_x * 4;
 			for (int c = 0; c < 4; ++c)
 				val[c] += p[c];
 		}
 
-		int li = 0, ri = r;
-		for (int j = 0; j <= r; ++j, ++ri) {
-			const unsigned char* add = src + ri * 4;
+		for (int j = 0; j < w; ++j) {
 			unsigned char* out = dst + j * 4;
 			for (int c = 0; c < 4; ++c) {
-				val[c] += add[c] - first[c];
 				out[c] = (unsigned char)(val[c] * iarr + 0.5f);
 			}
-		}
-		for (int j = r + 1; j < w - r; ++j, ++li, ++ri) {
-			const unsigned char* add = src + ri * 4;
-			const unsigned char* sub = src + li * 4;
-			unsigned char* out = dst + j * 4;
+
+			const int remove_x = std::min(std::max(j - r, 0), w - 1);
+			const int add_x = std::min(std::max(j + r + 1, 0), w - 1);
+			const unsigned char* remove = src + remove_x * 4;
+			const unsigned char* add = src + add_x * 4;
 			for (int c = 0; c < 4; ++c) {
-				val[c] += add[c] - sub[c];
-				out[c] = (unsigned char)(val[c] * iarr + 0.5f);
-			}
-		}
-		for (int j = w - r; j < w; ++j, ++li) {
-			const unsigned char* sub = src + li * 4;
-			unsigned char* out = dst + j * 4;
-			for (int c = 0; c < 4; ++c) {
-				val[c] += last[c] - sub[c];
-				out[c] = (unsigned char)(val[c] * iarr + 0.5f);
+				val[c] += add[c] - remove[c];
 			}
 		}
 	}
@@ -251,42 +235,26 @@ void Blur::boxBlurT(unsigned char *scl, unsigned char *tcl, int w, int h, int r)
 		const unsigned char* col_src = scl + i * 4;
 		unsigned char* col_dst = tcl + i * 4;
 
-		const unsigned char* first = col_src;
-		const unsigned char* last  = col_src + (h - 1) * stride;
-
-		int val[4];
-		for (int c = 0; c < 4; ++c)
-			val[c] = (r + 1) * first[c];
-		for (int j = 0; j < r; ++j) {
-			const unsigned char* p = col_src + j * stride;
+		int val[4] = {0, 0, 0, 0};
+		for (int j = -r; j <= r; ++j) {
+			const int sample_y = std::min(std::max(j, 0), h - 1);
+			const unsigned char* p = col_src + sample_y * stride;
 			for (int c = 0; c < 4; ++c)
 				val[c] += p[c];
 		}
 
-		int li = 0, ri = r;
-		for (int j = 0; j <= r; ++j, ++ri) {
-			const unsigned char* add = col_src + ri * stride;
+		for (int j = 0; j < h; ++j) {
 			unsigned char* out = col_dst + j * stride;
 			for (int c = 0; c < 4; ++c) {
-				val[c] += add[c] - first[c];
 				out[c] = (unsigned char)(val[c] * iarr + 0.5f);
 			}
-		}
-		for (int j = r + 1; j < h - r; ++j, ++li, ++ri) {
-			const unsigned char* add = col_src + ri * stride;
-			const unsigned char* sub = col_src + li * stride;
-			unsigned char* out = col_dst + j * stride;
+
+			const int remove_y = std::min(std::max(j - r, 0), h - 1);
+			const int add_y = std::min(std::max(j + r + 1, 0), h - 1);
+			const unsigned char* remove = col_src + remove_y * stride;
+			const unsigned char* add = col_src + add_y * stride;
 			for (int c = 0; c < 4; ++c) {
-				val[c] += add[c] - sub[c];
-				out[c] = (unsigned char)(val[c] * iarr + 0.5f);
-			}
-		}
-		for (int j = h - r; j < h; ++j, ++li) {
-			const unsigned char* sub = col_src + li * stride;
-			unsigned char* out = col_dst + j * stride;
-			for (int c = 0; c < 4; ++c) {
-				val[c] += last[c] - sub[c];
-				out[c] = (unsigned char)(val[c] * iarr + 0.5f);
+				val[c] += add[c] - remove[c];
 			}
 		}
 	}
