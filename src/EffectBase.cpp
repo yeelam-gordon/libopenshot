@@ -144,27 +144,22 @@ void EffectBase::SetJson(const std::string value) {
 
 // Load Json::Value into this object
 void EffectBase::SetJsonValue(const Json::Value root) {
-
-	if (ParentTimeline()){
-		// Get parent timeline
-		Timeline* parentTimeline = static_cast<Timeline *>(ParentTimeline());
-
-		// Get the list of effects on the timeline
-		std::list<EffectBase*> effects = parentTimeline->ClipEffects();
-
-		// TODO: Fix recursive call for Object Detection
-
-		// // Loop through the effects and check if we have a child effect linked to this effect
-		for (auto const& effect : effects){
-			// Set the properties of all effects which parentEffect points to this
-			if ((effect->info.parent_effect_id == this->Id()) && (effect->Id() != this->Id()))
-				effect->SetJsonValue(root);
-		}
-	}
+	const std::string original_id = this->Id();
+	const std::string original_parent_effect_id = this->info.parent_effect_id;
 
 	// Set this effect properties with the parent effect properties (except the id and parent_effect_id)
 	Json::Value my_root;
-	if (parentEffect){
+	const bool applying_parent_payload =
+		!original_id.empty() &&
+		!original_parent_effect_id.empty() &&
+		!root["id"].isNull() &&
+		root["id"].asString() == original_parent_effect_id &&
+		root["id"].asString() != original_id;
+	if (applying_parent_payload) {
+		my_root = root;
+		my_root["id"] = original_id;
+		my_root["parent_effect_id"] = original_parent_effect_id;
+	} else if (parentEffect){
 		my_root = parentEffect->JsonValue();
 		my_root["id"] = this->Id();
 		my_root["parent_effect_id"] = this->info.parent_effect_id;
@@ -223,6 +218,23 @@ void EffectBase::SetJsonValue(const Json::Value root) {
 			SetParentEffect(info.parent_effect_id);
 		else
 			parentEffect = NULL;
+	}
+
+	if (ParentTimeline()){
+		// Get parent timeline
+		Timeline* parentTimeline = static_cast<Timeline *>(ParentTimeline());
+
+		// Get the list of effects on the timeline
+		std::list<EffectBase*> effects = parentTimeline->ClipEffects();
+
+		// TODO: Fix recursive call for Object Detection
+
+		// Loop through the effects and check if we have a child effect linked to this effect
+		for (auto const& effect : effects){
+			// Set the properties of all effects which parentEffect points to this
+			if ((effect->info.parent_effect_id == this->Id()) && (effect->Id() != this->Id()))
+				effect->SetJsonValue(my_root);
+		}
 	}
 }
 
@@ -595,25 +607,34 @@ void EffectBase::BlendWithMask(std::shared_ptr<QImage> original_image, std::shar
 	unsigned char* original_pixels = reinterpret_cast<unsigned char*>(original_image->bits());
 	unsigned char* effected_pixels = reinterpret_cast<unsigned char*>(effected_image->bits());
 	unsigned char* mask_pixels = reinterpret_cast<unsigned char*>(mask_image->bits());
-	const int pixel_count = effected_image->width() * effected_image->height();
+	const int width = effected_image->width();
+	const int height = effected_image->height();
+	const int original_stride = original_image->bytesPerLine();
+	const int effected_stride = effected_image->bytesPerLine();
+	const int mask_stride = mask_image->bytesPerLine();
 
 	#pragma omp parallel for schedule(static)
-	for (int i = 0; i < pixel_count; ++i) {
-		const int idx = i * 4;
-		int gray = qGray(mask_pixels[idx], mask_pixels[idx + 1], mask_pixels[idx + 2]);
-		if (mask_invert)
-			gray = 255 - gray;
-		const float factor = static_cast<float>(gray) / 255.0f;
-		const float inverse = 1.0f - factor;
+	for (int y = 0; y < height; ++y) {
+		unsigned char* original_row = original_pixels + y * original_stride;
+		unsigned char* effected_row = effected_pixels + y * effected_stride;
+		unsigned char* mask_row = mask_pixels + y * mask_stride;
+		for (int x = 0; x < width; ++x) {
+			const int idx = x * 4;
+			int gray = qGray(mask_row[idx], mask_row[idx + 1], mask_row[idx + 2]);
+			if (mask_invert)
+				gray = 255 - gray;
+			const float factor = static_cast<float>(gray) / 255.0f;
+			const float inverse = 1.0f - factor;
 
-		effected_pixels[idx] = static_cast<unsigned char>(
-			(original_pixels[idx] * inverse) + (effected_pixels[idx] * factor));
-		effected_pixels[idx + 1] = static_cast<unsigned char>(
-			(original_pixels[idx + 1] * inverse) + (effected_pixels[idx + 1] * factor));
-		effected_pixels[idx + 2] = static_cast<unsigned char>(
-			(original_pixels[idx + 2] * inverse) + (effected_pixels[idx + 2] * factor));
-		effected_pixels[idx + 3] = static_cast<unsigned char>(
-			(original_pixels[idx + 3] * inverse) + (effected_pixels[idx + 3] * factor));
+			effected_row[idx] = static_cast<unsigned char>(
+				(original_row[idx] * inverse) + (effected_row[idx] * factor));
+			effected_row[idx + 1] = static_cast<unsigned char>(
+				(original_row[idx + 1] * inverse) + (effected_row[idx + 1] * factor));
+			effected_row[idx + 2] = static_cast<unsigned char>(
+				(original_row[idx + 2] * inverse) + (effected_row[idx + 2] * factor));
+			effected_row[idx + 3] = static_cast<unsigned char>(
+				(original_row[idx + 3] * inverse) + (effected_row[idx + 3] * factor));
+		}
 	}
 }
 

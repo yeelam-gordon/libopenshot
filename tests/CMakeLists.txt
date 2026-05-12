@@ -67,6 +67,7 @@ set(OPENSHOT_TESTS
   BenchmarkArgs
   EffectMask
   Mask
+  Saturation
   Sharpen
   Shadow
   SphericalEffect

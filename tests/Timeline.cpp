@@ -33,6 +33,7 @@
 #include "effects/Bars.h"
 #include "effects/Mask.h"
 #include "effects/Negate.h"
+#include "effects/Saturation.h"
 
 using namespace openshot;
 
@@ -954,6 +955,70 @@ TEST_CASE( "GetClipEffect by id", "[libopenshot][timeline]" )
 	match1 = t.GetClipEffect(blur2_id);
 	CHECK(match1->Id() == blur2_id);
 	CHECK(match1->Layer() == 2);
+}
+
+TEST_CASE( "Parent effect update preserves child effect id", "[libopenshot][timeline]" )
+{
+	Timeline t(640, 480, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+
+	std::stringstream path1;
+	path1 << TEST_MEDIA_PATH << "interlaced.png";
+	auto media_path1 = path1.str();
+
+	Clip parent_clip(media_path1);
+	parent_clip.Id("CLIP-PARENT");
+
+	Clip child_clip(media_path1);
+	child_clip.Id("CLIP-CHILD");
+
+	Clip grandchild_clip(media_path1);
+	grandchild_clip.Id("CLIP-GRANDCHILD");
+
+	t.AddClip(&parent_clip);
+	t.AddClip(&child_clip);
+	t.AddClip(&grandchild_clip);
+
+	Saturation parent_effect;
+	parent_effect.Id("EFFECT-PARENT");
+	parent_clip.AddEffect(&parent_effect);
+
+	Saturation child_effect;
+	child_effect.Id("EFFECT-CHILD");
+	child_clip.AddEffect(&child_effect);
+
+	Saturation grandchild_effect;
+	grandchild_effect.Id("EFFECT-GRANDCHILD");
+	grandchild_clip.AddEffect(&grandchild_effect);
+
+	Json::Value child_json = child_effect.JsonValue();
+	child_json["parent_effect_id"] = parent_effect.Id();
+	child_effect.SetJsonValue(child_json);
+	REQUIRE(t.GetClipEffect("EFFECT-CHILD") != nullptr);
+
+	Json::Value grandchild_json = grandchild_effect.JsonValue();
+	grandchild_json["parent_effect_id"] = child_effect.Id();
+	grandchild_effect.SetJsonValue(grandchild_json);
+	REQUIRE(t.GetClipEffect("EFFECT-GRANDCHILD") != nullptr);
+
+	Json::Value parent_json = parent_effect.JsonValue();
+	parent_json["order"] = 7;
+	parent_json["saturation"] = Keyframe(2.25).JsonValue();
+	parent_json["saturation_R"] = Keyframe(0.5).JsonValue();
+	parent_effect.SetJsonValue(parent_json);
+
+	REQUIRE(t.GetClipEffect("EFFECT-PARENT") != nullptr);
+	REQUIRE(t.GetClipEffect("EFFECT-CHILD") != nullptr);
+	REQUIRE(t.GetClipEffect("EFFECT-GRANDCHILD") != nullptr);
+	CHECK(t.GetClipEffect("EFFECT-CHILD")->Id() == "EFFECT-CHILD");
+	CHECK(t.GetClipEffect("EFFECT-GRANDCHILD")->Id() == "EFFECT-GRANDCHILD");
+	CHECK(child_effect.Order() == 7);
+	CHECK(grandchild_effect.Order() == 7);
+	CHECK(child_effect.saturation.GetValue(1) == Approx(2.25));
+	CHECK(child_effect.saturation_R.GetValue(1) == Approx(0.5));
+	CHECK(grandchild_effect.saturation.GetValue(1) == Approx(2.25));
+	CHECK(grandchild_effect.saturation_R.GetValue(1) == Approx(0.5));
+	CHECK(openshot::stringToJson(child_effect.PropertiesJSON(1))["parent_effect_id"]["memo"].asString() == "EFFECT-PARENT");
+	CHECK(openshot::stringToJson(grandchild_effect.PropertiesJSON(1))["parent_effect_id"]["memo"].asString() == "EFFECT-CHILD");
 }
 
 TEST_CASE( "GetEffect by id", "[libopenshot][timeline]" )
