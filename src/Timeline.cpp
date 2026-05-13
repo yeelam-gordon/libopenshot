@@ -773,12 +773,11 @@ void Timeline::update_open_clips(Clip *clip, bool does_clip_intersect)
 	}
 	else if (!clip_found && does_clip_intersect)
 	{
-		// Add clip to 'opened' list, because it's missing
-		open_clips[clip] = clip;
-
 		try {
 			// Open the clip
 			clip->Open();
+			// Add clip to 'opened' list only after a successful open.
+			open_clips[clip] = clip;
 
 		} catch (const InvalidFile & e) {
 			// ...

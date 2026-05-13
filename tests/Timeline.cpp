@@ -202,6 +202,65 @@ public:
 	void SetJsonValue(const Json::Value root) override { ReaderBase::SetJsonValue(root); }
 };
 
+class TimelineFailFirstOpenReader : public ReaderBase {
+private:
+	bool is_open = false;
+	bool fail_next_open = false;
+	CacheMemory cache;
+	QColor color;
+
+public:
+	TimelineFailFirstOpenReader(int width,
+	                            int height,
+	                            int fps_num,
+	                            int fps_den,
+	                            int64_t length_frames,
+	                            const QColor& fill_color)
+		: color(fill_color) {
+		info.has_video = true;
+		info.has_audio = false;
+		info.width = width;
+		info.height = height;
+		info.fps = Fraction(fps_num, fps_den);
+		info.video_length = length_frames;
+		info.duration = static_cast<float>(length_frames / info.fps.ToDouble());
+		info.sample_rate = 48000;
+		info.channels = 2;
+		info.audio_stream_index = -1;
+	}
+
+	openshot::CacheBase* GetCache() override { return &cache; }
+	bool IsOpen() override { return is_open; }
+	std::string Name() override { return "TimelineFailFirstOpenReader"; }
+	void FailNextOpen() { fail_next_open = true; }
+	void Open() override {
+		if (fail_next_open) {
+			fail_next_open = false;
+			throw InvalidFile("synthetic first open failure", "");
+		}
+		is_open = true;
+	}
+	void Close() override { is_open = false; }
+
+	std::shared_ptr<openshot::Frame> GetFrame(int64_t number) override {
+		if (!is_open)
+			throw ReaderClosed("synthetic reader is closed");
+		auto frame = std::make_shared<Frame>(number, info.width, info.height, "#00000000");
+		frame->GetImage()->fill(color);
+		return frame;
+	}
+
+	std::string Json() const override { return JsonValue().toStyledString(); }
+	Json::Value JsonValue() const override {
+		Json::Value root = ReaderBase::JsonValue();
+		root["type"] = "TimelineFailFirstOpenReader";
+		root["path"] = "";
+		return root;
+	}
+	void SetJson(const std::string value) override { (void) value; }
+	void SetJsonValue(const Json::Value root) override { ReaderBase::SetJsonValue(root); }
+};
+
 static double expected_equal_power_gain(int64_t frame_number, int64_t start_frame, int64_t end_frame, bool fades_in) {
 	constexpr double kHalfPi = 1.57079632679489661923;
 	if (end_frame <= start_frame)
@@ -1599,6 +1658,40 @@ TEST_CASE( "AddClip replaces stale cached black timeline frames with new clip co
 	CHECK(refreshed_pixel.red() == Approx(220).margin(2));
 	CHECK(refreshed_pixel.green() == Approx(20).margin(2));
 	CHECK(refreshed_pixel.blue() == Approx(30).margin(2));
+
+	t.RemoveClip(&clip);
+}
+
+TEST_CASE( "Timeline retries opening intersecting clip after transient open failure", "[libopenshot][timeline]" )
+{
+	Timeline t(640, 480, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	t.Open();
+	t.AutoMapClips(false);
+
+	TimelineFailFirstOpenReader reader(
+		/*width=*/640, /*height=*/480, /*fps_num=*/30, /*fps_den=*/1, /*length_frames=*/300,
+		QColor(30, 210, 40, 255)
+	);
+	Clip clip(&reader);
+	reader.FailNextOpen();
+	clip.Id("RETRY_OPEN_AFTER_FAILURE");
+	clip.Layer(5000000);
+	clip.Position(0.0);
+	clip.Start(0.0);
+	clip.End(10.0);
+	t.AddClip(&clip);
+
+	std::shared_ptr<Frame> failed_open_frame = t.GetFrame(1);
+	REQUIRE(failed_open_frame != nullptr);
+	CHECK(failed_open_frame->GetImage()->pixelColor(320, 240) == QColor(0, 0, 0, 255));
+
+	t.GetCache()->Clear();
+	std::shared_ptr<Frame> retried_frame = t.GetFrame(1);
+	REQUIRE(retried_frame != nullptr);
+	const QColor retried_pixel = retried_frame->GetImage()->pixelColor(320, 240);
+	CHECK(retried_pixel.red() == Approx(30).margin(2));
+	CHECK(retried_pixel.green() == Approx(210).margin(2));
+	CHECK(retried_pixel.blue() == Approx(40).margin(2));
 
 	t.RemoveClip(&clip);
 }
