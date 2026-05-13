@@ -107,6 +107,8 @@ namespace openshot
 
         CVObjectDetection(std::string processInfoJson, ProcessingController &processingController);
 
+        static std::string ValidateONNXModel(std::string modelPath);
+
         // Iterate over a clip object and run inference for each video frame
         void detectObjectsClip(openshot::Clip &video, size_t start=0, size_t end=0, bool process_interval=false);
 

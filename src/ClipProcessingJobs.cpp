@@ -20,6 +20,14 @@ ClipProcessingJobs::ClipProcessingJobs(std::string processingType, std::string p
 processingType(processingType), processInfoJson(processInfoJson){
 }
 
+std::string ClipProcessingJobs::ValidateONNXModel(std::string modelPath){
+#ifdef USE_OPENCV
+    return CVObjectDetection::ValidateONNXModel(modelPath);
+#else
+    return "OpenShot was not compiled with OpenCV support.";
+#endif
+}
+
 void ClipProcessingJobs::processClip(Clip& clip, std::string json){
     processInfoJson = json;
 

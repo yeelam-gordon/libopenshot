@@ -26,11 +26,47 @@ using namespace std;
 using namespace openshot;
 using google::protobuf::util::TimeUtil;
 
+namespace {
+
+std::string LoadONNXModel(std::string modelPath, cv::dnn::Net *net)
+{
+#if CV_VERSION_MAJOR < 4 || (CV_VERSION_MAJOR == 4 && CV_VERSION_MINOR < 3)
+    return std::string("Failed to load ONNX model: YOLOv5 requires OpenCV 4.3.0 or newer. "
+                       "This OpenCV build is ") + CV_VERSION + ".";
+#else
+    try {
+        cv::dnn::Net loaded_net = cv::dnn::readNetFromONNX(modelPath);
+        if (net) {
+            *net = loaded_net;
+        }
+        return "";
+    } catch (const cv::Exception& e) {
+        std::string error_text = std::string("Failed to load ONNX model: ") + e.what();
+        if (error_text.find("Unsupported data type: FLOAT16") != std::string::npos) {
+            error_text = "Failed to load ONNX model: FLOAT16 is not supported by this OpenCV build. "
+                         "Please use an FP32 ONNX model.";
+        }
+        return error_text;
+    } catch (const std::exception& e) {
+        return std::string("Failed to load ONNX model: ") + e.what();
+    } catch (...) {
+        return "Failed to load ONNX model: unknown error";
+    }
+#endif
+}
+
+}
+
 CVObjectDetection::CVObjectDetection(std::string processInfoJson, ProcessingController &processingController)
 : processingController(&processingController), processingDevice("CPU"), inpWidth(640), inpHeight(640){
     confThreshold = 0.25;
     nmsThreshold = 0.1;
     SetJson(processInfoJson);
+}
+
+std::string CVObjectDetection::ValidateONNXModel(std::string modelPath)
+{
+    return LoadONNXModel(modelPath, nullptr);
 }
 
 void CVObjectDetection::setProcessingDevice(){
@@ -86,32 +122,10 @@ void CVObjectDetection::detectObjectsClip(openshot::Clip &video, size_t _start, 
     std::string line;
     while (std::getline(classes_file, line)) classNames.push_back(line);
 
-#if CV_VERSION_MAJOR < 4 || (CV_VERSION_MAJOR == 4 && CV_VERSION_MINOR < 3)
-    processingController->SetError(true,
-        std::string("Failed to load ONNX model: YOLOv5 requires OpenCV 4.3.0 or newer. "
-                    "This OpenCV build is ") + CV_VERSION + ".");
-    error = true;
-    return;
-#endif
-
     // Load the network
-    try {
-        net = cv::dnn::readNetFromONNX(modelPath);
-    } catch (const cv::Exception& e) {
-        std::string error_text = std::string("Failed to load model: ") + e.what();
-        if (error_text.find("Unsupported data type: FLOAT16") != std::string::npos) {
-            error_text = "Failed to load ONNX model: FLOAT16 is not supported by this OpenCV build. "
-                         "Please use an FP32 ONNX model.";
-        }
+    std::string error_text = LoadONNXModel(modelPath, &net);
+    if (!error_text.empty()) {
         processingController->SetError(true, error_text);
-        error = true;
-        return;
-    } catch (const std::exception& e) {
-        processingController->SetError(true, std::string("Failed to load ONNX model: ") + e.what());
-        error = true;
-        return;
-    } catch (...) {
-        processingController->SetError(true, "Failed to load ONNX model: unknown error");
         error = true;
         return;
     }
