@@ -86,6 +86,14 @@ void CVObjectDetection::detectObjectsClip(openshot::Clip &video, size_t _start, 
     std::string line;
     while (std::getline(classes_file, line)) classNames.push_back(line);
 
+#if CV_VERSION_MAJOR < 4 || (CV_VERSION_MAJOR == 4 && CV_VERSION_MINOR < 3)
+    processingController->SetError(true,
+        std::string("Failed to load ONNX model: YOLOv5 requires OpenCV 4.3.0 or newer. "
+                    "This OpenCV build is ") + CV_VERSION + ".");
+    error = true;
+    return;
+#endif
+
     // Load the network
     try {
         net = cv::dnn::readNetFromONNX(modelPath);
