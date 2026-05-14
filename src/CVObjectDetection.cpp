@@ -71,10 +71,19 @@ std::string CVObjectDetection::ValidateONNXModel(std::string modelPath)
 
 void CVObjectDetection::setProcessingDevice(){
     if(processingDevice == "GPU"){
-        net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
-        net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+        try {
+            const std::vector<cv::dnn::Target> targets = cv::dnn::getAvailableTargets(cv::dnn::DNN_BACKEND_CUDA);
+            if (std::find(targets.begin(), targets.end(), cv::dnn::DNN_TARGET_CUDA) != targets.end()) {
+                net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
+                net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+                return;
+            }
+        } catch (const cv::Exception&) {
+        }
+        processingDevice = "CPU";
     }
-    else if(processingDevice == "CPU"){
+
+    if(processingDevice == "CPU"){
         net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
         net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
     }
