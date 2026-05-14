@@ -23,8 +23,8 @@ init-builders:
 linux-builder:
   stage: build-libopenshot
   variables:
-    OPENCV_ROOT: /opt/opencv-4.5.5
-    OpenCV_DIR: /opt/opencv-4.5.5/lib/cmake/opencv4
+    OPENCV_ROOT: /opt/opencv-4.13.0
+    OpenCV_DIR: /opt/opencv-4.13.0/lib/cmake/opencv4
   artifacts:
     expire_in: 6 months
     paths:
@@ -40,7 +40,6 @@ linux-builder:
     - export PKG_CONFIG_PATH="$OPENCV_ROOT/lib/pkgconfig:$PKG_CONFIG_PATH"
     - export LD_LIBRARY_PATH="$OPENCV_ROOT/lib:$LD_LIBRARY_PATH"
     - export PATH="$OPENCV_ROOT/bin:$PATH"
-    - opencv_version
     - mkdir -p build; cd build;
     - cmake -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON -D"CMAKE_INSTALL_PREFIX:PATH=$CI_PROJECT_DIR/build/install-x64" -D"OpenCV_DIR:PATH=$OpenCV_DIR" -D"PYTHON_MODULE_PATH=python" -D"RUBY_MODULE_PATH=ruby" -DCMAKE_BUILD_TYPE:STRING=Release -DAPPIMAGE_BUILD=1 -DUSE_SYSTEM_JSONCPP=0 ../
     - make -j 4
@@ -96,9 +95,11 @@ windows-builder-x64:
     - try { Invoke-WebRequest -Uri "http://gitlab.openshot.org/OpenShot/libopenshot-audio/-/jobs/artifacts/$CI_COMMIT_REF_NAME/download?job=windows-builder-x64" -Headers @{"PRIVATE-TOKEN"="$ACCESS_TOKEN"} -OutFile "artifacts.zip" } catch { $_.Exception.Response.StatusCode.Value__ }
     - if (-not (Test-Path "artifacts.zip")) { Invoke-WebRequest -Uri "http://gitlab.openshot.org/OpenShot/libopenshot-audio/-/jobs/artifacts/develop/download?job=windows-builder-x64" -Headers @{"PRIVATE-TOKEN"="$ACCESS_TOKEN"} -OutFile "artifacts.zip" }
     - Expand-Archive -Path artifacts.zip -DestinationPath .
-    - $env:Path = "C:\msys64\mingw64\bin;C:\msys64\usr\bin;C:\msys64\usr\local\bin;" + $env:Path;
+    - $env:OPENCV_ROOT = "C:\msys64\mingw64\opencv-4.13.0"
+    - $env:OpenCV_DIR = "$env:OPENCV_ROOT\lib\cmake\opencv4"
+    - $env:Path = "$env:OPENCV_ROOT\bin;C:\msys64\mingw64\bin;C:\msys64\usr\bin;C:\msys64\usr\local\bin;" + $env:Path;
     - $env:MSYSTEM = "MINGW64"
-    - cmake -B build -S . -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON -D"babl_DIR=C:/msys64/mingw64" -D"CMAKE_INSTALL_PREFIX:PATH=$CI_PROJECT_DIR\build\install-x64" -D"OpenShotAudio_ROOT=$CI_PROJECT_DIR\build\install-x64" -D"PYTHON_MODULE_PATH=python" -D"RUBY_MODULE_PATH=ruby" -G "MinGW Makefiles" -D"CMAKE_BUILD_TYPE:STRING=Release"
+    - cmake -B build -S . -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON -D"babl_DIR=C:/msys64/mingw64" -D"CMAKE_INSTALL_PREFIX:PATH=$CI_PROJECT_DIR\build\install-x64" -D"OpenShotAudio_ROOT=$CI_PROJECT_DIR\build\install-x64" -D"OpenCV_DIR:PATH=$env:OpenCV_DIR" -D"PYTHON_MODULE_PATH=python" -D"RUBY_MODULE_PATH=ruby" -G "MinGW Makefiles" -D"CMAKE_BUILD_TYPE:STRING=Release"
     - cmake --build build -j 4
     - ctest --test-dir build --output-on-failure -VV
     - cmake --install build
@@ -123,9 +124,11 @@ windows-builder-x86:
     - try { Invoke-WebRequest -Uri "http://gitlab.openshot.org/OpenShot/libopenshot-audio/-/jobs/artifacts/$CI_COMMIT_REF_NAME/download?job=windows-builder-x86" -Headers @{"PRIVATE-TOKEN"="$ACCESS_TOKEN"} -OutFile "artifacts.zip" } catch { $_.Exception.Response.StatusCode.Value__ }
     - if (-not (Test-Path "artifacts.zip")) { Invoke-WebRequest -Uri "http://gitlab.openshot.org/OpenShot/libopenshot-audio/-/jobs/artifacts/develop/download?job=windows-builder-x86" -Headers @{"PRIVATE-TOKEN"="$ACCESS_TOKEN"} -OutFile "artifacts.zip" }
     - Expand-Archive -Path artifacts.zip -DestinationPath .
-    - $env:Path = "C:\msys64\mingw32\bin;C:\msys64\usr\bin;C:\msys64\usr\local\bin;" + $env:Path;
+    - $env:OPENCV_ROOT = "C:\msys64\mingw32\opencv-4.13.0"
+    - $env:OpenCV_DIR = "$env:OPENCV_ROOT\lib\cmake\opencv4"
+    - $env:Path = "$env:OPENCV_ROOT\bin;C:\msys64\mingw32\bin;C:\msys64\usr\bin;C:\msys64\usr\local\bin;" + $env:Path;
     - $env:MSYSTEM = "MINGW32"
-    - cmake -B build -S . -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON -D"babl_DIR=C:/msys64/mingw32" -D"CMAKE_INSTALL_PREFIX:PATH=$CI_PROJECT_DIR\build\install-x86" -D"OpenShotAudio_ROOT=$CI_PROJECT_DIR\build\install-x86" -D"PYTHON_MODULE_PATH=python" -D"RUBY_MODULE_PATH=ruby" -G "MinGW Makefiles" -D"CMAKE_BUILD_TYPE:STRING=Release" -D"CMAKE_CXX_FLAGS=-m32" -D"CMAKE_EXE_LINKER_FLAGS=-Wl,--large-address-aware" -D"CMAKE_C_FLAGS=-m32"
+    - cmake -B build -S . -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON -D"babl_DIR=C:/msys64/mingw32" -D"CMAKE_INSTALL_PREFIX:PATH=$CI_PROJECT_DIR\build\install-x86" -D"OpenShotAudio_ROOT=$CI_PROJECT_DIR\build\install-x86" -D"OpenCV_DIR:PATH=$env:OpenCV_DIR" -D"PYTHON_MODULE_PATH=python" -D"RUBY_MODULE_PATH=ruby" -G "MinGW Makefiles" -D"CMAKE_BUILD_TYPE:STRING=Release" -D"CMAKE_CXX_FLAGS=-m32" -D"CMAKE_EXE_LINKER_FLAGS=-Wl,--large-address-aware" -D"CMAKE_C_FLAGS=-m32"
     - cmake --build build -j 4
     - cmake --install build
     - $PROJECT_VERSION = (Select-String -Path "CMakeLists.txt" -Pattern '^set\(PROJECT_VERSION_FULL "(.*)\"' | %{$_.Matches.Groups[1].value})
