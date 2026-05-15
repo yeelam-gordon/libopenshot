@@ -28,6 +28,56 @@ using google::protobuf::util::TimeUtil;
 
 namespace {
 
+bool LooksLikeTransposedYoloOutput(const cv::Mat& out, size_t classCount)
+{
+    // YOLO26 segmentation exports without end-to-end postprocessing use
+    // [1, attributes, candidates], e.g. [1, 116, 8400]:
+    // 4 box channels + class scores + optional mask coefficients.
+    return out.dims == 3 && out.size[0] == 1 && out.size[1] >= 4 &&
+        out.size[2] > out.size[1] &&
+        (classCount == 0 || out.size[1] >= 4 + static_cast<int>(classCount));
+}
+
+cv::Rect ScaledXYWHBox(
+    float centerX,
+    float centerY,
+    float width,
+    float height,
+    const cv::Size& frameDims,
+    int inputWidth,
+    int inputHeight)
+{
+    if (centerX <= 1.0f && centerY <= 1.0f && width <= 1.0f && height <= 1.0f) {
+        centerX *= static_cast<float>(frameDims.width);
+        width *= static_cast<float>(frameDims.width);
+        centerY *= static_cast<float>(frameDims.height);
+        height *= static_cast<float>(frameDims.height);
+    } else {
+        const float xFactor = static_cast<float>(frameDims.width) / static_cast<float>(inputWidth);
+        const float yFactor = static_cast<float>(frameDims.height) / static_cast<float>(inputHeight);
+        centerX *= xFactor;
+        width *= xFactor;
+        centerY *= yFactor;
+        height *= yFactor;
+    }
+
+    float left = centerX - width / 2.0f;
+    float top = centerY - height / 2.0f;
+    float right = centerX + width / 2.0f;
+    float bottom = centerY + height / 2.0f;
+
+    left = std::max(0.0f, std::min(left, static_cast<float>(frameDims.width - 1)));
+    top = std::max(0.0f, std::min(top, static_cast<float>(frameDims.height - 1)));
+    right = std::max(0.0f, std::min(right, static_cast<float>(frameDims.width)));
+    bottom = std::max(0.0f, std::min(bottom, static_cast<float>(frameDims.height)));
+
+    return cv::Rect(
+        static_cast<int>(left),
+        static_cast<int>(top),
+        std::max(0, static_cast<int>(right - left)),
+        std::max(0, static_cast<int>(bottom - top)));
+}
+
 std::string LoadONNXModel(std::string modelPath, cv::dnn::Net *net)
 {
 #if CV_VERSION_MAJOR < 4 || (CV_VERSION_MAJOR == 4 && CV_VERSION_MINOR < 3)
@@ -205,6 +255,53 @@ void CVObjectDetection::postprocess(const cv::Size &frameDims, const std::vector
     for (size_t i = 0; i < outs.size(); ++i) {
         cv::Mat det = outs[i];
 
+        if (LooksLikeTransposedYoloOutput(det, classNames.size())) {
+            const int attributes = det.size[1];
+            const int candidates = det.size[2];
+            const int classCount = !classNames.empty()
+                ? static_cast<int>(classNames.size())
+                : attributes - 4;
+            const float* data = reinterpret_cast<const float*>(det.data);
+
+            for (int candidateIndex = 0; candidateIndex < candidates; ++candidateIndex) {
+                std::vector<ClassScore> rowClassScores;
+                rowClassScores.reserve(maxClassCandidates);
+
+                for (int classIndex = 0; classIndex < classCount; ++classIndex) {
+                    const float classConfidence = data[(4 + classIndex) * candidates + candidateIndex];
+                    if (rowClassScores.size() < static_cast<size_t>(maxClassCandidates)) {
+                        rowClassScores.emplace_back(classIndex, classConfidence);
+                        std::sort(rowClassScores.begin(), rowClassScores.end(),
+                            [](const ClassScore& a, const ClassScore& b) { return a.score > b.score; });
+                    } else if (classConfidence > rowClassScores.back().score) {
+                        rowClassScores.back() = ClassScore(classIndex, classConfidence);
+                        std::sort(rowClassScores.begin(), rowClassScores.end(),
+                            [](const ClassScore& a, const ClassScore& b) { return a.score > b.score; });
+                    }
+                }
+
+                if (rowClassScores.empty() || rowClassScores.front().score <= confThreshold) {
+                    continue;
+                }
+
+                cv::Rect box = ScaledXYWHBox(
+                    data[candidateIndex],
+                    data[candidates + candidateIndex],
+                    data[2 * candidates + candidateIndex],
+                    data[3 * candidates + candidateIndex],
+                    frameDims, inpWidth, inpHeight);
+                if (box.width <= 0 || box.height <= 0) {
+                    continue;
+                }
+
+                classIds.push_back(rowClassScores.front().classId);
+                confidences.push_back(rowClassScores.front().score);
+                boxes.push_back(box);
+                detectionClassScores.push_back(rowClassScores);
+            }
+            continue;
+        }
+
         // YOLOv5 ONNX output is usually [1, num_boxes, num_classes + 5].
         if (det.dims == 3) {
             det = det.reshape(1, det.size[1]);
@@ -220,7 +317,11 @@ void CVObjectDetection::postprocess(const cv::Size &frameDims, const std::vector
         for (int j = 0; j < det.rows; ++j, data += det.cols) {
             std::vector<ClassScore> rowClassScores;
             rowClassScores.reserve(maxClassCandidates);
-            for (int classIndex = 5; classIndex < det.cols; ++classIndex) {
+            int classScoresEnd = det.cols;
+            if (!classNames.empty()) {
+                classScoresEnd = std::min(det.cols, 5 + static_cast<int>(classNames.size()));
+            }
+            for (int classIndex = 5; classIndex < classScoresEnd; ++classIndex) {
                 const float classConfidence = data[classIndex] * data[4];
                 if (rowClassScores.size() < static_cast<size_t>(maxClassCandidates)) {
                     rowClassScores.emplace_back(classIndex - 5, classConfidence);
