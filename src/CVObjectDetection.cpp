@@ -78,10 +78,146 @@ cv::Rect ScaledXYWHBox(
         std::max(0, static_cast<int>(bottom - top)));
 }
 
+std::vector<uint32_t> EncodeBinaryMaskRLE(const std::vector<uint8_t>& mask)
+{
+    std::vector<uint32_t> rle;
+    if (mask.empty())
+        return rle;
+
+    uint8_t current = 0;
+    uint32_t count = 0;
+    for (uint8_t value : mask) {
+        value = value ? 1 : 0;
+        if (value == current) {
+            ++count;
+        } else {
+            rle.push_back(count);
+            current = value;
+            count = 1;
+        }
+    }
+    rle.push_back(count);
+    return rle;
+}
+
+cv::Mat DecodeBinaryMaskRLE(const CVObjectMaskData& mask)
+{
+    cv::Mat image(mask.height, mask.width, CV_8UC1, cv::Scalar(0));
+    if (!mask.HasData())
+        return image;
+
+    const int total = mask.width * mask.height;
+    int offset = 0;
+    bool value = false;
+    uint8_t* data = image.ptr<uint8_t>();
+    for (uint32_t count : mask.rle) {
+        const int end = std::min(total, offset + static_cast<int>(count));
+        if (value) {
+            std::fill(data + offset, data + end, static_cast<uint8_t>(1));
+        }
+        offset = end;
+        value = !value;
+        if (offset >= total)
+            break;
+    }
+    return image;
+}
+
+CVObjectMaskData TransformMaskToBox(
+    const CVObjectMaskData& sourceMask,
+    const cv::Rect_<float>& sourceBox,
+    const cv::Rect_<float>& targetBox,
+    const cv::Size& frameDims)
+{
+    CVObjectMaskData result;
+    if (!sourceMask.HasData() || sourceBox.width <= 0.0f || sourceBox.height <= 0.0f ||
+        targetBox.width <= 0.0f || targetBox.height <= 0.0f ||
+        frameDims.width <= 0 || frameDims.height <= 0) {
+        return result;
+    }
+
+    const float scaleX = sourceMask.width / static_cast<float>(frameDims.width);
+    const float scaleY = sourceMask.height / static_cast<float>(frameDims.height);
+    const cv::Rect_<float> sourceMaskBox(
+        sourceBox.x * scaleX,
+        sourceBox.y * scaleY,
+        sourceBox.width * scaleX,
+        sourceBox.height * scaleY);
+    const cv::Rect_<float> targetMaskBox(
+        targetBox.x * scaleX,
+        targetBox.y * scaleY,
+        targetBox.width * scaleX,
+        targetBox.height * scaleY);
+    if (sourceMaskBox.width <= 0.0f || sourceMaskBox.height <= 0.0f)
+        return result;
+
+    const double xScale = targetMaskBox.width / sourceMaskBox.width;
+    const double yScale = targetMaskBox.height / sourceMaskBox.height;
+    cv::Mat transform = (cv::Mat_<double>(2, 3) <<
+        xScale, 0.0, targetMaskBox.x - xScale * sourceMaskBox.x,
+        0.0, yScale, targetMaskBox.y - yScale * sourceMaskBox.y);
+
+    cv::Mat source = DecodeBinaryMaskRLE(sourceMask);
+    cv::Mat transformed;
+    cv::warpAffine(
+        source, transformed, transform, source.size(),
+        cv::INTER_NEAREST, cv::BORDER_CONSTANT, cv::Scalar(0));
+    if (cv::countNonZero(transformed) == 0)
+        return result;
+
+    result.width = sourceMask.width;
+    result.height = sourceMask.height;
+    result.rle = EncodeBinaryMaskRLE(
+        std::vector<uint8_t>(transformed.data, transformed.data + transformed.total()));
+    return result;
+}
+
+CVObjectMaskData BuildMaskFromPrototype(
+    const cv::Mat& prototype,
+    const std::vector<float>& coefficients,
+    const cv::Rect& box,
+    const cv::Size& frameDims)
+{
+    CVObjectMaskData result;
+    if (prototype.dims != 4 || prototype.size[0] != 1 ||
+        prototype.size[1] != static_cast<int>(coefficients.size()))
+        return result;
+
+    const int channels = prototype.size[1];
+    const int maskHeight = prototype.size[2];
+    const int maskWidth = prototype.size[3];
+    const int maskPixels = maskWidth * maskHeight;
+    const float* protoData = reinterpret_cast<const float*>(prototype.data);
+
+    const int left = std::max(0, static_cast<int>(box.x * maskWidth / static_cast<float>(frameDims.width)));
+    const int top = std::max(0, static_cast<int>(box.y * maskHeight / static_cast<float>(frameDims.height)));
+    const int right = std::min(maskWidth, static_cast<int>((box.x + box.width) * maskWidth / static_cast<float>(frameDims.width)));
+    const int bottom = std::min(maskHeight, static_cast<int>((box.y + box.height) * maskHeight / static_cast<float>(frameDims.height)));
+    if (left >= right || top >= bottom)
+        return result;
+
+    std::vector<uint8_t> binary(maskPixels, 0);
+    for (int y = top; y < bottom; ++y) {
+        for (int x = left; x < right; ++x) {
+            const int pixel = y * maskWidth + x;
+            float value = 0.0f;
+            for (int channel = 0; channel < channels; ++channel) {
+                value += coefficients[channel] * protoData[channel * maskPixels + pixel];
+            }
+            binary[pixel] = value > 0.0f ? 1 : 0;
+        }
+    }
+
+    result.width = maskWidth;
+    result.height = maskHeight;
+    result.rle = EncodeBinaryMaskRLE(binary);
+    return result;
+}
+
 std::string LoadONNXModel(std::string modelPath, cv::dnn::Net *net)
 {
 #if CV_VERSION_MAJOR < 4 || (CV_VERSION_MAJOR == 4 && CV_VERSION_MINOR < 3)
-    return std::string("Failed to load ONNX model: YOLOv5 requires OpenCV 4.3.0 or newer. "
+    return std::string("Failed to load ONNX model: YOLO requires OpenCV 4.3.0 or newer. "
                        "This OpenCV build is ") + CV_VERSION + ".";
 #else
     try {
@@ -108,8 +244,8 @@ std::string LoadONNXModel(std::string modelPath, cv::dnn::Net *net)
 }
 
 CVObjectDetection::CVObjectDetection(std::string processInfoJson, ProcessingController &processingController)
-: processingController(&processingController), processingDevice("CPU"), inpWidth(640), inpHeight(640){
-    confThreshold = 0.25;
+: processingController(&processingController), processingDevice("CPU"), inpWidth(640), inpHeight(640), generateMasks(true){
+    confThreshold = 0.10;
     nmsThreshold = 0.1;
     SetJson(processInfoJson);
 }
@@ -153,7 +289,7 @@ void CVObjectDetection::detectObjectsClip(openshot::Clip &video, size_t _start, 
     processingController->SetError(false, "");
 
     if(modelPath.empty()) {
-        processingController->SetError(true, "Missing path to YOLOv5 ONNX model file");
+        processingController->SetError(true, "Missing path to YOLO ONNX model file");
         error = true;
         return;
     }
@@ -165,7 +301,7 @@ void CVObjectDetection::detectObjectsClip(openshot::Clip &video, size_t _start, 
 
     std::ifstream model_file(modelPath);
     if(!model_file.good()){
-        processingController->SetError(true, "Incorrect path to YOLOv5 ONNX model file");
+        processingController->SetError(true, "Incorrect path to YOLO ONNX model file");
         error = true;
         return;
     }
@@ -249,6 +385,7 @@ void CVObjectDetection::postprocess(const cv::Size &frameDims, const std::vector
     std::vector<float> confidences;
     std::vector<cv::Rect> boxes;
     std::vector<std::vector<ClassScore>> detectionClassScores;
+    std::vector<CVObjectMaskData> detectionMasks;
     std::vector<int> objectIds;
     const int maxClassCandidates = 5;
 
@@ -261,6 +398,16 @@ void CVObjectDetection::postprocess(const cv::Size &frameDims, const std::vector
             const int classCount = !classNames.empty()
                 ? static_cast<int>(classNames.size())
                 : attributes - 4;
+            const int maskCoefficientCount = attributes - 4 - classCount;
+            const cv::Mat* prototype = nullptr;
+            if (generateMasks && maskCoefficientCount > 0) {
+                for (const auto& out : outs) {
+                    if (out.dims == 4 && out.size[0] == 1 && out.size[1] == maskCoefficientCount) {
+                        prototype = &out;
+                        break;
+                    }
+                }
+            }
             const float* data = reinterpret_cast<const float*>(det.data);
 
             for (int candidateIndex = 0; candidateIndex < candidates; ++candidateIndex) {
@@ -298,11 +445,21 @@ void CVObjectDetection::postprocess(const cv::Size &frameDims, const std::vector
                 confidences.push_back(rowClassScores.front().score);
                 boxes.push_back(box);
                 detectionClassScores.push_back(rowClassScores);
+                if (prototype) {
+                    std::vector<float> coefficients;
+                    coefficients.reserve(maskCoefficientCount);
+                    for (int coefficientIndex = 0; coefficientIndex < maskCoefficientCount; ++coefficientIndex) {
+                        coefficients.push_back(data[(4 + classCount + coefficientIndex) * candidates + candidateIndex]);
+                    }
+                    detectionMasks.push_back(BuildMaskFromPrototype(*prototype, coefficients, box, frameDims));
+                } else {
+                    detectionMasks.push_back({});
+                }
             }
             continue;
         }
 
-        // YOLOv5 ONNX output is usually [1, num_boxes, num_classes + 5].
+        // YOLOv5-style ONNX output is usually [1, num_boxes, num_classes + 5].
         if (det.dims == 3) {
             det = det.reshape(1, det.size[1]);
         }
@@ -364,6 +521,7 @@ void CVObjectDetection::postprocess(const cv::Size &frameDims, const std::vector
                 confidences.push_back(confidence);
                 boxes.push_back(cv::Rect(left, top, width, height));
                 detectionClassScores.push_back(rowClassScores);
+                detectionMasks.push_back({});
             }
         }
     }
@@ -378,16 +536,19 @@ void CVObjectDetection::postprocess(const cv::Size &frameDims, const std::vector
     std::vector<float> sortConfidences;
     std::vector<int> sortClassIds;
     std::vector<std::vector<ClassScore>> sortClassScores;
+    std::vector<CVObjectMaskData> sortMasks;
     for(auto index : indices) {
         sortBoxes.push_back(boxes[index]);
         sortConfidences.push_back(confidences[index]);
         sortClassIds.push_back(classIds[index]);
         sortClassScores.push_back(detectionClassScores[index]);
+        sortMasks.push_back(index < static_cast<int>(detectionMasks.size()) ? detectionMasks[index] : CVObjectMaskData());
     }
     sort.update(sortBoxes, frameId, sqrt(pow(frameDims.width,2) + pow(frameDims.height, 2)), sortConfidences, sortClassIds, sortClassScores);
 
     // Clear data vectors
     boxes.clear(); confidences.clear(); classIds.clear(); objectIds.clear();
+    std::vector<CVObjectMaskData> masks;
     // Get SORT predicted boxes
     for(auto TBox : sort.frameTrackingResult){
         if(TBox.frame == frameId){
@@ -395,6 +556,35 @@ void CVObjectDetection::postprocess(const cv::Size &frameDims, const std::vector
             confidences.push_back(TBox.confidence);
             classIds.push_back(TBox.classId);
             objectIds.push_back(TBox.id);
+            CVObjectMaskData mask;
+            double bestIoU = 0.0;
+            for (size_t maskIndex = 0; maskIndex < sortMasks.size(); ++maskIndex) {
+                if (!sortMasks[maskIndex].HasData() || sortClassIds[maskIndex] != TBox.classId)
+                    continue;
+                double score = SortTracker::GetIOU(cv::Rect_<float>(sortBoxes[maskIndex]), TBox.box);
+                if (score > bestIoU) {
+                    bestIoU = score;
+                    mask = sortMasks[maskIndex];
+                }
+            }
+            if (mask.HasData()) {
+                recentObjectMasks[TBox.id] = CVTrackedMaskData{frameId, mask, TBox.box};
+            } else {
+                const auto recentMask = recentObjectMasks.find(TBox.id);
+                if (recentMask != recentObjectMasks.end() &&
+                    frameId > recentMask->second.frameId &&
+                    frameId - recentMask->second.frameId <= 5) {
+                    mask = TransformMaskToBox(
+                        recentMask->second.mask,
+                        recentMask->second.box,
+                        TBox.box,
+                        frameDims);
+                    if (mask.HasData()) {
+                        recentObjectMasks[TBox.id] = CVTrackedMaskData{frameId, mask, TBox.box};
+                    }
+                }
+            }
+            masks.push_back(mask);
         }
     }
 
@@ -411,6 +601,7 @@ void CVObjectDetection::postprocess(const cv::Size &frameDims, const std::vector
                         classIds.erase(classIds.begin() + j);
                         confidences.erase(confidences.begin() + j);
                         objectIds.erase(objectIds.begin() + j);
+                        masks.erase(masks.begin() + j);
                         break;
                     }
                     else{
@@ -418,6 +609,7 @@ void CVObjectDetection::postprocess(const cv::Size &frameDims, const std::vector
                         classIds.erase(classIds.begin() + i);
                         confidences.erase(confidences.begin() + i);
                         objectIds.erase(objectIds.begin() + i);
+                        masks.erase(masks.begin() + i);
                         i = 0;
                         break;
                     }
@@ -437,6 +629,7 @@ void CVObjectDetection::postprocess(const cv::Size &frameDims, const std::vector
                         classIds.erase(classIds.begin() + j);
                         confidences.erase(confidences.begin() + j);
                         objectIds.erase(objectIds.begin() + j);
+                        masks.erase(masks.begin() + j);
                         break;
                     }
                     else{
@@ -444,6 +637,7 @@ void CVObjectDetection::postprocess(const cv::Size &frameDims, const std::vector
                         classIds.erase(classIds.begin() + i);
                         confidences.erase(confidences.begin() + i);
                         objectIds.erase(objectIds.begin() + i);
+                        masks.erase(masks.begin() + i);
                         i = 0;
                         break;
                     }
@@ -463,7 +657,7 @@ void CVObjectDetection::postprocess(const cv::Size &frameDims, const std::vector
         normalized_boxes.push_back(normalized_box);
     }
 
-    detectionsData[frameId] = CVDetectionData(classIds, confidences, normalized_boxes, frameId, objectIds);
+    detectionsData[frameId] = CVDetectionData(classIds, confidences, normalized_boxes, frameId, objectIds, masks);
 }
 
 // Compute IOU between 2 boxes
@@ -518,11 +712,64 @@ CVDetectionData CVObjectDetection::GetDetectionData(size_t frameId){
     }
 }
 
+void CVObjectDetection::NormalizeTrackedClasses()
+{
+    struct ClassEvidence {
+        float confidenceSum = 0.0f;
+        size_t count = 0;
+    };
+
+    std::map<int, std::map<int, ClassEvidence>> objectClassEvidence;
+    for (const auto& frameData : detectionsData) {
+        const CVDetectionData& detections = frameData.second;
+        const size_t detectionCount = std::min(detections.objectIds.size(), detections.classIds.size());
+        for (size_t i = 0; i < detectionCount; ++i) {
+            const float confidence = i < detections.confidences.size() ? detections.confidences[i] : 1.0f;
+            ClassEvidence& evidence = objectClassEvidence[detections.objectIds[i]][detections.classIds[i]];
+            evidence.confidenceSum += confidence;
+            ++evidence.count;
+        }
+    }
+
+    std::map<int, int> dominantClassByObject;
+    for (const auto& objectEvidence : objectClassEvidence) {
+        const int objectId = objectEvidence.first;
+        int bestClassId = -1;
+        ClassEvidence bestEvidence;
+        for (const auto& classEvidence : objectEvidence.second) {
+            const int classId = classEvidence.first;
+            const ClassEvidence& evidence = classEvidence.second;
+            if (bestClassId < 0 ||
+                evidence.confidenceSum > bestEvidence.confidenceSum ||
+                (evidence.confidenceSum == bestEvidence.confidenceSum && evidence.count > bestEvidence.count)) {
+                bestClassId = classId;
+                bestEvidence = evidence;
+            }
+        }
+        if (bestClassId >= 0) {
+            dominantClassByObject[objectId] = bestClassId;
+        }
+    }
+
+    for (auto& frameData : detectionsData) {
+        CVDetectionData& detections = frameData.second;
+        const size_t detectionCount = std::min(detections.objectIds.size(), detections.classIds.size());
+        for (size_t i = 0; i < detectionCount; ++i) {
+            const auto dominantClass = dominantClassByObject.find(detections.objectIds[i]);
+            if (dominantClass != dominantClassByObject.end()) {
+                detections.classIds[i] = dominantClass->second;
+            }
+        }
+    }
+}
+
 bool CVObjectDetection::SaveObjDetectedData(){
     if(protobuf_data_path.empty()) {
         cerr << "Missing path to object detection protobuf data file." << endl;
         return false;
     }
+
+    NormalizeTrackedClasses();
 
     // Create tracker message
     pb_objdetect::ObjDetect objMessage;
@@ -576,6 +823,14 @@ void CVObjectDetection::AddFrameDataToProto(pb_objdetect::Frame* pbFrameData, CV
         box->set_confidence(dData.confidences.at(i));
         box->set_objectid(dData.objectIds.at(i));
 
+        if (i < dData.masks.size() && dData.masks.at(i).HasData()) {
+            pb_objdetect::Frame_Box_Mask* mask = box->mutable_mask();
+            mask->set_width(dData.masks.at(i).width);
+            mask->set_height(dData.masks.at(i).height);
+            for (uint32_t count : dData.masks.at(i).rle) {
+                mask->add_rle(count);
+            }
+        }
     }
 }
 
@@ -647,6 +902,12 @@ void CVObjectDetection::SetJsonValue(const Json::Value root) {
     if (!root["nms_threshold"].isNull()){
         nmsThreshold = root["nms_threshold"].asFloat();
     }
+    if (!root["generate-masks"].isNull()){
+        generateMasks = root["generate-masks"].asBool();
+    }
+    if (!root["generate_masks"].isNull()){
+        generateMasks = root["generate_masks"].asBool();
+    }
 }
 
 /*
@@ -698,6 +959,7 @@ bool CVObjectDetection::_LoadObjDetectdData(){
         std::vector<float> confidences;
         std::vector<cv::Rect_<float>> boxes;
         std::vector<int> objectIds;
+        std::vector<CVObjectMaskData> masks;
 
         for(int i = 0; i < pbFrameData.bounding_box_size(); i++){
             // Get bounding box coordinates
@@ -714,10 +976,19 @@ bool CVObjectDetection::_LoadObjDetectdData(){
             // Push back data into vectors
             boxes.push_back(box); classIds.push_back(classId); confidences.push_back(confidence);
             objectIds.push_back(objectId);
+            CVObjectMaskData mask;
+            if (pBox.Get(i).has_mask()) {
+                mask.width = pBox.Get(i).mask().width();
+                mask.height = pBox.Get(i).mask().height();
+                for (int rleIndex = 0; rleIndex < pBox.Get(i).mask().rle_size(); ++rleIndex) {
+                    mask.rle.push_back(pBox.Get(i).mask().rle(rleIndex));
+                }
+            }
+            masks.push_back(mask);
         }
 
         // Assign data to object detector map
-        detectionsData[id] = CVDetectionData(classIds, confidences, boxes, id, objectIds);
+        detectionsData[id] = CVDetectionData(classIds, confidences, boxes, id, objectIds, masks);
     }
 
     // Delete all global objects allocated by libprotobuf.

@@ -48,6 +48,9 @@ namespace openshot {
 	    /// Keyframe to determine if a specific object label is drawn (or hidden)
 		Keyframe draw_text;
 
+	    /// Keyframe to determine if a specific object mask is drawn (when mask data exists)
+		Keyframe draw_mask;
+
 		/// Default constructor
 		TrackedObjectBase();
 

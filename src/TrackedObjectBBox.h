@@ -24,6 +24,15 @@
 
 namespace openshot
 {
+	struct ObjectMaskData
+	{
+		int width = 0;
+		int height = 0;
+		std::vector<uint32_t> rle;
+
+		bool HasData() const { return width > 0 && height > 0 && !rle.empty(); }
+	};
+
 	/**
 	 * @brief This struct holds the information of a bounding-box.
 	 *
@@ -135,16 +144,19 @@ namespace openshot
 
 	public:
 		std::map<double, BBox> BoxVec; ///< Index the bounding-box by time of each frame
+		std::map<double, ObjectMaskData> MaskVec; ///< Index optional object masks by time of each frame
 		Keyframe delta_x; ///< X-direction displacement Keyframe
 		Keyframe delta_y; ///< Y-direction displacement Keyframe
 		Keyframe scale_x; ///< X-direction scale Keyframe
 		Keyframe scale_y; ///< Y-direction scale Keyframe
 		Keyframe background_alpha; ///< Background box opacity
 		Keyframe background_corner; ///< Radius of rounded corners
+		Keyframe mask_alpha; ///< Object mask overlay opacity
 		Keyframe stroke_width; ///< Thickness of border line
 		Keyframe stroke_alpha; ///< Stroke box opacity
 		Color stroke; ///< Border line color
 		Color background; ///< Background fill color
+		Color mask_color; ///< Object mask overlay color
 
 		std::string protobufDataPath; ///< Path to the protobuf file that holds the bounding box points across the frames
 
@@ -154,6 +166,10 @@ namespace openshot
 
 		/// Add a BBox to the BoxVec map
 		void AddBox(int64_t _frame_num, float _cx, float _cy, float _width, float _height, float _angle) override;
+		void AddMask(int64_t frame_num, const ObjectMaskData& mask);
+		bool HasMask(int64_t frame_number, int64_t max_frame_gap = 0) const;
+		bool HasMaskData() const;
+		ObjectMaskData GetMask(int64_t frame_number, int64_t max_frame_gap = 0) const;
 
 		/// Update object's BaseFps
 		void SetBaseFPS(Fraction fps);
