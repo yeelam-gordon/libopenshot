@@ -58,6 +58,7 @@
 #ifdef USE_OPENCV
 #include "effects/Outline.h"
 #include "effects/ObjectDetection.h"
+#include "effects/ObjectMask.h"
 #include "effects/Tracker.h"
 #include "effects/Stabilizer.h"
 #endif

@@ -98,10 +98,12 @@ set(OPENSHOT_CV_SOURCES
   CVStabilization.cpp
   ClipProcessingJobs.cpp
   CVObjectDetection.cpp
+  CVObjectMask.cpp
   TrackedObjectBBox.cpp
   effects/Stabilizer.cpp
   effects/Tracker.cpp
   effects/ObjectDetection.cpp
+  effects/ObjectMask.cpp
   effects/Outline.cpp
   ./sort_filter/sort.cpp
   ./sort_filter/Hungarian.cpp

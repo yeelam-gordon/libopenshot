@@ -149,6 +149,9 @@ EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 
 	else if(effect_type == "ObjectDetection")
 		return new ObjectDetection();
+
+	else if(effect_type == "ObjectMask")
+		return new ObjectMask();
 	#endif
 
 	return NULL;
@@ -205,6 +208,7 @@ Json::Value EffectInfo::JsonValue() {
 	root.append(Stabilizer().JsonInfo());	
 	root.append(Tracker().JsonInfo());
 	root.append(ObjectDetection().JsonInfo());
+	root.append(ObjectMask().JsonInfo());
 	#endif
 
 	// return JsonValue

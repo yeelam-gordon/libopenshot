@@ -41,6 +41,9 @@ void ClipProcessingJobs::processClip(Clip& clip, std::string json){
     if(processingType == "ObjectDetection"){
         t = std::thread(&ClipProcessingJobs::detectObjectsClip, this, std::ref(clip), std::ref(this->processingController));
     }
+    if(processingType == "ObjectMask"){
+        t = std::thread(&ClipProcessingJobs::maskObjectClip, this, std::ref(clip), std::ref(this->processingController));
+    }
 }
 
 // Apply object tracking to clip
@@ -83,6 +86,21 @@ void ClipProcessingJobs::detectObjectsClip(Clip& clip, ProcessingController& con
         // Save object detection data
         objDetector.SaveObjDetectedData();
         // tells to UI that the processing finished
+        controller.SetFinished(true);
+    }
+}
+
+// Apply object segmentation mask to clip
+void ClipProcessingJobs::maskObjectClip(Clip& clip, ProcessingController& controller){
+	CVObjectMask objectMask(processInfoJson, controller);
+    objectMask.maskClip(clip);
+
+    if(controller.ShouldStop()){
+        controller.SetFinished(true);
+        return;
+    }
+    else{
+        objectMask.SaveObjMaskData();
         controller.SetFinished(true);
     }
 }

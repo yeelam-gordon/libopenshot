@@ -22,6 +22,7 @@
 	#include "CVStabilization.h"
     #include "CVTracker.h"
 	#include "CVObjectDetection.h"
+	#include "CVObjectMask.h"
 #endif
 
 #include <thread>
@@ -51,6 +52,8 @@ class ClipProcessingJobs{
 		void stabilizeClip(Clip& clip, ProcessingController& controller);
 		// Apply object detection to clip
 		void detectObjectsClip(Clip& clip, ProcessingController& controller);
+		// Apply object segmentation mask to clip
+		void maskObjectClip(Clip& clip, ProcessingController& controller);
 
 
 	public:
