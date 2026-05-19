@@ -69,39 +69,35 @@ std::vector<uint32_t> EncodeBinaryMaskRLE(const cv::Mat& mask)
     return rle;
 }
 
-struct SamPreprocessResult {
+struct EfficientSamPreprocessResult {
     cv::Mat blob;
-    float scale = 1.0f;
-    int resizedWidth = 0;
-    int resizedHeight = 0;
+    float scaleX = 1.0f;
+    float scaleY = 1.0f;
 };
 
-SamPreprocessResult MakeSamBlob(const cv::Mat& bgr, int modelSize)
+EfficientSamPreprocessResult MakeEfficientSamBlob(const cv::Mat& bgr, int modelSize)
 {
-    SamPreprocessResult result;
-    result.scale = static_cast<float>(modelSize) / static_cast<float>(std::max(bgr.cols, bgr.rows));
-    result.resizedWidth = static_cast<int>(bgr.cols * result.scale + 0.5f);
-    result.resizedHeight = static_cast<int>(bgr.rows * result.scale + 0.5f);
+    EfficientSamPreprocessResult result;
+    result.scaleX = static_cast<float>(modelSize) / static_cast<float>(bgr.cols);
+    result.scaleY = static_cast<float>(modelSize) / static_cast<float>(bgr.rows);
 
     cv::Mat resized;
-    cv::resize(bgr, resized, cv::Size(result.resizedWidth, result.resizedHeight), 0, 0, cv::INTER_LINEAR);
+    cv::resize(bgr, resized, cv::Size(modelSize, modelSize), 0, 0, cv::INTER_LINEAR);
 
     const int shape[] = {1, 3, modelSize, modelSize};
-    result.blob = cv::Mat(4, shape, CV_32F, cv::Scalar(0.0f));
+    result.blob = cv::Mat(4, shape, CV_32F);
     float* dst = result.blob.ptr<float>();
 
-    const float mean[] = {123.675f, 116.28f, 103.53f};
-    const float stddev[] = {58.395f, 57.12f, 57.375f};
     for (int y = 0; y < resized.rows; ++y) {
         const cv::Vec3b* row = resized.ptr<cv::Vec3b>(y);
         for (int x = 0; x < resized.cols; ++x) {
             const float rgb[] = {
-                static_cast<float>(row[x][2]),
-                static_cast<float>(row[x][1]),
-                static_cast<float>(row[x][0]),
+                static_cast<float>(row[x][2]) / 255.0f,
+                static_cast<float>(row[x][1]) / 255.0f,
+                static_cast<float>(row[x][0]) / 255.0f,
             };
             for (int c = 0; c < 3; ++c)
-                dst[(c * modelSize + y) * modelSize + x] = (rgb[c] - mean[c]) / stddev[c];
+                dst[(c * modelSize + y) * modelSize + x] = rgb[c];
         }
     }
 
@@ -123,20 +119,108 @@ cv::Rect_<float> NormalizedBoundingBox(const cv::Mat& mask)
         rect.height / static_cast<float>(mask.rows));
 }
 
-cv::Mat LowMaskToFrameMask(const cv::Mat& lowMask, const SamPreprocessResult& prep,
-                           const cv::Size& frameSize, int modelSize, float maskThreshold)
+cv::Mat EfficientSamMaskToFrameMask(const cv::Mat& modelMask, const cv::Size& frameSize, float maskThreshold)
 {
-    cv::Mat paddedMask;
-    cv::resize(lowMask, paddedMask, cv::Size(modelSize, modelSize), 0, 0, cv::INTER_LINEAR);
-
-    cv::Mat cropped = paddedMask(cv::Rect(0, 0, prep.resizedWidth, prep.resizedHeight));
     cv::Mat fullSize;
-    cv::resize(cropped, fullSize, frameSize, 0, 0, cv::INTER_LINEAR);
+    cv::resize(modelMask, fullSize, frameSize, 0, 0, cv::INTER_LINEAR);
 
     cv::Mat binary;
     cv::threshold(fullSize, binary, maskThreshold, 255.0, cv::THRESH_BINARY);
     binary.convertTo(binary, CV_8U);
     return binary;
+}
+
+cv::Mat MakeEfficientSamPromptBlob(
+    const CVObjectMaskPromptSet& prompts,
+    const EfficientSamPreprocessResult& prep,
+    int promptSlots,
+    std::vector<cv::Point>& backgroundPoints)
+{
+    const int coordsShape[] = {1, 1, promptSlots, 2};
+    cv::Mat pointCoords(4, coordsShape, CV_32F, cv::Scalar(0.0f));
+
+    float* coords = pointCoords.ptr<float>();
+    int promptIndex = 0;
+    if (prompts.hasRect && promptSlots >= 2) {
+        coords[0] = prompts.rectTopLeft.x * prep.scaleX;
+        coords[1] = prompts.rectTopLeft.y * prep.scaleY;
+        coords[2] = prompts.rectBottomRight.x * prep.scaleX;
+        coords[3] = prompts.rectBottomRight.y * prep.scaleY;
+        promptIndex = 2;
+    }
+    for (const auto& point : prompts.positivePoints) {
+        if (promptIndex >= promptSlots)
+            break;
+        coords[promptIndex * 2] = point.x * prep.scaleX;
+        coords[promptIndex * 2 + 1] = point.y * prep.scaleY;
+        ++promptIndex;
+    }
+    for (const auto& point : prompts.negativePoints) {
+        backgroundPoints.emplace_back(
+            static_cast<int>(std::lround(point.x * prep.scaleX)),
+            static_cast<int>(std::lround(point.y * prep.scaleY)));
+    }
+
+    return pointCoords;
+}
+
+cv::Mat MakeEfficientSamLabelBlob(const CVObjectMaskPromptSet& prompts, int promptSlots)
+{
+    const int labelsShape[] = {1, 1, promptSlots, 1};
+    cv::Mat pointLabels(4, labelsShape, CV_32F, cv::Scalar(-1.0f));
+
+    float* labels = pointLabels.ptr<float>();
+    int promptIndex = 0;
+    if (prompts.hasRect && promptSlots >= 2) {
+        labels[0] = 2.0f;
+        labels[1] = 3.0f;
+        promptIndex = 2;
+    }
+    for (size_t i = 0; i < prompts.positivePoints.size() && promptIndex < promptSlots; ++i, ++promptIndex)
+        labels[promptIndex] = 1.0f;
+
+    return pointLabels;
+}
+
+cv::Mat SelectEfficientSamMask(const cv::Mat& outputMasks, const cv::Mat& iouPredictions,
+                               const std::vector<cv::Point>& backgroundPoints, float maskThreshold)
+{
+    if (outputMasks.dims != 5 || iouPredictions.empty())
+        return cv::Mat();
+
+    const int candidateCount = outputMasks.size[2];
+    const int maskHeight = outputMasks.size[3];
+    const int maskWidth = outputMasks.size[4];
+    const float* ious = iouPredictions.ptr<float>();
+
+    std::vector<int> order(candidateCount);
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(), [&](int a, int b) {
+        return ious[a] > ious[b];
+    });
+
+    const float* masks = outputMasks.ptr<float>();
+    const size_t candidatePixels = static_cast<size_t>(maskHeight) * static_cast<size_t>(maskWidth);
+    cv::Mat fallback;
+    for (int candidate : order) {
+        cv::Mat mask(maskHeight, maskWidth, CV_32F,
+                     const_cast<float*>(masks + static_cast<size_t>(candidate) * candidatePixels));
+        if (fallback.empty())
+            fallback = mask.clone();
+
+        bool containsBackground = false;
+        for (const cv::Point& point : backgroundPoints) {
+            const int x = std::max(0, std::min(maskWidth - 1, point.x));
+            const int y = std::max(0, std::min(maskHeight - 1, point.y));
+            if (mask.at<float>(y, x) >= maskThreshold) {
+                containsBackground = true;
+                break;
+            }
+        }
+        if (!containsBackground)
+            return mask.clone();
+    }
+    return fallback;
 }
 
 CVObjectMaskFrameData FrameDataFromMask(const cv::Mat& mask, size_t frameId, float score)
@@ -566,12 +650,40 @@ CVObjectMask::CVObjectMask(std::string processInfoJson, ProcessingController& co
     SetJson(processInfoJson);
 }
 
-std::string CVObjectMask::ValidateONNXModels(std::string encoderPath, std::string decoderPath)
+std::string CVObjectMask::ValidateONNXModel(std::string modelPath)
 {
-    std::string error = LoadONNXModel(encoderPath, nullptr);
-    if (!error.empty())
-        return error;
-    return LoadONNXModel(decoderPath, nullptr);
+    return LoadONNXModel(modelPath, nullptr);
+}
+
+std::shared_ptr<Frame> CVObjectMask::PreviewSeedMask(std::shared_ptr<Frame> frame)
+{
+    if (!frame || efficientSamModelPath.empty() || promptKeyframes.empty())
+        return std::shared_ptr<Frame>();
+
+    std::string loadError = LoadONNXModel(efficientSamModelPath, &efficientSam);
+    if (!loadError.empty())
+        return std::shared_ptr<Frame>();
+    SetProcessingDevice();
+
+    CVObjectMaskPromptSet prompts = promptKeyframes.begin()->second;
+    cv::Mat frameImage = frame->GetImageCV();
+    cv::Mat seedMask = CreateEfficientSAMSeedMask(frameImage, prompts);
+    if (seedMask.empty())
+        return std::shared_ptr<Frame>();
+
+    auto maskImage = std::make_shared<QImage>(
+        seedMask.cols, seedMask.rows, QImage::Format_RGBA8888_Premultiplied);
+    maskImage->fill(Qt::transparent);
+    for (int y = 0; y < seedMask.rows; ++y) {
+        const uint8_t* src = seedMask.ptr<uint8_t>(y);
+        QRgb* dst = reinterpret_cast<QRgb*>(maskImage->scanLine(y));
+        for (int x = 0; x < seedMask.cols; ++x)
+            dst[x] = src[x] ? qRgba(255, 255, 255, 255) : qRgba(0, 0, 0, 0);
+    }
+
+    auto result = std::make_shared<Frame>(frame->number, seedMask.cols, seedMask.rows, "#000000");
+    result->AddImage(maskImage);
+    return result;
 }
 
 void CVObjectMask::SetProcessingDevice()
@@ -580,10 +692,8 @@ void CVObjectMask::SetProcessingDevice()
         try {
             const std::vector<cv::dnn::Target> targets = cv::dnn::getAvailableTargets(cv::dnn::DNN_BACKEND_CUDA);
             if (std::find(targets.begin(), targets.end(), cv::dnn::DNN_TARGET_CUDA) != targets.end()) {
-                encoder.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
-                encoder.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
-                decoder.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
-                decoder.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+                efficientSam.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
+                efficientSam.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
                 return;
             }
         } catch (const cv::Exception&) {
@@ -591,10 +701,8 @@ void CVObjectMask::SetProcessingDevice()
         processingDevice = "CPU";
     }
 
-    encoder.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
-    encoder.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
-    decoder.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
-    decoder.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+    efficientSam.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+    efficientSam.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
 }
 
 void CVObjectMask::maskClip(openshot::Clip& video, size_t _start, size_t _end, bool process_interval)
@@ -605,8 +713,8 @@ void CVObjectMask::maskClip(openshot::Clip& video, size_t _start, size_t _end, b
     video.Open();
     processingController->SetError(false, "");
 
-    if (encoderModelPath.empty() || decoderModelPath.empty()) {
-        processingController->SetError(true, "Missing path to EdgeSAM encoder or decoder ONNX model file");
+    if (efficientSamModelPath.empty()) {
+        processingController->SetError(true, "Missing path to EfficientSAM ONNX model file");
         error = true;
         return;
     }
@@ -621,13 +729,7 @@ void CVObjectMask::maskClip(openshot::Clip& video, size_t _start, size_t _end, b
         return;
     }
 
-    std::string loadError = LoadONNXModel(encoderModelPath, &encoder);
-    if (!loadError.empty()) {
-        processingController->SetError(true, loadError);
-        error = true;
-        return;
-    }
-    loadError = LoadONNXModel(decoderModelPath, &decoder);
+    std::string loadError = LoadONNXModel(efficientSamModelPath, &efficientSam);
     if (!loadError.empty()) {
         processingController->SetError(true, loadError);
         error = true;
@@ -705,7 +807,7 @@ void CVObjectMask::maskClip(openshot::Clip& video, size_t _start, size_t _end, b
         const cv::Mat frameImage = frame->GetImageCV();
         cv::Mat seedMask;
         if (isPromptKeyframe || !xmem.HasMemory()) {
-            seedMask = CreateEdgeSAMSeedMask(frameImage, activePrompts);
+            seedMask = CreateEfficientSAMSeedMask(frameImage, activePrompts);
             if (seedMask.empty()) {
                 CVObjectMaskFrameData emptyFrame;
                 emptyFrame.frameId = frameNumber;
@@ -726,8 +828,11 @@ void CVObjectMask::maskClip(openshot::Clip& video, size_t _start, size_t _end, b
         }
 
         cv::Mat outputMask;
-        if (!propagatedMask.empty())
+        if (!seedMask.empty()) {
+            outputMask = seedMask;
+        } else if (!propagatedMask.empty()) {
             cv::resize(propagatedMask, outputMask, frameImage.size(), 0, 0, cv::INTER_NEAREST);
+        }
         masksData[frameNumber] = FrameDataFromMask(outputMask, frameNumber, 1.0f);
 
         const size_t range = std::max<size_t>(1, end - start);
@@ -735,65 +840,26 @@ void CVObjectMask::maskClip(openshot::Clip& video, size_t _start, size_t _end, b
     }
 }
 
-cv::Mat CVObjectMask::CreateEdgeSAMSeedMask(const cv::Mat& frame, const CVObjectMaskPromptSet& prompts)
+cv::Mat CVObjectMask::CreateEfficientSAMSeedMask(const cv::Mat& frame, const CVObjectMaskPromptSet& prompts)
 {
-    SamPreprocessResult prep = MakeSamBlob(frame, modelSize);
-    encoder.setInput(prep.blob, "image");
-    cv::Mat embeddings = encoder.forward("image_embeddings");
+    EfficientSamPreprocessResult prep = MakeEfficientSamBlob(frame, modelSize);
+    std::vector<cv::Point> backgroundPoints;
+    cv::Mat pointCoords = MakeEfficientSamPromptBlob(prompts, prep, promptSlots, backgroundPoints);
+    cv::Mat pointLabels = MakeEfficientSamLabelBlob(prompts, promptSlots);
 
-    const int coordsShape[] = {1, promptSlots, 2};
-    const int labelsShape[] = {1, promptSlots};
-    cv::Mat pointCoords(3, coordsShape, CV_32F, cv::Scalar(0.0f));
-    cv::Mat pointLabels(2, labelsShape, CV_32F, cv::Scalar(-1.0f));
-
-    int promptIndex = 0;
-    if (prompts.hasRect && promptSlots >= 2) {
-        float* coords = pointCoords.ptr<float>();
-        float* labels = pointLabels.ptr<float>();
-        coords[0] = prompts.rectTopLeft.x * prep.scale;
-        coords[1] = prompts.rectTopLeft.y * prep.scale;
-        labels[0] = 2.0f;
-        coords[2] = prompts.rectBottomRight.x * prep.scale;
-        coords[3] = prompts.rectBottomRight.y * prep.scale;
-        labels[1] = 3.0f;
-        promptIndex = 2;
-    }
-    for (const auto& point : prompts.positivePoints) {
-        if (promptIndex >= promptSlots)
-            break;
-        pointCoords.ptr<float>()[promptIndex * 2] = point.x * prep.scale;
-        pointCoords.ptr<float>()[promptIndex * 2 + 1] = point.y * prep.scale;
-        pointLabels.ptr<float>()[promptIndex] = 1.0f;
-        ++promptIndex;
-    }
-    for (const auto& point : prompts.negativePoints) {
-        if (promptIndex >= promptSlots)
-            break;
-        pointCoords.ptr<float>()[promptIndex * 2] = point.x * prep.scale;
-        pointCoords.ptr<float>()[promptIndex * 2 + 1] = point.y * prep.scale;
-        pointLabels.ptr<float>()[promptIndex] = 0.0f;
-        ++promptIndex;
-    }
-
-    decoder.setInput(embeddings, "image_embeddings");
-    decoder.setInput(pointCoords, "point_coords");
-    decoder.setInput(pointLabels, "point_labels");
+    efficientSam.setInput(prep.blob, "batched_images");
+    efficientSam.setInput(pointCoords, "batched_point_coords");
+    efficientSam.setInput(pointLabels, "batched_point_labels");
 
     std::vector<cv::Mat> outputs;
-    decoder.forward(outputs, std::vector<cv::String>{"scores", "masks"});
+    efficientSam.forward(outputs, std::vector<cv::String>{"output_masks", "iou_predictions"});
     if (outputs.size() != 2)
         return cv::Mat();
 
-    const float* scores = outputs[0].ptr<float>();
-    const int maskCount = static_cast<int>(outputs[0].total());
-    int bestScoreMask = 0;
-    for (int i = 1; i < maskCount; ++i) {
-        if (scores[i] > scores[bestScoreMask])
-            bestScoreMask = i;
-    }
-
-    cv::Mat lowMask(maskSize, maskSize, CV_32F, outputs[1].ptr<float>(0, bestScoreMask));
-    return LowMaskToFrameMask(lowMask, prep, frame.size(), modelSize, maskThreshold);
+    cv::Mat modelMask = SelectEfficientSamMask(outputs[0], outputs[1], backgroundPoints, maskThreshold);
+    if (modelMask.empty())
+        return cv::Mat();
+    return EfficientSamMaskToFrameMask(modelMask, frame.size(), maskThreshold);
 }
 
 bool CVObjectMask::SaveObjMaskData()
@@ -819,7 +885,6 @@ bool CVObjectMask::SaveObjMaskData()
         return false;
     }
 
-    google::protobuf::ShutdownProtobufLibrary();
     return true;
 }
 
@@ -858,14 +923,18 @@ void CVObjectMask::SetJsonValue(const Json::Value root)
 {
     if (!root["protobuf_data_path"].isNull())
         protobufDataPath = root["protobuf_data_path"].asString();
+    if (!root["efficient_sam_model"].isNull())
+        efficientSamModelPath = root["efficient_sam_model"].asString();
+    if (!root["efficient_sam_model_path"].isNull())
+        efficientSamModelPath = root["efficient_sam_model_path"].asString();
+    if (!root["sam_model"].isNull())
+        efficientSamModelPath = root["sam_model"].asString();
+    if (!root["sam_model_path"].isNull())
+        efficientSamModelPath = root["sam_model_path"].asString();
     if (!root["encoder_model"].isNull())
-        encoderModelPath = root["encoder_model"].asString();
+        efficientSamModelPath = root["encoder_model"].asString();
     if (!root["encoder_model_path"].isNull())
-        encoderModelPath = root["encoder_model_path"].asString();
-    if (!root["decoder_model"].isNull())
-        decoderModelPath = root["decoder_model"].asString();
-    if (!root["decoder_model_path"].isNull())
-        decoderModelPath = root["decoder_model_path"].asString();
+        efficientSamModelPath = root["encoder_model_path"].asString();
     if (!root["xmem_model_dir"].isNull())
         xmemModelDir = root["xmem_model_dir"].asString();
     if (!root["xmem_encode_key_model"].isNull())
@@ -885,14 +954,11 @@ void CVObjectMask::SetJsonValue(const Json::Value root)
     if (!root["processing_device"].isNull())
         processingDevice = root["processing_device"].asString();
     if (!root["prompt_slots"].isNull())
-        promptSlots = std::max(1, root["prompt_slots"].asInt());
+        promptSlots = std::max(1, std::min(6, root["prompt_slots"].asInt()));
     if (!root["mask_threshold"].isNull())
         maskThreshold = root["mask_threshold"].asFloat();
     if (!root["model_size"].isNull())
         modelSize = root["model_size"].asInt();
-    if (!root["mask_size"].isNull())
-        maskSize = root["mask_size"].asInt();
-
     promptKeyframes.clear();
     if (!root["object_mask_selection"].isNull()) {
         const Json::Value& selection = root["object_mask_selection"];

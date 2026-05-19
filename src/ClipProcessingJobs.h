@@ -60,6 +60,7 @@ class ClipProcessingJobs{
 		// Constructor
 		ClipProcessingJobs(std::string processingType, std::string processInfoJson);
 		static std::string ValidateONNXModel(std::string modelPath);
+		static std::shared_ptr<Frame> PreviewObjectMask(std::string processInfoJson, std::shared_ptr<Frame> frame);
 		// Process clip accordingly to processingType
 		void processClip(Clip& clip, std::string json);
 

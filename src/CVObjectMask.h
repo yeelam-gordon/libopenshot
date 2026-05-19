@@ -53,16 +53,14 @@ namespace openshot
     };
 
     /**
-     * @brief Preprocess a clip into EdgeSAM object masks stored in the object-detection protobuf format.
+     * @brief Preprocess a clip into EfficientSAM/XMem object masks stored in the object-detection protobuf format.
      */
     class CVObjectMask
     {
     private:
-        cv::dnn::Net encoder;
-        cv::dnn::Net decoder;
+        cv::dnn::Net efficientSam;
 
-        std::string encoderModelPath;
-        std::string decoderModelPath;
+        std::string efficientSamModelPath;
         std::string xmemModelDir;
         std::string xmemEncodeKeyModelPath;
         std::string xmemEncodeValueModelPath;
@@ -71,10 +69,9 @@ namespace openshot
         std::string processingDevice = "CPU";
 
         std::map<size_t, CVObjectMaskPromptSet> promptKeyframes;
-        int promptSlots = 10;
+        int promptSlots = 6;
         float maskThreshold = 0.0f;
         int modelSize = 1024;
-        int maskSize = 256;
 
         size_t start = 0;
         size_t end = 0;
@@ -83,7 +80,7 @@ namespace openshot
         ProcessingController* processingController;
 
         void SetProcessingDevice();
-        cv::Mat CreateEdgeSAMSeedMask(const cv::Mat& frame, const CVObjectMaskPromptSet& prompts);
+        cv::Mat CreateEfficientSAMSeedMask(const cv::Mat& frame, const CVObjectMaskPromptSet& prompts);
         void AddFrameDataToProto(pb_objdetect::Frame* pbFrameData, const CVObjectMaskFrameData& frameData);
 
     public:
@@ -91,7 +88,8 @@ namespace openshot
 
         CVObjectMask(std::string processInfoJson, ProcessingController& processingController);
 
-        static std::string ValidateONNXModels(std::string encoderPath, std::string decoderPath);
+        static std::string ValidateONNXModel(std::string modelPath);
+        std::shared_ptr<Frame> PreviewSeedMask(std::shared_ptr<Frame> frame);
 
         void maskClip(openshot::Clip& video, size_t start = 0, size_t end = 0, bool process_interval = false);
         bool SaveObjMaskData();

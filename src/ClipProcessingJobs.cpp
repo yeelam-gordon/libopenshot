@@ -28,6 +28,18 @@ std::string ClipProcessingJobs::ValidateONNXModel(std::string modelPath){
 #endif
 }
 
+std::shared_ptr<Frame> ClipProcessingJobs::PreviewObjectMask(std::string processInfoJson, std::shared_ptr<Frame> frame){
+#ifdef USE_OPENCV
+    ProcessingController controller;
+    CVObjectMask objectMask(processInfoJson, controller);
+    return objectMask.PreviewSeedMask(frame);
+#else
+    (void)processInfoJson;
+    (void)frame;
+    return std::shared_ptr<Frame>();
+#endif
+}
+
 void ClipProcessingJobs::processClip(Clip& clip, std::string json){
     processInfoJson = json;
 

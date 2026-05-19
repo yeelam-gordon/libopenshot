@@ -16,6 +16,9 @@
 #include "Frame.h"
 #include "Json.h"
 #include "effects/ObjectMask.h"
+#ifdef USE_OPENCV
+#include "CVObjectMask.h"
+#endif
 
 #include <QColor>
 #include <QImage>
@@ -151,3 +154,10 @@ TEST_CASE("ObjectMask loads protobuf masks and exposes style controls", "[effect
 
 	std::remove(protobuf_path.c_str());
 }
+
+#ifdef USE_OPENCV
+TEST_CASE("CVObjectMask validates a single EfficientSAM ONNX model path", "[effect][object_mask][opencv]") {
+	const std::string error = CVObjectMask::ValidateONNXModel("/tmp/libopenshot_missing_efficientsam.onnx");
+	CHECK(error.find("Failed to load ONNX model") != std::string::npos);
+}
+#endif
