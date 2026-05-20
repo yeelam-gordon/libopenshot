@@ -45,11 +45,10 @@ namespace openshot
     struct CVObjectMaskPromptSet {
         std::vector<cv::Point2f> positivePoints;
         std::vector<cv::Point2f> negativePoints;
-        cv::Point2f rectTopLeft = cv::Point2f(-1.0f, -1.0f);
-        cv::Point2f rectBottomRight = cv::Point2f(-1.0f, -1.0f);
-        bool hasRect = false;
+        std::vector<cv::Rect_<float>> positiveRects;
+        std::vector<cv::Rect_<float>> negativeRects;
 
-        bool HasPositivePrompt() const { return hasRect || !positivePoints.empty(); }
+        bool HasPositivePrompt() const { return !positiveRects.empty() || !positivePoints.empty(); }
     };
 
     /**

@@ -13,7 +13,14 @@
 #include "CVObjectMask.h"
 
 #include "Exceptions.h"
+#include "ZmqLogger.h"
 #include "objdetectdata.pb.h"
+
+#define int64 int64_t
+#define uint64 uint64_t
+#include <opencv2/core/ocl.hpp>
+#undef uint64
+#undef int64
 
 #include <algorithm>
 #include <cctype>
@@ -22,6 +29,7 @@
 #include <fstream>
 #include <iostream>
 #include <cstring>
+#include <limits>
 #include <numeric>
 
 #include <google/protobuf/util/time_util.h>
@@ -142,19 +150,23 @@ cv::Mat MakeEfficientSamPromptBlob(
     const CVObjectMaskPromptSet& prompts,
     const EfficientSamPreprocessResult& prep,
     int promptSlots,
-    std::vector<cv::Point>& backgroundPoints)
+    std::vector<cv::Point>& backgroundPoints,
+    std::vector<cv::Rect>& backgroundRects)
 {
     const int coordsShape[] = {1, 1, promptSlots, 2};
     cv::Mat pointCoords(4, coordsShape, CV_32F, cv::Scalar(0.0f));
 
     float* coords = pointCoords.ptr<float>();
     int promptIndex = 0;
-    if (prompts.hasRect && promptSlots >= 2) {
-        coords[0] = prompts.rectTopLeft.x * prep.scaleX;
-        coords[1] = prompts.rectTopLeft.y * prep.scaleY;
-        coords[2] = prompts.rectBottomRight.x * prep.scaleX;
-        coords[3] = prompts.rectBottomRight.y * prep.scaleY;
-        promptIndex = 2;
+    for (const auto& rect : prompts.positiveRects) {
+        if (promptIndex + 1 >= promptSlots)
+            break;
+        coords[promptIndex * 2] = rect.x * prep.scaleX;
+        coords[promptIndex * 2 + 1] = rect.y * prep.scaleY;
+        ++promptIndex;
+        coords[promptIndex * 2] = (rect.x + rect.width) * prep.scaleX;
+        coords[promptIndex * 2 + 1] = (rect.y + rect.height) * prep.scaleY;
+        ++promptIndex;
     }
     for (const auto& point : prompts.positivePoints) {
         if (promptIndex >= promptSlots)
@@ -168,6 +180,19 @@ cv::Mat MakeEfficientSamPromptBlob(
             static_cast<int>(std::lround(point.x * prep.scaleX)),
             static_cast<int>(std::lround(point.y * prep.scaleY)));
     }
+    for (const auto& rect : prompts.negativeRects) {
+        const int x1 = static_cast<int>(std::floor(rect.x * prep.scaleX));
+        const int y1 = static_cast<int>(std::floor(rect.y * prep.scaleY));
+        const int x2 = static_cast<int>(std::ceil((rect.x + rect.width) * prep.scaleX));
+        const int y2 = static_cast<int>(std::ceil((rect.y + rect.height) * prep.scaleY));
+        const int modelWidth = prep.blob.size[3];
+        const int modelHeight = prep.blob.size[2];
+        const int left = std::max(0, std::min(modelWidth - 1, x1));
+        const int top = std::max(0, std::min(modelHeight - 1, y1));
+        const int right = std::max(left + 1, std::min(modelWidth, x2));
+        const int bottom = std::max(top + 1, std::min(modelHeight, y2));
+        backgroundRects.emplace_back(left, top, right - left, bottom - top);
+    }
 
     return pointCoords;
 }
@@ -179,10 +204,9 @@ cv::Mat MakeEfficientSamLabelBlob(const CVObjectMaskPromptSet& prompts, int prom
 
     float* labels = pointLabels.ptr<float>();
     int promptIndex = 0;
-    if (prompts.hasRect && promptSlots >= 2) {
-        labels[0] = 2.0f;
-        labels[1] = 3.0f;
-        promptIndex = 2;
+    for (size_t i = 0; i < prompts.positiveRects.size() && promptIndex + 1 < promptSlots; ++i) {
+        labels[promptIndex++] = 2.0f;
+        labels[promptIndex++] = 3.0f;
     }
     for (size_t i = 0; i < prompts.positivePoints.size() && promptIndex < promptSlots; ++i, ++promptIndex)
         labels[promptIndex] = 1.0f;
@@ -191,7 +215,9 @@ cv::Mat MakeEfficientSamLabelBlob(const CVObjectMaskPromptSet& prompts, int prom
 }
 
 cv::Mat SelectEfficientSamMask(const cv::Mat& outputMasks, const cv::Mat& iouPredictions,
-                               const std::vector<cv::Point>& backgroundPoints, float maskThreshold)
+                               const std::vector<cv::Point>& backgroundPoints,
+                               const std::vector<cv::Rect>& backgroundRects,
+                               float maskThreshold)
 {
     if (outputMasks.dims != 5 || iouPredictions.empty())
         return cv::Mat();
@@ -201,34 +227,52 @@ cv::Mat SelectEfficientSamMask(const cv::Mat& outputMasks, const cv::Mat& iouPre
     const int maskWidth = outputMasks.size[4];
     const float* ious = iouPredictions.ptr<float>();
 
-    std::vector<int> order(candidateCount);
-    std::iota(order.begin(), order.end(), 0);
-    std::sort(order.begin(), order.end(), [&](int a, int b) {
-        return ious[a] > ious[b];
-    });
-
     const float* masks = outputMasks.ptr<float>();
     const size_t candidatePixels = static_cast<size_t>(maskHeight) * static_cast<size_t>(maskWidth);
-    cv::Mat fallback;
-    for (int candidate : order) {
+    cv::Mat bestMask;
+    float bestScore = -std::numeric_limits<float>::infinity();
+    for (int candidate = 0; candidate < candidateCount; ++candidate) {
         cv::Mat mask(maskHeight, maskWidth, CV_32F,
                      const_cast<float*>(masks + static_cast<size_t>(candidate) * candidatePixels));
-        if (fallback.empty())
-            fallback = mask.clone();
 
-        bool containsBackground = false;
+        int backgroundHits = 0;
         for (const cv::Point& point : backgroundPoints) {
             const int x = std::max(0, std::min(maskWidth - 1, point.x));
             const int y = std::max(0, std::min(maskHeight - 1, point.y));
-            if (mask.at<float>(y, x) >= maskThreshold) {
-                containsBackground = true;
-                break;
-            }
+            if (mask.at<float>(y, x) >= maskThreshold)
+                ++backgroundHits;
         }
-        if (!containsBackground)
-            return mask.clone();
+
+        float rectOverlapPenalty = 0.0f;
+        for (const cv::Rect& rect : backgroundRects) {
+            const cv::Rect clipped = rect & cv::Rect(0, 0, maskWidth, maskHeight);
+            const int area = clipped.area();
+            if (area <= 0)
+                continue;
+            int overlap = 0;
+            for (int y = clipped.y; y < clipped.y + clipped.height; ++y) {
+                const float* row = mask.ptr<float>(y);
+                for (int x = clipped.x; x < clipped.x + clipped.width; ++x) {
+                    if (row[x] >= maskThreshold)
+                        ++overlap;
+                }
+            }
+            rectOverlapPenalty += static_cast<float>(overlap) / static_cast<float>(area);
+        }
+
+        const float pointPenalty = backgroundPoints.empty()
+            ? 0.0f
+            : static_cast<float>(backgroundHits) / static_cast<float>(backgroundPoints.size());
+        if (!backgroundRects.empty())
+            rectOverlapPenalty /= static_cast<float>(backgroundRects.size());
+
+        const float score = ious[candidate] - (0.35f * pointPenalty) - (0.75f * rectOverlapPenalty);
+        if (bestMask.empty() || score > bestScore) {
+            bestScore = score;
+            bestMask = mask.clone();
+        }
     }
-    return fallback;
+    return bestMask;
 }
 
 CVObjectMaskFrameData FrameDataFromMask(const cv::Mat& mask, size_t frameId, float score)
@@ -279,34 +323,34 @@ size_t JsonFrameNumber(const std::string& frameName)
     }
 }
 
-void ApplyRectJson(const Json::Value& rect, CVObjectMaskPromptSet& prompts)
+bool RectFromJson(const Json::Value& rect, cv::Rect_<float>& output)
 {
     if (!rect.isObject() || rect["x1"].isNull() || rect["y1"].isNull() ||
         rect["x2"].isNull() || rect["y2"].isNull()) {
-        return;
+        return false;
     }
 
-    prompts.rectTopLeft.x = std::min(rect["x1"].asFloat(), rect["x2"].asFloat());
-    prompts.rectTopLeft.y = std::min(rect["y1"].asFloat(), rect["y2"].asFloat());
-    prompts.rectBottomRight.x = std::max(rect["x1"].asFloat(), rect["x2"].asFloat());
-    prompts.rectBottomRight.y = std::max(rect["y1"].asFloat(), rect["y2"].asFloat());
-    prompts.hasRect = IsValidPoint(prompts.rectTopLeft) && IsValidPoint(prompts.rectBottomRight);
+    const float x1 = std::min(rect["x1"].asFloat(), rect["x2"].asFloat());
+    const float y1 = std::min(rect["y1"].asFloat(), rect["y2"].asFloat());
+    const float x2 = std::max(rect["x1"].asFloat(), rect["x2"].asFloat());
+    const float y2 = std::max(rect["y1"].asFloat(), rect["y2"].asFloat());
+    cv::Point2f topLeft(x1, y1);
+    cv::Point2f bottomRight(x2, y2);
+    if (!IsValidPoint(topLeft) || !IsValidPoint(bottomRight) || x2 <= x1 || y2 <= y1)
+        return false;
+
+    output = cv::Rect_<float>(x1, y1, x2 - x1, y2 - y1);
+    return true;
 }
 
-void AppendNegativeRectCenters(const Json::Value& values, CVObjectMaskPromptSet& prompts)
+void AppendJsonRects(const Json::Value& values, std::vector<cv::Rect_<float>>& rects)
 {
     if (!values.isArray())
         return;
     for (const auto& rect : values) {
-        if (!rect.isObject() || rect["x1"].isNull() || rect["y1"].isNull() ||
-            rect["x2"].isNull() || rect["y2"].isNull()) {
-            continue;
-        }
-        cv::Point2f center(
-            (rect["x1"].asFloat() + rect["x2"].asFloat()) / 2.0f,
-            (rect["y1"].asFloat() + rect["y2"].asFloat()) / 2.0f);
-        if (IsValidPoint(center))
-            prompts.negativePoints.push_back(center);
+        cv::Rect_<float> parsed;
+        if (RectFromJson(rect, parsed))
+            rects.push_back(parsed);
     }
 }
 
@@ -315,9 +359,8 @@ CVObjectMaskPromptSet PromptSetFromJson(const Json::Value& framePayload)
     CVObjectMaskPromptSet prompts;
     AppendJsonPoints(framePayload["positive_points"], prompts.positivePoints);
     AppendJsonPoints(framePayload["negative_points"], prompts.negativePoints);
-    if (framePayload["positive_rects"].isArray() && framePayload["positive_rects"].size() > 0)
-        ApplyRectJson(framePayload["positive_rects"][0], prompts);
-    AppendNegativeRectCenters(framePayload["negative_rects"], prompts);
+    AppendJsonRects(framePayload["positive_rects"], prompts.positiveRects);
+    AppendJsonRects(framePayload["negative_rects"], prompts.negativeRects);
     return prompts;
 }
 
@@ -328,15 +371,34 @@ cv::Mat MakeBlob(const std::vector<int>& shape, float value = 0.0f)
     return output;
 }
 
-void SetNetDevice(cv::dnn::Net& net, const std::string& processingDevice)
+std::string SetNetDevice(cv::dnn::Net& net, const std::string& processingDevice)
 {
-    if (processingDevice == "GPU") {
+    if (processingDevice == "CPU") {
+        net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+        net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+        return "CPU";
+    }
+
+    if (processingDevice == "GPU" || processingDevice == "GPU_AUTO" || processingDevice == "GPU_CUDA") {
         try {
             const std::vector<cv::dnn::Target> targets = cv::dnn::getAvailableTargets(cv::dnn::DNN_BACKEND_CUDA);
             if (std::find(targets.begin(), targets.end(), cv::dnn::DNN_TARGET_CUDA) != targets.end()) {
                 net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
                 net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
-                return;
+                return "CUDA";
+            }
+        } catch (const cv::Exception&) {
+        }
+    }
+
+    if (processingDevice == "GPU_OPENCL") {
+        try {
+            const std::vector<cv::dnn::Target> targets = cv::dnn::getAvailableTargets(cv::dnn::DNN_BACKEND_OPENCV);
+            if (std::find(targets.begin(), targets.end(), cv::dnn::DNN_TARGET_OPENCL) != targets.end()) {
+                cv::ocl::setUseOpenCL(true);
+                net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+                net.setPreferableTarget(cv::dnn::DNN_TARGET_OPENCL);
+                return "OpenCL";
             }
         } catch (const cv::Exception&) {
         }
@@ -344,6 +406,7 @@ void SetNetDevice(cv::dnn::Net& net, const std::string& processingDevice)
 
     net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
     net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+    return "CPU";
 }
 
 class CutiePropagator {
@@ -561,12 +624,15 @@ public:
         sensory = MakeBlob({1, 1, 256, stride16Height, stride16Width});
     }
 
-    void SetDevice(const std::string& processingDevice)
+    std::string SetDevice(const std::string& processingDevice)
     {
-        SetNetDevice(encodeKey, processingDevice);
-        SetNetDevice(encodeValue, processingDevice);
-        SetNetDevice(memoryReadout, processingDevice);
-        SetNetDevice(decode, processingDevice);
+        std::string selected = SetNetDevice(encodeKey, processingDevice);
+        const std::string valueDevice = SetNetDevice(encodeValue, processingDevice);
+        const std::string readoutDevice = SetNetDevice(memoryReadout, processingDevice);
+        const std::string decodeDevice = SetNetDevice(decode, processingDevice);
+        if (selected != valueDevice || selected != readoutDevice || selected != decodeDevice)
+            return "Mixed";
+        return selected;
     }
 
     void Reset()
@@ -695,21 +761,45 @@ std::shared_ptr<Frame> CVObjectMask::PreviewSeedMask(std::shared_ptr<Frame> fram
 
 void CVObjectMask::SetProcessingDevice()
 {
-    if (processingDevice == "GPU") {
+    const std::string requestedDevice = processingDevice;
+    if (processingDevice == "CPU") {
+        efficientSam.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+        efficientSam.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+        ZmqLogger::Instance()->Log("Object Mask EfficientSAM DNN device: requested CPU, selected CPU");
+        return;
+    }
+
+    if (processingDevice == "GPU" || processingDevice == "GPU_AUTO" || processingDevice == "GPU_CUDA") {
         try {
             const std::vector<cv::dnn::Target> targets = cv::dnn::getAvailableTargets(cv::dnn::DNN_BACKEND_CUDA);
             if (std::find(targets.begin(), targets.end(), cv::dnn::DNN_TARGET_CUDA) != targets.end()) {
                 efficientSam.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
                 efficientSam.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+                ZmqLogger::Instance()->Log("Object Mask EfficientSAM DNN device: requested " + requestedDevice + ", selected CUDA");
                 return;
             }
         } catch (const cv::Exception&) {
         }
-        processingDevice = "CPU";
     }
 
+    if (processingDevice == "GPU_OPENCL") {
+        try {
+            const std::vector<cv::dnn::Target> targets = cv::dnn::getAvailableTargets(cv::dnn::DNN_BACKEND_OPENCV);
+            if (std::find(targets.begin(), targets.end(), cv::dnn::DNN_TARGET_OPENCL) != targets.end()) {
+                cv::ocl::setUseOpenCL(true);
+                efficientSam.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+                efficientSam.setPreferableTarget(cv::dnn::DNN_TARGET_OPENCL);
+                ZmqLogger::Instance()->Log("Object Mask EfficientSAM DNN device: requested " + requestedDevice + ", selected OpenCL");
+                return;
+            }
+        } catch (const cv::Exception&) {
+        }
+    }
+
+    processingDevice = "CPU";
     efficientSam.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
     efficientSam.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+    ZmqLogger::Instance()->Log("Object Mask EfficientSAM DNN device: requested " + requestedDevice + ", selected CPU");
 }
 
 void CVObjectMask::maskClip(openshot::Clip& video, size_t _start, size_t _end, bool process_interval)
@@ -761,7 +851,8 @@ void CVObjectMask::maskClip(openshot::Clip& video, size_t _start, size_t _end, b
     }
     try {
         cutie.Load(cutieEncodeKeyModelPath, cutieEncodeValueModelPath, cutieMemoryReadoutModelPath, cutieDecodeModelPath);
-        cutie.SetDevice(processingDevice);
+        const std::string cutieDevice = cutie.SetDevice(processingDevice);
+        ZmqLogger::Instance()->Log("Object Mask Cutie DNN device: requested " + processingDevice + ", selected " + cutieDevice);
     } catch (const cv::Exception& e) {
         processingController->SetError(true, std::string("Failed to load Cutie ONNX models: ") + e.what());
         error = true;
@@ -852,23 +943,58 @@ void CVObjectMask::maskClip(openshot::Clip& video, size_t _start, size_t _end, b
 cv::Mat CVObjectMask::CreateEfficientSAMSeedMask(const cv::Mat& frame, const CVObjectMaskPromptSet& prompts)
 {
     EfficientSamPreprocessResult prep = MakeEfficientSamBlob(frame, modelSize);
-    std::vector<cv::Point> backgroundPoints;
-    cv::Mat pointCoords = MakeEfficientSamPromptBlob(prompts, prep, promptSlots, backgroundPoints);
-    cv::Mat pointLabels = MakeEfficientSamLabelBlob(prompts, promptSlots);
 
-    efficientSam.setInput(prep.blob, "batched_images");
-    efficientSam.setInput(pointCoords, "batched_point_coords");
-    efficientSam.setInput(pointLabels, "batched_point_labels");
+    auto runPromptSet = [&](const CVObjectMaskPromptSet& promptSet) -> cv::Mat {
+        std::vector<cv::Point> backgroundPoints;
+        std::vector<cv::Rect> backgroundRects;
+        cv::Mat pointCoords = MakeEfficientSamPromptBlob(promptSet, prep, promptSlots, backgroundPoints, backgroundRects);
+        cv::Mat pointLabels = MakeEfficientSamLabelBlob(promptSet, promptSlots);
 
-    std::vector<cv::Mat> outputs;
-    efficientSam.forward(outputs, std::vector<cv::String>{"output_masks", "iou_predictions"});
-    if (outputs.size() != 2)
-        return cv::Mat();
+        efficientSam.setInput(prep.blob, "batched_images");
+        efficientSam.setInput(pointCoords, "batched_point_coords");
+        efficientSam.setInput(pointLabels, "batched_point_labels");
 
-    cv::Mat modelMask = SelectEfficientSamMask(outputs[0], outputs[1], backgroundPoints, maskThreshold);
-    if (modelMask.empty())
-        return cv::Mat();
-    return EfficientSamMaskToFrameMask(modelMask, frame.size(), maskThreshold);
+        std::vector<cv::Mat> outputs;
+        efficientSam.forward(outputs, std::vector<cv::String>{"output_masks", "iou_predictions"});
+        if (outputs.size() != 2)
+            return cv::Mat();
+
+        cv::Mat modelMask = SelectEfficientSamMask(outputs[0], outputs[1], backgroundPoints, backgroundRects, maskThreshold);
+        if (modelMask.empty())
+            return cv::Mat();
+        return EfficientSamMaskToFrameMask(modelMask, frame.size(), maskThreshold);
+    };
+
+    if (prompts.positiveRects.size() <= 1)
+        return runPromptSet(prompts);
+
+    cv::Mat combinedMask(frame.rows, frame.cols, CV_8U, cv::Scalar(0));
+    bool hasMask = false;
+    for (const auto& rect : prompts.positiveRects) {
+        CVObjectMaskPromptSet rectPrompt;
+        rectPrompt.positiveRects.push_back(rect);
+        rectPrompt.negativePoints = prompts.negativePoints;
+        rectPrompt.negativeRects = prompts.negativeRects;
+        cv::Mat rectMask = runPromptSet(rectPrompt);
+        if (rectMask.empty())
+            continue;
+        cv::bitwise_or(combinedMask, rectMask, combinedMask);
+        hasMask = true;
+    }
+
+    if (!prompts.positivePoints.empty()) {
+        CVObjectMaskPromptSet pointPrompt;
+        pointPrompt.positivePoints = prompts.positivePoints;
+        pointPrompt.negativePoints = prompts.negativePoints;
+        pointPrompt.negativeRects = prompts.negativeRects;
+        cv::Mat pointMask = runPromptSet(pointPrompt);
+        if (!pointMask.empty()) {
+            cv::bitwise_or(combinedMask, pointMask, combinedMask);
+            hasMask = true;
+        }
+    }
+
+    return hasMask ? combinedMask : cv::Mat();
 }
 
 bool CVObjectMask::SaveObjMaskData()
@@ -1011,7 +1137,9 @@ void CVObjectMask::SetJsonValue(const Json::Value root)
         rect["y1"] = root["rect_y1"];
         rect["x2"] = root["rect_x2"];
         rect["y2"] = root["rect_y2"];
-        ApplyRectJson(rect, legacyPrompts);
+        cv::Rect_<float> parsed;
+        if (RectFromJson(rect, parsed))
+            legacyPrompts.positiveRects.push_back(parsed);
     }
     if (legacyPrompts.HasPositivePrompt() && promptKeyframes.empty())
         promptKeyframes[1] = legacyPrompts;
