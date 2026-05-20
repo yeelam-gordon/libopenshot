@@ -53,7 +53,7 @@ namespace openshot
     };
 
     /**
-     * @brief Preprocess a clip into EfficientSAM/XMem object masks stored in the object-detection protobuf format.
+     * @brief Preprocess a clip into EfficientSAM/Cutie object masks stored in the object-detection protobuf format.
      */
     class CVObjectMask
     {
@@ -61,10 +61,11 @@ namespace openshot
         cv::dnn::Net efficientSam;
 
         std::string efficientSamModelPath;
-        std::string xmemModelDir;
-        std::string xmemEncodeKeyModelPath;
-        std::string xmemEncodeValueModelPath;
-        std::string xmemDecodeModelPath;
+        std::string cutieModelDir;
+        std::string cutieEncodeKeyModelPath;
+        std::string cutieEncodeValueModelPath;
+        std::string cutieMemoryReadoutModelPath;
+        std::string cutieDecodeModelPath;
         std::string protobufDataPath;
         std::string processingDevice = "CPU";
 

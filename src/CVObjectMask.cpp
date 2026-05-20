@@ -16,6 +16,7 @@
 #include "objdetectdata.pb.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <deque>
 #include <fstream>
@@ -126,6 +127,13 @@ cv::Mat EfficientSamMaskToFrameMask(const cv::Mat& modelMask, const cv::Size& fr
 
     cv::Mat binary;
     cv::threshold(fullSize, binary, maskThreshold, 255.0, cv::THRESH_BINARY);
+    if (cv::countNonZero(binary) == 0) {
+        double maxValue = 0.0;
+        cv::minMaxLoc(fullSize, nullptr, &maxValue);
+        if (maxValue > 0.0) {
+            cv::threshold(fullSize, binary, maxValue * 0.5, 255.0, cv::THRESH_BINARY);
+        }
+    }
     binary.convertTo(binary, CV_8U);
     return binary;
 }
@@ -313,105 +321,39 @@ CVObjectMaskPromptSet PromptSetFromJson(const Json::Value& framePayload)
     return prompts;
 }
 
-cv::Mat MakeXMemImageBlob(const cv::Mat& bgr)
+cv::Mat MakeBlob(const std::vector<int>& shape, float value = 0.0f)
 {
-    cv::Mat resized;
-    cv::resize(bgr, resized, cv::Size(640, 480), 0, 0, cv::INTER_LINEAR);
+    cv::Mat output(static_cast<int>(shape.size()), shape.data(), CV_32F);
+    output.setTo(value);
+    return output;
+}
 
-    const int shape[] = {1, 3, 480, 640};
-    cv::Mat blob(4, shape, CV_32F);
-    float* dst = blob.ptr<float>();
-    const float mean[] = {0.485f, 0.456f, 0.406f};
-    const float stddev[] = {0.229f, 0.224f, 0.225f};
-
-    for (int y = 0; y < resized.rows; ++y) {
-        const cv::Vec3b* row = resized.ptr<cv::Vec3b>(y);
-        for (int x = 0; x < resized.cols; ++x) {
-            const float rgb[] = {
-                static_cast<float>(row[x][2]) / 255.0f,
-                static_cast<float>(row[x][1]) / 255.0f,
-                static_cast<float>(row[x][0]) / 255.0f,
-            };
-            for (int c = 0; c < 3; ++c)
-                dst[(c * 480 + y) * 640 + x] = (rgb[c] - mean[c]) / stddev[c];
+void SetNetDevice(cv::dnn::Net& net, const std::string& processingDevice)
+{
+    if (processingDevice == "GPU") {
+        try {
+            const std::vector<cv::dnn::Target> targets = cv::dnn::getAvailableTargets(cv::dnn::DNN_BACKEND_CUDA);
+            if (std::find(targets.begin(), targets.end(), cv::dnn::DNN_TARGET_CUDA) != targets.end()) {
+                net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
+                net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+                return;
+            }
+        } catch (const cv::Exception&) {
         }
     }
 
-    return blob;
+    net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+    net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
 }
 
-cv::Mat MakeScalarBlob(float value)
-{
-    const int shape[] = {1};
-    return cv::Mat(1, shape, CV_32F, cv::Scalar(value));
-}
-
-cv::Mat MakeXMemMaskBlob(const cv::Mat& mask)
-{
-    cv::Mat resized;
-    cv::resize(mask, resized, cv::Size(640, 480), 0, 0, cv::INTER_NEAREST);
-    const int shape[] = {1, 1, 480, 640};
-    cv::Mat blob(4, shape, CV_32F, cv::Scalar(0.0f));
-    float* dst = blob.ptr<float>();
-    for (int y = 0; y < resized.rows; ++y) {
-        const uint8_t* row = resized.ptr<uint8_t>(y);
-        for (int x = 0; x < resized.cols; ++x)
-            dst[y * 640 + x] = row[x] ? 1.0f : 0.0f;
-    }
-    return blob;
-}
-
-cv::Mat BinaryMaskFromXMemProb(const cv::Mat& prob)
-{
-    cv::Mat mask(480, 640, CV_8U, cv::Scalar(0));
-    const float* src = prob.ptr<float>();
-    for (int y = 0; y < mask.rows; ++y) {
-        uint8_t* row = mask.ptr<uint8_t>(y);
-        for (int x = 0; x < mask.cols; ++x)
-            row[x] = src[y * 640 + x] >= 0.5f ? 255 : 0;
-    }
-    return mask;
-}
-
-cv::Mat AggregateXMemForegroundProb(const cv::Mat& rawProb)
-{
-    const int shape[] = {1, 1, 480, 640};
-    cv::Mat output(4, shape, CV_32F);
-    const float* src = rawProb.ptr<float>();
-    float* dst = output.ptr<float>();
-    for (int i = 0; i < 480 * 640; ++i) {
-        const float fg = std::min(1.0f - 1e-7f, std::max(1e-7f, src[i]));
-        const float bg = std::min(1.0f - 1e-7f, std::max(1e-7f, 1.0f - fg));
-        const float bgLogit = std::log(bg / (1.0f - bg));
-        const float fgLogit = std::log(fg / (1.0f - fg));
-        const float maxLogit = std::max(bgLogit, fgLogit);
-        const float bgExp = std::exp(bgLogit - maxLogit);
-        const float fgExp = std::exp(fgLogit - maxLogit);
-        dst[i] = fgExp / (bgExp + fgExp);
-    }
-    return output;
-}
-
-cv::Mat FlattenFeature(const cv::Mat& feature, int channels)
-{
-    return cv::Mat(channels, 30 * 40, CV_32F, const_cast<float*>(feature.ptr<float>())).clone();
-}
-
-cv::Mat FlattenShrinkage(const cv::Mat& shrinkage)
-{
-    return cv::Mat(1, 30 * 40, CV_32F, const_cast<float*>(shrinkage.ptr<float>())).clone();
-}
-
-cv::Mat MatFromReadout(const cv::Mat& readout)
-{
-    const int shape[] = {1, 1, 512, 30, 40};
-    cv::Mat output(5, shape, CV_32F);
-    std::memcpy(output.ptr<float>(), readout.ptr<float>(), sizeof(float) * readout.total());
-    return output;
-}
-
-class XMemPropagator {
+class CutiePropagator {
 private:
+    static constexpr int memorySlots = 6;
+    int modelWidth = 640;
+    int modelHeight = 368;
+    int stride16Width = modelWidth / 16;
+    int stride16Height = modelHeight / 16;
+
     struct MemoryFrame {
         cv::Mat key;
         cv::Mat shrinkage;
@@ -420,159 +362,219 @@ private:
 
     cv::dnn::Net encodeKey;
     cv::dnn::Net encodeValue;
+    cv::dnn::Net memoryReadout;
     cv::dnn::Net decode;
-    cv::Mat memoryKey;
-    cv::Mat memoryShrinkage;
-    cv::Mat memoryValue;
-    cv::Mat hidden;
+    cv::Mat sensory;
+    cv::Mat lastMask;
+    cv::Mat objectMemory;
     std::deque<MemoryFrame> memoryFrames;
     int frameIndex = 0;
     int lastMemoryFrame = -1000000;
     int memEvery = 5;
-    int maxMemoryFrames = 10;
+    int maxMemoryFrames = memorySlots;
 
-    void RebuildMemory()
+    static bool ParseModelSize(const std::string& modelPath, int& width, int& height)
     {
-        std::vector<cv::Mat> keys;
-        std::vector<cv::Mat> shrinkages;
-        std::vector<cv::Mat> values;
-        for (const auto& frame : memoryFrames) {
-            keys.push_back(frame.key);
-            shrinkages.push_back(frame.shrinkage);
-            values.push_back(frame.value);
+        size_t xPos = modelPath.find('x');
+        while (xPos != std::string::npos) {
+            size_t widthStart = xPos;
+            while (widthStart > 0 && std::isdigit(static_cast<unsigned char>(modelPath[widthStart - 1])))
+                --widthStart;
+
+            size_t heightEnd = xPos + 1;
+            while (heightEnd < modelPath.size() && std::isdigit(static_cast<unsigned char>(modelPath[heightEnd])))
+                ++heightEnd;
+
+            if (widthStart != xPos && heightEnd != xPos + 1) {
+                width = std::stoi(modelPath.substr(widthStart, xPos - widthStart));
+                height = std::stoi(modelPath.substr(xPos + 1, heightEnd - xPos - 1));
+                if (width > 0 && height > 0 && width % 16 == 0 && height % 16 == 0)
+                    return true;
+            }
+            xPos = modelPath.find('x', xPos + 1);
         }
-        if (keys.empty()) {
-            memoryKey.release();
-            memoryShrinkage.release();
-            memoryValue.release();
-            return;
-        }
-        cv::hconcat(keys, memoryKey);
-        cv::hconcat(shrinkages, memoryShrinkage);
-        cv::hconcat(values, memoryValue);
+        return false;
     }
 
-    cv::Mat MatchMemory(const cv::Mat& queryKey, const cv::Mat& selection)
+    void ConfigureModelSize(const std::string& modelPath)
     {
-        cv::Mat query = FlattenFeature(queryKey, 64);
-        cv::Mat querySelection = FlattenFeature(selection, 64);
-        cv::Mat weightedQuery = query.mul(querySelection);
+        int width = modelWidth;
+        int height = modelHeight;
+        if (!ParseModelSize(modelPath, width, height))
+            return;
+        modelWidth = width;
+        modelHeight = height;
+        stride16Width = modelWidth / 16;
+        stride16Height = modelHeight / 16;
+    }
 
-        cv::Mat twoAb;
-        cv::gemm(memoryKey, weightedQuery, 2.0, cv::Mat(), 0.0, twoAb, cv::GEMM_1_T);
+    cv::Mat MakeImageBlob(const cv::Mat& bgr) const
+    {
+        cv::Mat resized;
+        cv::resize(bgr, resized, cv::Size(modelWidth, modelHeight), 0, 0, cv::INTER_LINEAR);
 
-        cv::Mat aSq;
-        cv::gemm(memoryKey.mul(memoryKey), querySelection, 1.0, cv::Mat(), 0.0, aSq, cv::GEMM_1_T);
-
-        cv::Mat querySquared = query.mul(query).mul(querySelection);
-        std::vector<float> bSq(query.cols, 0.0f);
-        for (int q = 0; q < query.cols; ++q) {
-            double sum = 0.0;
-            for (int c = 0; c < query.rows; ++c)
-                sum += querySquared.at<float>(c, q);
-            bSq[q] = static_cast<float>(sum);
-        }
-
-        cv::Mat similarity = twoAb - aSq;
-        const float invSqrtKeyDim = 1.0f / std::sqrt(64.0f);
-        for (int n = 0; n < similarity.rows; ++n) {
-            float* row = similarity.ptr<float>(n);
-            const float shrinkage = memoryShrinkage.at<float>(0, n);
-            for (int q = 0; q < similarity.cols; ++q)
-                row[q] = (row[q] - bSq[q]) * shrinkage * invSqrtKeyDim;
-        }
-
-        const int topK = std::min(30, similarity.rows);
-        for (int q = 0; q < similarity.cols; ++q) {
-            std::vector<int> indices(similarity.rows);
-            std::iota(indices.begin(), indices.end(), 0);
-            std::partial_sort(indices.begin(), indices.begin() + topK, indices.end(),
-                [&](int a, int b) { return similarity.at<float>(a, q) > similarity.at<float>(b, q); });
-
-            float maxValue = similarity.at<float>(indices[0], q);
-            for (int k = 1; k < topK; ++k)
-                maxValue = std::max(maxValue, similarity.at<float>(indices[k], q));
-
-            double sum = 0.0;
-            std::vector<float> values(topK, 0.0f);
-            for (int k = 0; k < topK; ++k) {
-                values[k] = std::exp(similarity.at<float>(indices[k], q) - maxValue);
-                sum += values[k];
+        const int shape[] = {1, 3, modelHeight, modelWidth};
+        cv::Mat blob(4, shape, CV_32F);
+        float* dst = blob.ptr<float>();
+        for (int y = 0; y < resized.rows; ++y) {
+            const cv::Vec3b* row = resized.ptr<cv::Vec3b>(y);
+            for (int x = 0; x < resized.cols; ++x) {
+                dst[(0 * modelHeight + y) * modelWidth + x] = static_cast<float>(row[x][2]) / 255.0f;
+                dst[(1 * modelHeight + y) * modelWidth + x] = static_cast<float>(row[x][1]) / 255.0f;
+                dst[(2 * modelHeight + y) * modelWidth + x] = static_cast<float>(row[x][0]) / 255.0f;
             }
-            if (sum <= 0.0)
-                continue;
-            for (int n = 0; n < similarity.rows; ++n)
-                similarity.at<float>(n, q) = 0.0f;
-            for (int k = 0; k < topK; ++k)
-                similarity.at<float>(indices[k], q) = static_cast<float>(values[k] / sum);
         }
+        return blob;
+    }
 
-        cv::Mat readout;
-        cv::gemm(memoryValue, similarity, 1.0, cv::Mat(), 0.0, readout);
-        return MatFromReadout(readout);
+    cv::Mat MakeMaskBlob(const cv::Mat& mask) const
+    {
+        cv::Mat resized;
+        cv::resize(mask, resized, cv::Size(modelWidth, modelHeight), 0, 0, cv::INTER_NEAREST);
+
+        const int shape[] = {1, 1, modelHeight, modelWidth};
+        cv::Mat blob(4, shape, CV_32F, cv::Scalar(0.0f));
+        float* dst = blob.ptr<float>();
+        for (int y = 0; y < resized.rows; ++y) {
+            const uint8_t* row = resized.ptr<uint8_t>(y);
+            for (int x = 0; x < resized.cols; ++x)
+                dst[y * modelWidth + x] = row[x] ? 1.0f : 0.0f;
+        }
+        return blob;
+    }
+
+    cv::Mat ForegroundFromProb(const cv::Mat& prob) const
+    {
+        const int shape[] = {1, 1, modelHeight, modelWidth};
+        cv::Mat foreground(4, shape, CV_32F);
+        const float* src = prob.ptr<float>();
+        float* dst = foreground.ptr<float>();
+        const int plane = modelWidth * modelHeight;
+        std::memcpy(dst, src + plane, sizeof(float) * plane);
+        return foreground;
+    }
+
+    cv::Mat BinaryMaskFromForeground(const cv::Mat& foreground) const
+    {
+        cv::Mat mask(modelHeight, modelWidth, CV_8U, cv::Scalar(0));
+        const float* src = foreground.ptr<float>();
+        for (int y = 0; y < mask.rows; ++y) {
+            uint8_t* row = mask.ptr<uint8_t>(y);
+            for (int x = 0; x < mask.cols; ++x)
+                row[x] = src[y * modelWidth + x] >= 0.5f ? 255 : 0;
+        }
+        return mask;
+    }
+
+    void CopyKeySlot(const cv::Mat& src, cv::Mat& dst, int slot, int channels) const
+    {
+        const float* in = src.ptr<float>();
+        float* out = dst.ptr<float>();
+        const int plane = stride16Width * stride16Height;
+        for (int c = 0; c < channels; ++c) {
+            std::memcpy(out + (c * memorySlots + slot) * plane,
+                        in + c * plane,
+                        sizeof(float) * plane);
+        }
+    }
+
+    void CopyValueSlot(const cv::Mat& src, cv::Mat& dst, int slot) const
+    {
+        const float* in = src.ptr<float>();
+        float* out = dst.ptr<float>();
+        const int plane = stride16Width * stride16Height;
+        for (int c = 0; c < 256; ++c) {
+            std::memcpy(out + (c * memorySlots + slot) * plane,
+                        in + c * plane,
+                        sizeof(float) * plane);
+        }
+    }
+
+    cv::Mat MemoryKeyBlob() const
+    {
+        cv::Mat output = MakeBlob({1, 64, memorySlots, stride16Height, stride16Width});
+        for (int slot = 0; slot < static_cast<int>(memoryFrames.size()); ++slot)
+            CopyKeySlot(memoryFrames[slot].key, output, slot, 64);
+        return output;
+    }
+
+    cv::Mat MemoryShrinkageBlob() const
+    {
+        cv::Mat output = MakeBlob({1, 1, memorySlots, stride16Height, stride16Width});
+        for (int slot = 0; slot < static_cast<int>(memoryFrames.size()); ++slot)
+            CopyKeySlot(memoryFrames[slot].shrinkage, output, slot, 1);
+        return output;
+    }
+
+    cv::Mat MemoryValueBlob() const
+    {
+        cv::Mat output = MakeBlob({1, 1, 256, memorySlots, stride16Height, stride16Width});
+        for (int slot = 0; slot < static_cast<int>(memoryFrames.size()); ++slot)
+            CopyValueSlot(memoryFrames[slot].value, output, slot);
+        return output;
+    }
+
+    cv::Mat MemoryValidBlob() const
+    {
+        cv::Mat output = MakeBlob({1, 1, memorySlots, stride16Height, stride16Width});
+        float* data = output.ptr<float>();
+        const int plane = stride16Width * stride16Height;
+        for (int slot = 0; slot < static_cast<int>(memoryFrames.size()); ++slot)
+            std::fill(data + slot * plane, data + (slot + 1) * plane, 1.0f);
+        return output;
     }
 
     void AddMemory(const cv::Mat& key, const cv::Mat& shrinkage, const cv::Mat& value)
     {
         MemoryFrame frame;
-        frame.key = FlattenFeature(key, 64);
-        frame.shrinkage = FlattenShrinkage(shrinkage);
-        frame.value = FlattenFeature(value, 512);
+        frame.key = key.clone();
+        frame.shrinkage = shrinkage.clone();
+        frame.value = value.clone();
         memoryFrames.push_back(frame);
         while (static_cast<int>(memoryFrames.size()) > maxMemoryFrames)
             memoryFrames.pop_front();
-        RebuildMemory();
     }
 
-    void EnsureHidden()
+    void AddObjectMemory(const cv::Mat& value)
     {
-        if (!hidden.empty())
+        if (objectMemory.empty()) {
+            objectMemory = MakeBlob({1, 1, 1, 16, 257});
+            std::memcpy(objectMemory.ptr<float>(), value.ptr<float>(), sizeof(float) * value.total());
             return;
-        const int shape[] = {1, 1, 64, 30, 40};
-        hidden = cv::Mat(5, shape, CV_32F, cv::Scalar(0.0f));
+        }
+
+        float* dst = objectMemory.ptr<float>();
+        const float* src = value.ptr<float>();
+        for (size_t i = 0; i < value.total(); ++i)
+            dst[i] += src[i];
     }
 
 public:
-    void Load(const std::string& encodeKeyPath, const std::string& encodeValuePath, const std::string& decodePath)
+    void Load(const std::string& encodeKeyPath, const std::string& encodeValuePath,
+              const std::string& memoryReadoutPath, const std::string& decodePath)
     {
+        ConfigureModelSize(encodeKeyPath);
         encodeKey = cv::dnn::readNetFromONNX(encodeKeyPath);
         encodeValue = cv::dnn::readNetFromONNX(encodeValuePath);
+        memoryReadout = cv::dnn::readNetFromONNX(memoryReadoutPath);
         decode = cv::dnn::readNetFromONNX(decodePath);
+        sensory = MakeBlob({1, 1, 256, stride16Height, stride16Width});
     }
 
     void SetDevice(const std::string& processingDevice)
     {
-        if (processingDevice == "GPU") {
-            try {
-                const std::vector<cv::dnn::Target> targets = cv::dnn::getAvailableTargets(cv::dnn::DNN_BACKEND_CUDA);
-                if (std::find(targets.begin(), targets.end(), cv::dnn::DNN_TARGET_CUDA) != targets.end()) {
-                    encodeKey.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
-                    encodeKey.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
-                    encodeValue.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
-                    encodeValue.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
-                    decode.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
-                    decode.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
-                    return;
-                }
-            } catch (const cv::Exception&) {
-            }
-        }
-
-        encodeKey.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
-        encodeKey.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
-        encodeValue.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
-        encodeValue.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
-        decode.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
-        decode.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+        SetNetDevice(encodeKey, processingDevice);
+        SetNetDevice(encodeValue, processingDevice);
+        SetNetDevice(memoryReadout, processingDevice);
+        SetNetDevice(decode, processingDevice);
     }
 
     void Reset()
     {
+        sensory = MakeBlob({1, 1, 256, stride16Height, stride16Width});
+        lastMask.release();
+        objectMemory.release();
         memoryFrames.clear();
-        memoryKey.release();
-        memoryShrinkage.release();
-        memoryValue.release();
-        hidden.release();
         frameIndex = 0;
         lastMemoryFrame = -1000000;
     }
@@ -584,36 +586,43 @@ public:
 
     cv::Mat Step(const cv::Mat& frame, const cv::Mat& seedMask = cv::Mat())
     {
-        cv::Mat image = MakeXMemImageBlob(frame);
+        cv::Mat image = MakeImageBlob(frame);
 
         encodeKey.setInput(image, "image");
-        encodeKey.setInput(MakeScalarBlob(1.0f), "need_sk");
-        encodeKey.setInput(MakeScalarBlob(1.0f), "need_ek");
         std::vector<cv::Mat> keyOutputs;
-        encodeKey.forward(keyOutputs, std::vector<cv::String>{"key", "shrinkage", "selection", "f16", "f8", "f4"});
-        cv::Mat key = keyOutputs[0];
-        cv::Mat shrinkage = keyOutputs[1];
-        cv::Mat f16 = keyOutputs[3];
-        cv::Mat f8 = keyOutputs[4];
-        cv::Mat f4 = keyOutputs[5];
+        encodeKey.forward(keyOutputs, std::vector<cv::String>{"f16", "f8", "f4", "pix_feat", "key", "shrinkage", "selection"});
+        cv::Mat f8 = keyOutputs[1];
+        cv::Mat f4 = keyOutputs[2];
+        cv::Mat pixFeat = keyOutputs[3];
+        cv::Mat key = keyOutputs[4];
+        cv::Mat shrinkage = keyOutputs[5];
+        cv::Mat selection = keyOutputs[6];
 
-        EnsureHidden();
-
-        cv::Mat modelMask;
+        cv::Mat foreground;
         if (!seedMask.empty()) {
-            modelMask = MakeXMemMaskBlob(seedMask);
+            foreground = MakeMaskBlob(seedMask);
         } else if (HasMemory()) {
-            cv::Mat memoryReadout = MatchMemory(key, keyOutputs[2]);
-            decode.setInput(f16, "f16");
+            memoryReadout.setInput(key, "query_key");
+            memoryReadout.setInput(selection, "query_selection");
+            memoryReadout.setInput(MemoryKeyBlob(), "memory_key");
+            memoryReadout.setInput(MemoryShrinkageBlob(), "memory_shrinkage");
+            memoryReadout.setInput(MemoryValueBlob(), "memory_value");
+            memoryReadout.setInput(MemoryValidBlob(), "memory_valid");
+            memoryReadout.setInput(objectMemory, "object_memory");
+            memoryReadout.setInput(pixFeat, "pix_feat");
+            memoryReadout.setInput(sensory, "sensory");
+            memoryReadout.setInput(lastMask, "last_mask");
+            std::vector<cv::Mat> readoutOutputs;
+            memoryReadout.forward(readoutOutputs, std::vector<cv::String>{"memory_readout"});
+
             decode.setInput(f8, "f8");
             decode.setInput(f4, "f4");
-            decode.setInput(hidden, "h16_in");
-            decode.setInput(memoryReadout, "memory_readout");
-            decode.setInput(MakeScalarBlob(1.0f), "h_out");
+            decode.setInput(readoutOutputs[0], "memory_readout");
+            decode.setInput(sensory, "sensory");
             std::vector<cv::Mat> decodeOutputs;
-            decode.forward(decodeOutputs, std::vector<cv::String>{"h16_out", "logits", "prob"});
-            hidden = decodeOutputs[0].clone();
-            modelMask = AggregateXMemForegroundProb(decodeOutputs[2]);
+            decode.forward(decodeOutputs, std::vector<cv::String>{"new_sensory", "logits", "prob"});
+            sensory = decodeOutputs[0].clone();
+            foreground = ForegroundFromProb(decodeOutputs[2]);
         } else {
             ++frameIndex;
             return cv::Mat();
@@ -621,22 +630,20 @@ public:
 
         const bool isMemoryFrame = !seedMask.empty() || frameIndex - lastMemoryFrame >= memEvery;
         if (isMemoryFrame) {
-            const int othersShape[] = {1, 1, 480, 640};
-            cv::Mat others(4, othersShape, CV_32F, cv::Scalar(0.0f));
             encodeValue.setInput(image, "image");
-            encodeValue.setInput(f16, "f16");
-            encodeValue.setInput(hidden, "h16_in");
-            encodeValue.setInput(modelMask, "masks");
-            encodeValue.setInput(others, "others");
-            encodeValue.setInput(MakeScalarBlob(1.0f), "is_deep_update");
+            encodeValue.setInput(pixFeat, "pix_feat");
+            encodeValue.setInput(sensory, "sensory");
+            encodeValue.setInput(foreground, "mask");
             std::vector<cv::Mat> valueOutputs;
-            encodeValue.forward(valueOutputs, std::vector<cv::String>{"g16", "h16_out"});
-            hidden = valueOutputs[1].clone();
+            encodeValue.forward(valueOutputs, std::vector<cv::String>{"mask_value", "new_sensory", "object_memory"});
+            sensory = valueOutputs[1].clone();
+            AddObjectMemory(valueOutputs[2]);
             AddMemory(key, shrinkage, valueOutputs[0]);
             lastMemoryFrame = frameIndex;
         }
 
-        cv::Mat outputMask = BinaryMaskFromXMemProb(modelMask);
+        lastMask = foreground.clone();
+        cv::Mat outputMask = BinaryMaskFromForeground(foreground);
         ++frameIndex;
         return outputMask;
     }
@@ -737,28 +744,30 @@ void CVObjectMask::maskClip(openshot::Clip& video, size_t _start, size_t _end, b
     }
     SetProcessingDevice();
 
-    if (xmemEncodeKeyModelPath.empty() && !xmemModelDir.empty())
-        xmemEncodeKeyModelPath = xmemModelDir + "/XMem-encode_key.onnx";
-    if (xmemEncodeValueModelPath.empty() && !xmemModelDir.empty())
-        xmemEncodeValueModelPath = xmemModelDir + "/XMem-encode_value-m1.onnx";
-    if (xmemDecodeModelPath.empty() && !xmemModelDir.empty())
-        xmemDecodeModelPath = xmemModelDir + "/XMem-decode-m1.onnx";
-    if (xmemEncodeKeyModelPath.empty() || xmemEncodeValueModelPath.empty() || xmemDecodeModelPath.empty()) {
-        processingController->SetError(true, "Missing path to XMem ONNX model files");
+    CutiePropagator cutie;
+    if (cutieEncodeKeyModelPath.empty() && !cutieModelDir.empty())
+        cutieEncodeKeyModelPath = cutieModelDir + "/cutie-encode-key-640x368.onnx";
+    if (cutieEncodeValueModelPath.empty() && !cutieModelDir.empty())
+        cutieEncodeValueModelPath = cutieModelDir + "/cutie-encode-value-640x368.onnx";
+    if (cutieMemoryReadoutModelPath.empty() && !cutieModelDir.empty())
+        cutieMemoryReadoutModelPath = cutieModelDir + "/cutie-memory-readout-floatmask-valid-640x368-m6-topk30-opencv.onnx";
+    if (cutieDecodeModelPath.empty() && !cutieModelDir.empty())
+        cutieDecodeModelPath = cutieModelDir + "/cutie-decode-640x368.onnx";
+    if (cutieEncodeKeyModelPath.empty() || cutieEncodeValueModelPath.empty() ||
+        cutieMemoryReadoutModelPath.empty() || cutieDecodeModelPath.empty()) {
+        processingController->SetError(true, "Missing path to Cutie ONNX model files");
         error = true;
         return;
     }
-
-    XMemPropagator xmem;
     try {
-        xmem.Load(xmemEncodeKeyModelPath, xmemEncodeValueModelPath, xmemDecodeModelPath);
-        xmem.SetDevice(processingDevice);
+        cutie.Load(cutieEncodeKeyModelPath, cutieEncodeValueModelPath, cutieMemoryReadoutModelPath, cutieDecodeModelPath);
+        cutie.SetDevice(processingDevice);
     } catch (const cv::Exception& e) {
-        processingController->SetError(true, std::string("Failed to load XMem ONNX models: ") + e.what());
+        processingController->SetError(true, std::string("Failed to load Cutie ONNX models: ") + e.what());
         error = true;
         return;
     } catch (const std::exception& e) {
-        processingController->SetError(true, std::string("Failed to load XMem ONNX models: ") + e.what());
+        processingController->SetError(true, std::string("Failed to load Cutie ONNX models: ") + e.what());
         error = true;
         return;
     }
@@ -790,12 +799,12 @@ void CVObjectMask::maskClip(openshot::Clip& video, size_t _start, size_t _end, b
         bool isPromptKeyframe = promptIt != promptKeyframes.end();
         if (promptIt != promptKeyframes.end()) {
             activePrompts = promptIt->second;
-            xmem.Reset();
+            cutie.Reset();
         } else if (!activePrompts.HasPositivePrompt()) {
             if (firstPromptAtOrAfterStart != promptKeyframes.end() && frameNumber >= firstPromptAtOrAfterStart->first) {
                 activePrompts = firstPromptAtOrAfterStart->second;
                 isPromptKeyframe = true;
-                xmem.Reset();
+                cutie.Reset();
             } else {
                 CVObjectMaskFrameData emptyFrame;
                 emptyFrame.frameId = frameNumber;
@@ -806,7 +815,7 @@ void CVObjectMask::maskClip(openshot::Clip& video, size_t _start, size_t _end, b
 
         const cv::Mat frameImage = frame->GetImageCV();
         cv::Mat seedMask;
-        if (isPromptKeyframe || !xmem.HasMemory()) {
+        if (isPromptKeyframe || !cutie.HasMemory()) {
             seedMask = CreateEfficientSAMSeedMask(frameImage, activePrompts);
             if (seedMask.empty()) {
                 CVObjectMaskFrameData emptyFrame;
@@ -815,14 +824,14 @@ void CVObjectMask::maskClip(openshot::Clip& video, size_t _start, size_t _end, b
                 continue;
             }
             if (!isPromptKeyframe)
-                xmem.Reset();
+                cutie.Reset();
         }
 
         cv::Mat propagatedMask;
         try {
-            propagatedMask = xmem.Step(frameImage, seedMask);
+            propagatedMask = cutie.Step(frameImage, seedMask);
         } catch (const cv::Exception& e) {
-            processingController->SetError(true, std::string("Failed to propagate Object Mask with XMem: ") + e.what());
+            processingController->SetError(true, std::string("Failed to propagate Object Mask with Cutie: ") + e.what());
             error = true;
             return;
         }
@@ -935,20 +944,24 @@ void CVObjectMask::SetJsonValue(const Json::Value root)
         efficientSamModelPath = root["encoder_model"].asString();
     if (!root["encoder_model_path"].isNull())
         efficientSamModelPath = root["encoder_model_path"].asString();
-    if (!root["xmem_model_dir"].isNull())
-        xmemModelDir = root["xmem_model_dir"].asString();
-    if (!root["xmem_encode_key_model"].isNull())
-        xmemEncodeKeyModelPath = root["xmem_encode_key_model"].asString();
-    if (!root["xmem_encode_key_model_path"].isNull())
-        xmemEncodeKeyModelPath = root["xmem_encode_key_model_path"].asString();
-    if (!root["xmem_encode_value_model"].isNull())
-        xmemEncodeValueModelPath = root["xmem_encode_value_model"].asString();
-    if (!root["xmem_encode_value_model_path"].isNull())
-        xmemEncodeValueModelPath = root["xmem_encode_value_model_path"].asString();
-    if (!root["xmem_decode_model"].isNull())
-        xmemDecodeModelPath = root["xmem_decode_model"].asString();
-    if (!root["xmem_decode_model_path"].isNull())
-        xmemDecodeModelPath = root["xmem_decode_model_path"].asString();
+    if (!root["cutie_model_dir"].isNull())
+        cutieModelDir = root["cutie_model_dir"].asString();
+    if (!root["cutie_encode_key_model"].isNull())
+        cutieEncodeKeyModelPath = root["cutie_encode_key_model"].asString();
+    if (!root["cutie_encode_key_model_path"].isNull())
+        cutieEncodeKeyModelPath = root["cutie_encode_key_model_path"].asString();
+    if (!root["cutie_encode_value_model"].isNull())
+        cutieEncodeValueModelPath = root["cutie_encode_value_model"].asString();
+    if (!root["cutie_encode_value_model_path"].isNull())
+        cutieEncodeValueModelPath = root["cutie_encode_value_model_path"].asString();
+    if (!root["cutie_memory_readout_model"].isNull())
+        cutieMemoryReadoutModelPath = root["cutie_memory_readout_model"].asString();
+    if (!root["cutie_memory_readout_model_path"].isNull())
+        cutieMemoryReadoutModelPath = root["cutie_memory_readout_model_path"].asString();
+    if (!root["cutie_decode_model"].isNull())
+        cutieDecodeModelPath = root["cutie_decode_model"].asString();
+    if (!root["cutie_decode_model_path"].isNull())
+        cutieDecodeModelPath = root["cutie_decode_model_path"].asString();
     if (!root["processing-device"].isNull())
         processingDevice = root["processing-device"].asString();
     if (!root["processing_device"].isNull())
