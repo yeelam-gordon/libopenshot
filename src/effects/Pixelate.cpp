@@ -19,7 +19,19 @@
 #include <QRect>
 #include <QPoint>
 
+#include <algorithm>
+
 using namespace openshot;
+
+namespace {
+double clamp_margin(double value) {
+	if (value < 0.0)
+		return 0.0;
+	if (value > 1.0)
+		return 1.0;
+	return value;
+}
+}
 
 /// Blank constructor, useful when using Json to load the effect properties
 Pixelate::Pixelate() : pixelization(0.5), left(0.0), top(0.0), right(0.0), bottom(0.0),
@@ -69,10 +81,20 @@ Pixelate::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 	if (pixelization_value > 0.0) {
 		int w = frame_image->width();
 		int h = frame_image->height();
+		if (w <= 0 || h <= 0)
+			return frame;
 
 		// Define area we're working on in terms of a QRect with QMargins applied
 		QRect area(QPoint(0,0), frame_image->size());
-		area = area.marginsRemoved({int(left_value * w), int(top_value * h), int(right_value * w), int(bottom_value * h)});
+		area = area.marginsRemoved({
+			int(clamp_margin(left_value) * w),
+			int(clamp_margin(top_value) * h),
+			int(clamp_margin(right_value) * w),
+			int(clamp_margin(bottom_value) * h)
+		});
+		area = area.intersected(QRect(QPoint(0,0), frame_image->size()));
+		if (area.isEmpty())
+			return frame;
 
 		int scale_to = (int) (area.width() * pixelization_value);
 		if (scale_to < 1) {

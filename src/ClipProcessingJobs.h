@@ -56,6 +56,7 @@ class ClipProcessingJobs{
 	public:
 		// Constructor
 		ClipProcessingJobs(std::string processingType, std::string processInfoJson);
+		static std::string ValidateONNXModel(std::string modelPath);
 		// Process clip accordingly to processingType
 		void processClip(Clip& clip, std::string json);
 
