@@ -421,6 +421,12 @@ private:
         cv::Mat key;
         cv::Mat shrinkage;
         cv::Mat value;
+        cv::Mat valid;
+    };
+
+    struct LetterboxTransform {
+        cv::Size originalSize;
+        cv::Rect contentRect;
     };
 
     cv::dnn::Net encodeKey;
@@ -430,7 +436,9 @@ private:
     cv::Mat sensory;
     cv::Mat lastMask;
     cv::Mat objectMemory;
-    std::deque<MemoryFrame> memoryFrames;
+    MemoryFrame permanentMemory;
+    bool hasPermanentMemory = false;
+    std::deque<MemoryFrame> workingMemoryFrames;
     int frameIndex = 0;
     int lastMemoryFrame = -1000000;
     int memEvery = 5;
@@ -471,17 +479,42 @@ private:
         stride16Height = modelHeight / 16;
     }
 
-    cv::Mat MakeImageBlob(const cv::Mat& bgr) const
+    LetterboxTransform ComputeLetterbox(const cv::Size& sourceSize) const
+    {
+        LetterboxTransform transform;
+        transform.originalSize = sourceSize;
+        if (sourceSize.width <= 0 || sourceSize.height <= 0) {
+            transform.contentRect = cv::Rect(0, 0, modelWidth, modelHeight);
+            return transform;
+        }
+
+        const float scaleX = static_cast<float>(modelWidth) / static_cast<float>(sourceSize.width);
+        const float scaleY = static_cast<float>(modelHeight) / static_cast<float>(sourceSize.height);
+        const float scale = std::min(scaleX, scaleY);
+
+        const int resizedWidth = std::max(1, std::min(
+            modelWidth, static_cast<int>(std::lround(sourceSize.width * scale))));
+        const int resizedHeight = std::max(1, std::min(
+            modelHeight, static_cast<int>(std::lround(sourceSize.height * scale))));
+        const int offsetX = (modelWidth - resizedWidth) / 2;
+        const int offsetY = (modelHeight - resizedHeight) / 2;
+        transform.contentRect = cv::Rect(offsetX, offsetY, resizedWidth, resizedHeight);
+        return transform;
+    }
+
+    cv::Mat MakeImageBlob(const cv::Mat& bgr, const LetterboxTransform& transform) const
     {
         cv::Mat resized;
-        cv::resize(bgr, resized, cv::Size(modelWidth, modelHeight), 0, 0, cv::INTER_LINEAR);
+        cv::resize(bgr, resized, transform.contentRect.size(), 0, 0, cv::INTER_LINEAR);
+        cv::Mat canvas(modelHeight, modelWidth, bgr.type(), cv::Scalar::all(0));
+        resized.copyTo(canvas(transform.contentRect));
 
         const int shape[] = {1, 3, modelHeight, modelWidth};
         cv::Mat blob(4, shape, CV_32F);
         float* dst = blob.ptr<float>();
-        for (int y = 0; y < resized.rows; ++y) {
-            const cv::Vec3b* row = resized.ptr<cv::Vec3b>(y);
-            for (int x = 0; x < resized.cols; ++x) {
+        for (int y = 0; y < canvas.rows; ++y) {
+            const cv::Vec3b* row = canvas.ptr<cv::Vec3b>(y);
+            for (int x = 0; x < canvas.cols; ++x) {
                 dst[(0 * modelHeight + y) * modelWidth + x] = static_cast<float>(row[x][2]) / 255.0f;
                 dst[(1 * modelHeight + y) * modelWidth + x] = static_cast<float>(row[x][1]) / 255.0f;
                 dst[(2 * modelHeight + y) * modelWidth + x] = static_cast<float>(row[x][0]) / 255.0f;
@@ -490,17 +523,19 @@ private:
         return blob;
     }
 
-    cv::Mat MakeMaskBlob(const cv::Mat& mask) const
+    cv::Mat MakeMaskBlob(const cv::Mat& mask, const LetterboxTransform& transform) const
     {
         cv::Mat resized;
-        cv::resize(mask, resized, cv::Size(modelWidth, modelHeight), 0, 0, cv::INTER_NEAREST);
+        cv::resize(mask, resized, transform.contentRect.size(), 0, 0, cv::INTER_NEAREST);
+        cv::Mat canvas(modelHeight, modelWidth, CV_8U, cv::Scalar(0));
+        resized.copyTo(canvas(transform.contentRect));
 
         const int shape[] = {1, 1, modelHeight, modelWidth};
         cv::Mat blob(4, shape, CV_32F, cv::Scalar(0.0f));
         float* dst = blob.ptr<float>();
-        for (int y = 0; y < resized.rows; ++y) {
-            const uint8_t* row = resized.ptr<uint8_t>(y);
-            for (int x = 0; x < resized.cols; ++x)
+        for (int y = 0; y < canvas.rows; ++y) {
+            const uint8_t* row = canvas.ptr<uint8_t>(y);
+            for (int x = 0; x < canvas.cols; ++x)
                 dst[y * modelWidth + x] = row[x] ? 1.0f : 0.0f;
         }
         return blob;
@@ -517,16 +552,39 @@ private:
         return foreground;
     }
 
-    cv::Mat BinaryMaskFromForeground(const cv::Mat& foreground) const
+    cv::Mat BinaryMaskFromForeground(const cv::Mat& foreground, const LetterboxTransform& transform) const
     {
-        cv::Mat mask(modelHeight, modelWidth, CV_8U, cv::Scalar(0));
+        cv::Mat modelMask(modelHeight, modelWidth, CV_8U, cv::Scalar(0));
         const float* src = foreground.ptr<float>();
-        for (int y = 0; y < mask.rows; ++y) {
-            uint8_t* row = mask.ptr<uint8_t>(y);
-            for (int x = 0; x < mask.cols; ++x)
+        for (int y = 0; y < modelMask.rows; ++y) {
+            uint8_t* row = modelMask.ptr<uint8_t>(y);
+            for (int x = 0; x < modelMask.cols; ++x)
                 row[x] = src[y * modelWidth + x] >= 0.5f ? 255 : 0;
         }
-        return mask;
+
+        cv::Mat cropped = modelMask(transform.contentRect);
+        cv::Mat restored;
+        cv::resize(cropped, restored, transform.originalSize, 0, 0, cv::INTER_NEAREST);
+        return restored;
+    }
+
+    cv::Mat ValidMaskFromLetterbox(const LetterboxTransform& transform) const
+    {
+        cv::Mat valid(stride16Height, stride16Width, CV_32F, cv::Scalar(0.0f));
+        for (int y = 0; y < stride16Height; ++y) {
+            float* row = valid.ptr<float>(y);
+            const int centerY = y * 16 + 8;
+            for (int x = 0; x < stride16Width; ++x) {
+                const int centerX = x * 16 + 8;
+                if (transform.contentRect.contains(cv::Point(centerX, centerY)))
+                    row[x] = 1.0f;
+            }
+        }
+
+        const int shape[] = {1, 1, stride16Height, stride16Width};
+        cv::Mat blob(4, shape, CV_32F);
+        std::memcpy(blob.ptr<float>(), valid.ptr<float>(), sizeof(float) * valid.total());
+        return blob;
     }
 
     void CopyKeySlot(const cv::Mat& src, cv::Mat& dst, int slot, int channels) const
@@ -556,24 +614,39 @@ private:
     cv::Mat MemoryKeyBlob() const
     {
         cv::Mat output = MakeBlob({1, 64, memorySlots, stride16Height, stride16Width});
-        for (int slot = 0; slot < static_cast<int>(memoryFrames.size()); ++slot)
-            CopyKeySlot(memoryFrames[slot].key, output, slot, 64);
+        int slot = 0;
+        if (hasPermanentMemory)
+            CopyKeySlot(permanentMemory.key, output, slot++, 64);
+        for (int index = 0;
+             index < static_cast<int>(workingMemoryFrames.size()) && slot < memorySlots;
+             ++index, ++slot)
+            CopyKeySlot(workingMemoryFrames[index].key, output, slot, 64);
         return output;
     }
 
     cv::Mat MemoryShrinkageBlob() const
     {
         cv::Mat output = MakeBlob({1, 1, memorySlots, stride16Height, stride16Width});
-        for (int slot = 0; slot < static_cast<int>(memoryFrames.size()); ++slot)
-            CopyKeySlot(memoryFrames[slot].shrinkage, output, slot, 1);
+        int slot = 0;
+        if (hasPermanentMemory)
+            CopyKeySlot(permanentMemory.shrinkage, output, slot++, 1);
+        for (int index = 0;
+             index < static_cast<int>(workingMemoryFrames.size()) && slot < memorySlots;
+             ++index, ++slot)
+            CopyKeySlot(workingMemoryFrames[index].shrinkage, output, slot, 1);
         return output;
     }
 
     cv::Mat MemoryValueBlob() const
     {
         cv::Mat output = MakeBlob({1, 1, 256, memorySlots, stride16Height, stride16Width});
-        for (int slot = 0; slot < static_cast<int>(memoryFrames.size()); ++slot)
-            CopyValueSlot(memoryFrames[slot].value, output, slot);
+        int slot = 0;
+        if (hasPermanentMemory)
+            CopyValueSlot(permanentMemory.value, output, slot++);
+        for (int index = 0;
+             index < static_cast<int>(workingMemoryFrames.size()) && slot < memorySlots;
+             ++index, ++slot)
+            CopyValueSlot(workingMemoryFrames[index].value, output, slot);
         return output;
     }
 
@@ -582,20 +655,39 @@ private:
         cv::Mat output = MakeBlob({1, 1, memorySlots, stride16Height, stride16Width});
         float* data = output.ptr<float>();
         const int plane = stride16Width * stride16Height;
-        for (int slot = 0; slot < static_cast<int>(memoryFrames.size()); ++slot)
-            std::fill(data + slot * plane, data + (slot + 1) * plane, 1.0f);
+        auto copyValidSlot = [&](const cv::Mat& valid, int slot) {
+            std::memcpy(data + slot * plane, valid.ptr<float>(), sizeof(float) * plane);
+        };
+
+        int slot = 0;
+        if (hasPermanentMemory)
+            copyValidSlot(permanentMemory.valid, slot++);
+        for (int index = 0;
+             index < static_cast<int>(workingMemoryFrames.size()) && slot < memorySlots;
+             ++index, ++slot)
+            copyValidSlot(workingMemoryFrames[index].valid, slot);
         return output;
     }
 
-    void AddMemory(const cv::Mat& key, const cv::Mat& shrinkage, const cv::Mat& value)
+    void AddMemory(const cv::Mat& key, const cv::Mat& shrinkage, const cv::Mat& value,
+                   const cv::Mat& valid, bool asPermanent)
     {
         MemoryFrame frame;
         frame.key = key.clone();
         frame.shrinkage = shrinkage.clone();
         frame.value = value.clone();
-        memoryFrames.push_back(frame);
-        while (static_cast<int>(memoryFrames.size()) > maxMemoryFrames)
-            memoryFrames.pop_front();
+        frame.valid = valid.clone();
+
+        if (asPermanent || !hasPermanentMemory) {
+            permanentMemory = frame;
+            hasPermanentMemory = true;
+            return;
+        }
+
+        workingMemoryFrames.push_back(frame);
+        const int workingCapacity = std::max(0, maxMemoryFrames - 1);
+        while (static_cast<int>(workingMemoryFrames.size()) > workingCapacity)
+            workingMemoryFrames.pop_front();
     }
 
     void AddObjectMemory(const cv::Mat& value)
@@ -640,19 +732,23 @@ public:
         sensory = MakeBlob({1, 1, 256, stride16Height, stride16Width});
         lastMask.release();
         objectMemory.release();
-        memoryFrames.clear();
+        permanentMemory = MemoryFrame();
+        hasPermanentMemory = false;
+        workingMemoryFrames.clear();
         frameIndex = 0;
         lastMemoryFrame = -1000000;
     }
 
     bool HasMemory() const
     {
-        return !memoryFrames.empty();
+        return hasPermanentMemory || !workingMemoryFrames.empty();
     }
 
     cv::Mat Step(const cv::Mat& frame, const cv::Mat& seedMask = cv::Mat())
     {
-        cv::Mat image = MakeImageBlob(frame);
+        const LetterboxTransform transform = ComputeLetterbox(frame.size());
+        const cv::Mat validMask = ValidMaskFromLetterbox(transform);
+        cv::Mat image = MakeImageBlob(frame, transform);
 
         encodeKey.setInput(image, "image");
         std::vector<cv::Mat> keyOutputs;
@@ -666,7 +762,7 @@ public:
 
         cv::Mat foreground;
         if (!seedMask.empty()) {
-            foreground = MakeMaskBlob(seedMask);
+            foreground = MakeMaskBlob(seedMask, transform);
         } else if (HasMemory()) {
             memoryReadout.setInput(key, "query_key");
             memoryReadout.setInput(selection, "query_selection");
@@ -704,12 +800,12 @@ public:
             encodeValue.forward(valueOutputs, std::vector<cv::String>{"mask_value", "new_sensory", "object_memory"});
             sensory = valueOutputs[1].clone();
             AddObjectMemory(valueOutputs[2]);
-            AddMemory(key, shrinkage, valueOutputs[0]);
+            AddMemory(key, shrinkage, valueOutputs[0], validMask, !seedMask.empty());
             lastMemoryFrame = frameIndex;
         }
 
         lastMask = foreground.clone();
-        cv::Mat outputMask = BinaryMaskFromForeground(foreground);
+        cv::Mat outputMask = BinaryMaskFromForeground(foreground, transform);
         ++frameIndex;
         return outputMask;
     }
