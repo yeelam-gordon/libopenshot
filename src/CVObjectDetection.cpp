@@ -401,11 +401,12 @@ void CVObjectDetection::postprocess(const cv::Size &frameDims, const std::vector
             const int maskCoefficientCount = attributes - 4 - classCount;
             const cv::Mat* prototype = nullptr;
             if (generateMasks && maskCoefficientCount > 0) {
-                for (const auto& out : outs) {
-                    if (out.dims == 4 && out.size[0] == 1 && out.size[1] == maskCoefficientCount) {
-                        prototype = &out;
-                        break;
-                    }
+                auto prototypeIt = std::find_if(outs.begin(), outs.end(),
+                    [maskCoefficientCount](const cv::Mat& out) {
+                        return out.dims == 4 && out.size[0] == 1 && out.size[1] == maskCoefficientCount;
+                    });
+                if (prototypeIt != outs.end()) {
+                    prototype = &(*prototypeIt);
                 }
             }
             const float* data = reinterpret_cast<const float*>(det.data);
