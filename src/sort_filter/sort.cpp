@@ -8,6 +8,11 @@
 using namespace std;
 
 namespace {
+struct DetectionBox : public TrackingBox
+{
+	std::vector<ClassScore> classScores;
+};
+
 double box_diagonal(const cv::Rect_<float>& box)
 {
 	return std::sqrt(box.width * box.width + box.height * box.height);
@@ -47,7 +52,7 @@ bool box_shape_matches(const cv::Rect_<float>& predicted_box, const cv::Rect_<fl
 bool detection_matches_track_gate(
 	const KalmanTracker& tracker,
 	const cv::Rect_<float>& predicted_box,
-	const TrackingBox& detection,
+	const DetectionBox& detection,
 	double iou,
 	double centroid_distance)
 {
@@ -109,11 +114,11 @@ double SortTracker::GetCentroidsDistance(
 }
 
 // Function to apply NMS on detections
-void apply_nms(vector<TrackingBox>& detections, double nms_iou_thresh) {
+void apply_nms(vector<DetectionBox>& detections, double nms_iou_thresh) {
     if (detections.empty()) return;
 
     // Sort detections by confidence descending
-    std::sort(detections.begin(), detections.end(), [](const TrackingBox& a, const TrackingBox& b) {
+    std::sort(detections.begin(), detections.end(), [](const DetectionBox& a, const DetectionBox& b) {
         return a.confidence > b.confidence;
     });
 
@@ -134,7 +139,7 @@ void apply_nms(vector<TrackingBox>& detections, double nms_iou_thresh) {
     }
 
     // Remove suppressed detections
-    vector<TrackingBox> filtered;
+    vector<DetectionBox> filtered;
     for (size_t i = 0; i < detections.size(); ++i) {
         if (!suppressed[i]) {
             filtered.push_back(detections[i]);
@@ -145,7 +150,7 @@ void apply_nms(vector<TrackingBox>& detections, double nms_iou_thresh) {
 
 void SortTracker::update(vector<cv::Rect> detections_cv, int frame_count, double image_diagonal, std::vector<float> confidences, std::vector<int> classIds, std::vector<std::vector<ClassScore>> classScores)
 {
-	vector<TrackingBox> detections;
+	vector<DetectionBox> detections;
 	dead_trackers_id.clear();
 	if (classScores.size() != detections_cv.size())
 		classScores.resize(detections_cv.size());
@@ -157,7 +162,7 @@ void SortTracker::update(vector<cv::Rect> detections_cv, int frame_count, double
 		{
 			if (confidences[i] < _min_conf) continue; // filter low conf
 
-			TrackingBox tb;
+			DetectionBox tb;
 
 			tb.box = cv::Rect_<float>(detections_cv[i]);
 			tb.classId = classIds[i];
@@ -181,7 +186,7 @@ void SortTracker::update(vector<cv::Rect> detections_cv, int frame_count, double
 		{
 			if (confidences[i] < _min_conf) continue; // filter low conf
 
-			TrackingBox tb;
+			DetectionBox tb;
 			tb.box = cv::Rect_<float>(detections_cv[i]);
 			tb.classId = classIds[i];
 			tb.confidence = confidences[i];
@@ -320,7 +325,7 @@ void SortTracker::update(vector<cv::Rect> detections_cv, int frame_count, double
 		{
 			alive_tracker = true;
 			TrackingBox res;
-			if (trackers[i].m_time_since_update > 0 && i < predictedBoxes.size())
+			if (i < predictedBoxes.size() && trackers[i].m_time_since_update > 0)
 				res.box = predictedBoxes[i];
 			else
 				res.box = trackers[i].get_state();

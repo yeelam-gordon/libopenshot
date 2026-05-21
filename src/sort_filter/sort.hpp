@@ -26,7 +26,6 @@ typedef struct TrackingBox
 	int classId = 0;
 	int id = 0;
 	cv::Rect_<float> box = cv::Rect_<float>(0.0, 0.0, 0.0, 0.0);
-	std::vector<ClassScore> classScores;
 	TrackingBox() {}
 	TrackingBox(int _frame, float _confidence, int _classId, int _id) : frame(_frame), confidence(_confidence), classId(_classId), id(_id) {}
 } TrackingBox;
@@ -35,7 +34,7 @@ class SortTracker
 {
 public:
 	// Constructor
-	SortTracker(int max_age = 50, int min_hits = 5, int max_missed = 3, double min_iou = 0.1, double nms_iou_thresh = 0.5, double min_conf = 0.3);
+	explicit SortTracker(int max_age = 50, int min_hits = 5, int max_missed = 3, double min_iou = 0.1, double nms_iou_thresh = 0.5, double min_conf = 0.3);
 	// Initialize tracker
 
 	// Update position based on the new frame
