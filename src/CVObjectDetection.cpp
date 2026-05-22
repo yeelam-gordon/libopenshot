@@ -18,7 +18,13 @@
 
 #include "CVObjectDetection.h"
 #include "Exceptions.h"
+#include "ZmqLogger.h"
 
+#define int64 int64_t
+#define uint64 uint64_t
+#include <opencv2/core/ocl.hpp>
+#undef uint64
+#undef int64
 #include "objdetectdata.pb.h"
 #include <google/protobuf/util/time_util.h>
 
@@ -256,23 +262,45 @@ std::string CVObjectDetection::ValidateONNXModel(std::string modelPath)
 }
 
 void CVObjectDetection::setProcessingDevice(){
-    if(processingDevice == "GPU"){
+    const std::string requestedDevice = processingDevice;
+    if (processingDevice == "CPU") {
+        net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+        net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+        ZmqLogger::Instance()->Log("Object Detection DNN device: requested CPU, selected CPU");
+        return;
+    }
+
+    if(processingDevice == "GPU" || processingDevice == "GPU_AUTO" || processingDevice == "GPU_CUDA"){
         try {
             const std::vector<cv::dnn::Target> targets = cv::dnn::getAvailableTargets(cv::dnn::DNN_BACKEND_CUDA);
             if (std::find(targets.begin(), targets.end(), cv::dnn::DNN_TARGET_CUDA) != targets.end()) {
                 net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
                 net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+                ZmqLogger::Instance()->Log("Object Detection DNN device: requested " + requestedDevice + ", selected CUDA");
                 return;
             }
         } catch (const cv::Exception&) {
         }
-        processingDevice = "CPU";
     }
 
-    if(processingDevice == "CPU"){
-        net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
-        net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+    if(processingDevice == "GPU_OPENCL"){
+        try {
+            const std::vector<cv::dnn::Target> targets = cv::dnn::getAvailableTargets(cv::dnn::DNN_BACKEND_OPENCV);
+            if (std::find(targets.begin(), targets.end(), cv::dnn::DNN_TARGET_OPENCL) != targets.end()) {
+                cv::ocl::setUseOpenCL(true);
+                net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+                net.setPreferableTarget(cv::dnn::DNN_TARGET_OPENCL);
+                ZmqLogger::Instance()->Log("Object Detection DNN device: requested " + requestedDevice + ", selected OpenCL");
+                return;
+            }
+        } catch (const cv::Exception&) {
+        }
     }
+
+    processingDevice = "CPU";
+    net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+    net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+    ZmqLogger::Instance()->Log("Object Detection DNN device: requested " + requestedDevice + ", selected CPU");
 }
 
 void CVObjectDetection::detectObjectsClip(openshot::Clip &video, size_t _start, size_t _end, bool process_interval)

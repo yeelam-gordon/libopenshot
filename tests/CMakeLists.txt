@@ -91,6 +91,7 @@ if($CACHE{HAVE_OPENCV})
     CVTracker
     CVStabilizer
     CVOutline
+    ObjectMask
     # CVObjectDetection
   )
 endif()
