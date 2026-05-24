@@ -14,6 +14,12 @@
 /* Suppress warnings about ignored operator= */
 %warnfilter(362);
 
+/* JUCE thread internals are implementation details, not binding API */
+%ignore juce::Thread;
+namespace juce {
+    class Thread {};
+}
+
 /* Don't generate multiple wrappers for functions with default args */
 %feature("compactdefaultargs", "1");
 

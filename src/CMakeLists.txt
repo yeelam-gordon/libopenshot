@@ -393,7 +393,7 @@ mark_as_advanced(QT_VERSION_STR)
 # Find FFmpeg libraries (used for video encoding / decoding)
 find_package(FFmpeg REQUIRED
   COMPONENTS avcodec avformat avutil swscale
-  OPTIONAL_COMPONENTS swresample avresample
+  OPTIONAL_COMPONENTS swresample
 )
 
 set(all_comps avcodec avformat avutil swscale)
@@ -404,6 +404,7 @@ if(TARGET FFmpeg::swresample)
   set(resample_lib swresample)
   set(USE_SW TRUE)
 else()
+  find_package(FFmpeg REQUIRED COMPONENTS avresample)
   set(resample_lib avresample)
   set(USE_SW FALSE)
 endif()

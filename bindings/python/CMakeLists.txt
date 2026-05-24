@@ -12,16 +12,29 @@
 find_package(SWIG 3.0 REQUIRED)
 include(${SWIG_USE_FILE})
 
-### Enable some legacy SWIG behaviors, in newer CMAKEs
+### Use modern SWIG target behavior when available
 if (POLICY CMP0078)
-  cmake_policy(SET CMP0078 OLD)
+  cmake_policy(SET CMP0078 NEW)
 endif()
 if (POLICY CMP0086)
-  cmake_policy(SET CMP0086 OLD)
+  cmake_policy(SET CMP0086 NEW)
 endif()
 
-find_package(PythonInterp 3)
-find_package(PythonLibs 3)
+if (CMAKE_VERSION VERSION_LESS 3.12)
+  find_package(PythonInterp 3)
+  find_package(PythonLibs 3)
+else()
+  find_package(Python3 3 COMPONENTS Interpreter Development)
+  if (Python3_FOUND)
+    set(PYTHON_EXECUTABLE "${Python3_EXECUTABLE}")
+    set(PYTHON_INCLUDE_PATH "${Python3_INCLUDE_DIRS}")
+    set(PYTHON_LIBRARIES "${Python3_LIBRARIES}")
+    set(PYTHON_VERSION_MAJOR "${Python3_VERSION_MAJOR}")
+    set(PYTHON_VERSION_MINOR "${Python3_VERSION_MINOR}")
+    set(PYTHONINTERP_FOUND TRUE)
+    set(PYTHONLIBS_FOUND TRUE)
+  endif()
+endif()
 
 if (NOT PYTHONLIBS_FOUND OR NOT PYTHONINTERP_FOUND)
   return()
@@ -85,18 +98,20 @@ if (CMAKE_VERSION VERSION_GREATER 3.20)
 endif()
 
 ### Add the SWIG interface file (which defines all the SWIG methods)
-if (CMAKE_VERSION VERSION_LESS 3.8.0)
-  swig_add_module(pyopenshot python openshot.i)
+swig_add_library(pyopenshot LANGUAGE python SOURCES openshot.i)
+
+if (POLICY CMP0078)
+  set(_pyopenshot_target pyopenshot)
 else()
-  swig_add_library(pyopenshot LANGUAGE python SOURCES openshot.i)
+  set(_pyopenshot_target ${SWIG_MODULE_pyopenshot_REAL_NAME})
 endif()
 
 ### Set output name of target
-set_target_properties(${SWIG_MODULE_pyopenshot_REAL_NAME} PROPERTIES
+set_target_properties(${_pyopenshot_target} PROPERTIES
   PREFIX "_" OUTPUT_NAME "openshot")
 
 ### Link the new python wrapper library with libopenshot
-target_link_libraries(${SWIG_MODULE_pyopenshot_REAL_NAME} PUBLIC
+target_link_libraries(${_pyopenshot_target} PUBLIC
   ${PYTHON_LIBRARIES} openshot)
 
 ######### INSTALL PATH ########
@@ -128,7 +143,7 @@ message(STATUS "PYTHON_MODULE_PATH: ${CMAKE_INSTALL_PREFIX}/${PYTHON_MODULE_PATH
 
 ############### INSTALL HEADERS & LIBRARY ################
 ### Install Python bindings
-install(TARGETS ${SWIG_MODULE_pyopenshot_REAL_NAME}
+install(TARGETS ${_pyopenshot_target}
   DESTINATION ${PYTHON_MODULE_PATH} )
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/openshot.py
   DESTINATION ${PYTHON_MODULE_PATH} )
