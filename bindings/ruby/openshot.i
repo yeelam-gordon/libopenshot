@@ -14,6 +14,21 @@
 /* Suppress warnings about ignored operator= */
 %warnfilter(362);
 
+/* JUCE thread internals are implementation details, not binding API */
+%ignore juce::Thread;
+namespace juce {
+    class Thread {};
+}
+
+/* Ruby bindings intentionally expose the primary OpenShot base class only */
+%warnfilter(802) openshot::Clip;
+%warnfilter(802) openshot::Timeline;
+
+/* Ruby bindings do not expose Profile comparison operators */
+%warnfilter(503) operator<;
+%warnfilter(503) operator>;
+%warnfilter(503) operator==;
+
 /* Don't generate multiple wrappers for functions with default args */
 %feature("compactdefaultargs", "1");
 

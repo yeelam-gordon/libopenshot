@@ -14,6 +14,12 @@
 /* Suppress warnings about ignored operator= */
 %warnfilter(362);
 
+/* JUCE thread internals are implementation details, not binding API */
+%ignore juce::Thread;
+namespace juce {
+    class Thread {};
+}
+
 /* Don't generate multiple wrappers for functions with default args */
 %feature("compactdefaultargs", "1");
 
@@ -248,7 +254,7 @@ static int openshot_swig_is_qwidget(PyObject *obj) {
     $1 = reinterpret_cast<QWidget*>(ptr);
 }
 
-%typemap(typecheck) QWidget * {
+%typemap(typecheck, precedence=SWIG_TYPECHECK_POINTER) QWidget * {
     $1 = openshot_swig_is_qwidget($input);
 }
 
