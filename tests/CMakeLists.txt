@@ -26,6 +26,7 @@ target_link_libraries(openshot-benchmark openshot)
 ###
 set(OPENSHOT_TESTS
   AudioDeviceManager
+  AudioRecorder
   AnimatedCurve
   AudioWaveformer
   CacheDisk

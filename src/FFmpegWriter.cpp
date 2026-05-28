@@ -754,6 +754,13 @@ void FFmpegWriter::WriteTrailer() {
 	// Flush encoders (who sometimes hold on to frames)
 	flush_encoders();
 
+	if (info.has_audio && audio_st && audio_codec_ctx && audio_timestamp > 0) {
+		audio_st->duration = av_rescale_q(
+			audio_timestamp,
+			audio_codec_ctx->time_base,
+			audio_st->time_base);
+	}
+
 	/* write the trailer, if any. The trailer must be written
 	 * before you close the CodecContexts open when you wrote the
 	 * header; otherwise write_trailer may try to use memory that
@@ -870,10 +877,61 @@ void FFmpegWriter::flush_encoders() {
 			int error_code = 0;
 			int got_packet = 0;
 #if IS_FFMPEG_3_2
+			if (!audio_codec_ctx->codec || !(audio_codec_ctx->codec->capabilities & AV_CODEC_CAP_DELAY)) {
+				av_packet_free(&pkt);
+				break;
+			}
 			error_code = avcodec_send_frame(audio_codec_ctx, NULL);
+			if (error_code < 0 && error_code != AVERROR_EOF) {
+				ZmqLogger::Instance()->AppendDebugMethod(
+					"FFmpegWriter::flush_encoders ERROR ["
+						+ av_err2string(error_code) + "]",
+					"error_code", error_code);
+			}
+			while (true) {
+				error_code = avcodec_receive_packet(audio_codec_ctx, pkt);
+				if (error_code == AVERROR(EAGAIN) || error_code == AVERROR_EOF) {
+					got_packet = 0;
+					break;
+				}
+				if (error_code < 0) {
+					ZmqLogger::Instance()->AppendDebugMethod(
+						"FFmpegWriter::flush_encoders ERROR ["
+							+ av_err2string(error_code) + "]",
+						"error_code", error_code);
+					got_packet = 0;
+					break;
+				}
+
+				got_packet = 1;
+				if (pkt->pts == AV_NOPTS_VALUE) {
+					pkt->pts = audio_timestamp;
+				}
+				if (pkt->dts == AV_NOPTS_VALUE) {
+					pkt->dts = pkt->pts;
+				}
+				if (pkt->duration <= 0) {
+					pkt->duration = audio_codec_ctx->frame_size > 0 ? audio_codec_ctx->frame_size : audio_input_frame_size;
+				}
+				const int64_t packet_duration = pkt->duration;
+				av_packet_rescale_ts(pkt, audio_codec_ctx->time_base, audio_st->time_base);
+				pkt->stream_index = audio_st->index;
+				pkt->flags |= AV_PKT_FLAG_KEY;
+
+				error_code = av_interleaved_write_frame(oc, pkt);
+				if (error_code < 0) {
+					ZmqLogger::Instance()->AppendDebugMethod(
+						"FFmpegWriter::flush_encoders ERROR ["
+							+ av_err2string(error_code) + "]",
+						"error_code", error_code);
+				}
+				audio_timestamp += packet_duration;
+				AV_FREE_PACKET(pkt);
+			}
+			av_packet_free(&pkt);
+			break;
 #else
 			error_code = avcodec_encode_audio2(audio_codec_ctx, pkt, NULL, &got_packet);
-#endif
 			if (error_code < 0) {
 				ZmqLogger::Instance()->AppendDebugMethod(
 					"FFmpegWriter::flush_encoders ERROR ["
@@ -887,6 +945,9 @@ void FFmpegWriter::flush_encoders() {
 			// Since the PTS can change during encoding, set the value again.  This seems like a huge hack,
 			// but it fixes lots of PTS related issues when I do this.
 			pkt->pts = pkt->dts = audio_timestamp;
+			if (pkt->duration <= 0) {
+				pkt->duration = audio_codec_ctx->frame_size > 0 ? audio_codec_ctx->frame_size : audio_input_frame_size;
+			}
 
 			// Scale the PTS to the audio stream timebase (which is sometimes different than the codec's timebase)
 			av_packet_rescale_ts(pkt, audio_codec_ctx->time_base, audio_st->time_base);
@@ -909,6 +970,7 @@ void FFmpegWriter::flush_encoders() {
 
 			// deallocate memory for packet
 			AV_FREE_PACKET(pkt);
+#endif
 		}
 	}
 
@@ -1061,6 +1123,9 @@ AVStream *FFmpegWriter::add_audio_stream() {
 	} else
 		// Set sample rate
 		c->sample_rate = info.sample_rate;
+
+	c->time_base = AVRational{1, c->sample_rate};
+	st->time_base = c->time_base;
 
 	uint64_t channel_layout = info.channel_layout;
 #if HAVE_CH_LAYOUT
@@ -1782,6 +1847,13 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 			"remaining_frame_samples", remaining_frame_samples);
 	}
 
+	if (is_final && remaining_frame_samples <= 0 && audio_input_position <= 0) {
+		if (all_queued_samples) {
+			av_freep(&all_queued_samples);
+		}
+		return;
+	}
+
 	// Loop until no more samples
 	while (remaining_frame_samples > 0 || is_final) {
 		// Get remaining samples needed for this packet
@@ -1821,6 +1893,7 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 		// Convert to planar (if needed by audio codec)
 		AVFrame *frame_final = AV_ALLOCATE_FRAME();
 		AV_RESET_FRAME(frame_final);
+		const int frame_nb_samples = audio_input_position / info.channels;
 		if (av_sample_fmt_is_planar(audio_codec_ctx->sample_fmt)) {
 			ZmqLogger::Instance()->AppendDebugMethod(
 				"FFmpegWriter::write_audio_packets (2nd resampling for Planar formats)",
@@ -1878,7 +1951,7 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 				(uint8_t *) final_samples_planar, audio_encoder_buffer_size, 0);
 
 			// Create output frame (and allocate arrays)
-			frame_final->nb_samples = audio_input_frame_size;
+			frame_final->nb_samples = frame_nb_samples;
 #if HAVE_CH_LAYOUT
 			av_channel_layout_from_mask(&frame_final->ch_layout, info.channel_layout);
 #else
@@ -1931,7 +2004,14 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 				audio_input_position * av_get_bytes_per_sample(audio_codec_ctx->sample_fmt));
 
 			// Init the nb_samples property
-			frame_final->nb_samples = audio_input_frame_size;
+			frame_final->nb_samples = frame_nb_samples;
+			frame_final->format = audio_codec_ctx->sample_fmt;
+#if HAVE_CH_LAYOUT
+			av_channel_layout_copy(&frame_final->ch_layout, &audio_codec_ctx->ch_layout);
+#else
+			frame_final->channels = audio_codec_ctx->channels;
+			frame_final->channel_layout = audio_codec_ctx->channel_layout;
+#endif
 
 			// Fill the final_frame AVFrame with audio (non planar)
 #if HAVE_CH_LAYOUT
@@ -1953,9 +2033,9 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 #else
 		AVPacket* pkt;
 		av_init_packet(pkt);
-#endif
 		pkt->data = audio_encoder_buffer;
 		pkt->size = audio_encoder_buffer_size;
+#endif
 
 		// Set the packet's PTS prior to encoding
 		pkt->pts = pkt->dts = audio_timestamp;
@@ -1969,7 +2049,9 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 		int ret = 0;
 		int frame_finished = 0;
 		error_code = ret =  avcodec_send_frame(audio_codec_ctx, frame_final);
-		if (ret < 0 && ret !=  AVERROR(EINVAL) && ret != AVERROR_EOF) {
+		if (ret < 0 && ret !=  AVERROR(EINVAL) && ret != AVERROR_EOF
+				&& audio_codec_ctx->codec
+				&& (audio_codec_ctx->codec->capabilities & AV_CODEC_CAP_DELAY)) {
 			avcodec_send_frame(audio_codec_ctx, NULL);
 		}
 		else {
@@ -1979,7 +2061,6 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 			if (ret >= 0)
 				frame_finished = 1;
 			if(ret == AVERROR(EINVAL) || ret == AVERROR_EOF) {
-				avcodec_flush_buffers(audio_codec_ctx);
 				ret = 0;
 			}
 			if (ret >= 0) {
@@ -2001,6 +2082,9 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 			// Since the PTS can change during encoding, set the value again.  This seems like a huge hack,
 			// but it fixes lots of PTS related issues when I do this.
 			pkt->pts = pkt->dts = audio_timestamp;
+			if (pkt->duration <= 0) {
+				pkt->duration = frame_nb_samples;
+			}
 
 			// Scale the PTS to the audio stream timebase (which is sometimes different than the codec's timebase)
 			av_packet_rescale_ts(pkt, audio_codec_ctx->time_base, audio_st->time_base);

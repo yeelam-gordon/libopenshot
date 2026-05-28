@@ -106,6 +106,7 @@
 #include "AudioBufferSource.h"
 #include "AudioLocation.h"
 #include "AudioReaderSource.h"
+#include "AudioRecorder.h"
 #include "AudioResampler.h"
 #include "CacheDisk.h"
 #include "CacheMemory.h"

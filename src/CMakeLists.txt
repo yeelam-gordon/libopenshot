@@ -47,6 +47,7 @@ add_feature_info("IWYU (include-what-you-use)" ENABLE_IWYU "Scan all source file
 # Main library sources
 set(OPENSHOT_SOURCES
   AudioBufferSource.cpp
+  AudioRecorder.cpp
   AnimatedCurve.cpp
   AudioDevices.cpp
   AudioReaderSource.cpp
