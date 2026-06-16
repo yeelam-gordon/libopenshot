@@ -1,0 +1,102 @@
+/**
+ * @file
+ * @brief Header file for live screen capture readers
+ * @author Jonathan Thomas <jonathan@openshot.org>
+ *
+ * @ref License
+ */
+
+// Copyright (c) 2008-2026 OpenShot Studios, LLC
+//
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+#ifndef OPENSHOT_SCREENCAPTUREREADER_H
+#define OPENSHOT_SCREENCAPTUREREADER_H
+
+#include "ReaderBase.h"
+
+#include <map>
+#include <memory>
+#include <string>
+
+#include "FFmpegUtilities.h"
+
+namespace openshot
+{
+	enum ScreenCaptureBackend
+	{
+		SCREEN_CAPTURE_AUTO = 0,
+		SCREEN_CAPTURE_X11 = 1,
+		SCREEN_CAPTURE_WAYLAND = 2,
+		SCREEN_CAPTURE_WINDOWS_GDI = 3,
+		SCREEN_CAPTURE_MAC_AVFOUNDATION = 4
+	};
+
+	struct ScreenCaptureSettings
+	{
+		ScreenCaptureBackend backend = SCREEN_CAPTURE_AUTO;
+		std::string display;
+		int x = 0;
+		int y = 0;
+		int width = 1280;
+		int height = 720;
+		openshot::Fraction fps = openshot::Fraction(30, 1);
+		bool include_cursor = true;
+		bool show_region = false;
+		std::map<std::string, std::string> options;
+	};
+
+	struct CaptureReaderStats
+	{
+		bool is_open = false;
+		int64_t frames_read = 0;
+		int dropped_packets = 0;
+		double duration = 0.0;
+	};
+
+	class ScreenCaptureReader : public ReaderBase
+	{
+	public:
+		explicit ScreenCaptureReader(const ScreenCaptureSettings& settings);
+		~ScreenCaptureReader() override;
+
+		void Close() override;
+		CacheBase* GetCache() override { return NULL; };
+		std::shared_ptr<openshot::Frame> GetFrame(int64_t number) override;
+		bool IsOpen() override { return is_open; };
+		std::string Name() override { return "ScreenCaptureReader"; };
+		std::string Json() const override;
+		void SetJson(const std::string value) override;
+		Json::Value JsonValue() const override;
+		void SetJsonValue(const Json::Value root) override;
+		void Open() override;
+
+		openshot::CaptureReaderStats GetStats() const;
+		ScreenCaptureSettings GetSettings() const { return settings; };
+		static bool IsBackendSupported(ScreenCaptureBackend backend);
+		static ScreenCaptureBackend DefaultBackend();
+
+	private:
+		void ValidateSettings() const;
+		void OpenDevice();
+		void OpenDecoder();
+		std::string InputFormatName() const;
+		std::string InputName() const;
+		std::shared_ptr<openshot::Frame> DecodeNextFrame(int64_t number);
+		void PopulateInfo();
+
+		ScreenCaptureSettings settings;
+		bool is_open;
+		int video_stream;
+		int64_t frames_read;
+		int dropped_packets;
+		AVFormatContext* format_context;
+		AVCodecContext* codec_context;
+		AVFrame* source_frame;
+		AVFrame* rgba_frame;
+		AVPacket* packet;
+		SwsContext* sws_context;
+	};
+}
+
+#endif

@@ -53,6 +53,7 @@ set(OPENSHOT_SOURCES
   AudioReaderSource.cpp
   AudioResampler.cpp
   AudioWaveformer.cpp
+  CameraCaptureReader.cpp
   CacheBase.cpp
   CacheDisk.cpp
   CacheMemory.cpp
@@ -66,6 +67,7 @@ set(OPENSHOT_SOURCES
   DummyReader.cpp
   ReaderBase.cpp
   RendererBase.cpp
+  ScreenCaptureReader.cpp
   WriterBase.cpp
   EffectBase.cpp
   EffectInfo.cpp
@@ -393,11 +395,11 @@ mark_as_advanced(QT_VERSION_STR)
 ################### FFMPEG #####################
 # Find FFmpeg libraries (used for video encoding / decoding)
 find_package(FFmpeg REQUIRED
-  COMPONENTS avcodec avformat avutil swscale
+  COMPONENTS avcodec avdevice avformat avutil swscale
   OPTIONAL_COMPONENTS swresample
 )
 
-set(all_comps avcodec avformat avutil swscale)
+set(all_comps avcodec avdevice avformat avutil swscale)
 set(version_comps avcodec avformat avutil)
 
 # Pick a resampler.  Prefer swresample if possible

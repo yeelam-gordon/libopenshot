@@ -29,6 +29,7 @@ set(OPENSHOT_TESTS
   AudioRecorder
   AnimatedCurve
   AudioWaveformer
+  CameraCaptureReader
   CacheDisk
   CacheMemory
   Caption
@@ -49,6 +50,7 @@ set(OPENSHOT_TESTS
   QtImageReader
   ReaderBase
   Settings
+  ScreenCaptureReader
   SphericalMetadata
   Timeline
   VideoCacheThread
