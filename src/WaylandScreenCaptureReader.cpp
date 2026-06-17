@@ -169,7 +169,15 @@ namespace
 		return handle_path;
 	}
 
-	uint32_t stream_node_id_from_results(GVariant* results)
+	struct PortalStreamInfo
+	{
+		uint32_t node_id = 0;
+		uint64_t pipewire_serial = 0;
+		int width = 0;
+		int height = 0;
+	};
+
+	PortalStreamInfo stream_info_from_results(GVariant* results)
 	{
 		GVariant* streams = g_variant_lookup_value(results, "streams", G_VARIANT_TYPE("a(ua{sv})"));
 		if (!streams || g_variant_n_children(streams) == 0) {
@@ -179,16 +187,26 @@ namespace
 			throw InvalidOptions("Wayland portal did not return a PipeWire stream.");
 		}
 
-		uint32_t node_id = 0;
+		PortalStreamInfo stream_info;
 		GVariant* properties = nullptr;
 		GVariant* child = g_variant_get_child_value(streams, 0);
-		g_variant_get(child, "(u@a{sv})", &node_id, &properties);
+		g_variant_get(child, "(u@a{sv})", &stream_info.node_id, &properties);
 		if (properties) {
+			uint64_t serial = 0;
+			int width = 0;
+			int height = 0;
+			if (g_variant_lookup(properties, "pipewire-serial", "t", &serial)) {
+				stream_info.pipewire_serial = serial;
+			}
+			if (g_variant_lookup(properties, "size", "(ii)", &width, &height)) {
+				stream_info.width = width;
+				stream_info.height = height;
+			}
 			g_variant_unref(properties);
 		}
 		g_variant_unref(child);
 		g_variant_unref(streams);
-		return node_id;
+		return stream_info;
 	}
 
 	int open_pipewire_remote(GDBusConnection* connection, const std::string& session_handle)
@@ -246,7 +264,7 @@ public:
 		, context(nullptr)
 		, core(nullptr)
 		, stream(nullptr)
-		, node_id(0)
+		, session_closed_subscription(0)
 		, frames_read(0)
 		, dropped_packets(0)
 		, open(false)
@@ -272,9 +290,11 @@ public:
 			throw InvalidOptions("Unable to connect to the session bus for Wayland capture: " + gerror_message(error));
 		}
 
-		std::string session_handle = CreatePortalSession();
+		session_handle = CreatePortalSession();
+		SubscribePortalSessionClosed();
 		SelectPortalSources(session_handle);
-		node_id = StartPortalSession(session_handle);
+		stream_info = StartPortalSession(session_handle);
+		ApplyPortalStreamInfo();
 		const int pipewire_fd = open_pipewire_remote(connection, session_handle);
 		OpenPipeWireStream(pipewire_fd);
 		open = true;
@@ -287,6 +307,31 @@ public:
 
 		if (thread_loop) {
 			pw_thread_loop_stop(thread_loop);
+		}
+		if (connection && session_closed_subscription) {
+			g_dbus_connection_signal_unsubscribe(connection, session_closed_subscription);
+			session_closed_subscription = 0;
+		}
+		if (connection && !session_handle.empty()) {
+			GError* error = nullptr;
+			GVariant* result = g_dbus_connection_call_sync(
+				connection,
+				PORTAL_BUS,
+				session_handle.c_str(),
+				"org.freedesktop.portal.Session",
+				"Close",
+				nullptr,
+				nullptr,
+				G_DBUS_CALL_FLAGS_NONE,
+				-1,
+				nullptr,
+				&error);
+			if (result) {
+				g_variant_unref(result);
+			} else if (error) {
+				g_error_free(error);
+			}
+			session_handle.clear();
 		}
 		if (stream) {
 			pw_stream_destroy(stream);
@@ -331,8 +376,15 @@ public:
 		CapturedFrame captured;
 		{
 			std::unique_lock<std::mutex> lock(queue_mutex);
-			const auto timeout = std::chrono::seconds(5);
-			if (!queue_condition.wait_for(lock, timeout, [this]() { return !frame_queue.empty() || stream_error || !open; })) {
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+			while (frame_queue.empty() && !stream_error && open && std::chrono::steady_clock::now() < deadline) {
+				lock.unlock();
+				while (g_main_context_iteration(nullptr, FALSE)) {
+				}
+				lock.lock();
+				queue_condition.wait_for(lock, std::chrono::milliseconds(100));
+			}
+			if (frame_queue.empty() && !stream_error && open) {
 				throw InvalidFile("Timed out waiting for a Wayland capture frame.", "wayland");
 			}
 			if (stream_error) {
@@ -380,6 +432,24 @@ private:
 		return session_handle;
 	}
 
+	void SubscribePortalSessionClosed()
+	{
+		if (!connection || session_handle.empty()) {
+			return;
+		}
+		session_closed_subscription = g_dbus_connection_signal_subscribe(
+			connection,
+			PORTAL_BUS,
+			"org.freedesktop.portal.Session",
+			"Closed",
+			session_handle.c_str(),
+			nullptr,
+			G_DBUS_SIGNAL_FLAGS_NO_MATCH_RULE,
+			OnPortalSessionClosed,
+			this,
+			nullptr);
+	}
+
 	void SelectPortalSources(const std::string& session_handle)
 	{
 		const uint32_t source_monitor = 1;
@@ -402,7 +472,7 @@ private:
 		g_variant_unref(results);
 	}
 
-	uint32_t StartPortalSession(const std::string& session_handle)
+	PortalStreamInfo StartPortalSession(const std::string& session_handle)
 	{
 		GVariantBuilder options;
 		g_variant_builder_init(&options, G_VARIANT_TYPE_VARDICT);
@@ -413,9 +483,20 @@ private:
 			"Start",
 			g_variant_new("(osa{sv})", session_handle.c_str(), "", &options));
 		GVariant* results = wait_for_portal_response(connection, handle);
-		const uint32_t result_node_id = stream_node_id_from_results(results);
+		const PortalStreamInfo result_stream_info = stream_info_from_results(results);
 		g_variant_unref(results);
-		return result_node_id;
+		return result_stream_info;
+	}
+
+	void ApplyPortalStreamInfo()
+	{
+		if (stream_info.width <= 0 || stream_info.height <= 0) {
+			return;
+		}
+		info.width = stream_info.width;
+		info.height = stream_info.height;
+		info.display_ratio = Fraction(stream_info.width, stream_info.height);
+		info.display_ratio.Reduce();
 	}
 
 	void OpenPipeWireStream(int pipewire_fd)
@@ -441,6 +522,9 @@ private:
 			PW_KEY_MEDIA_CATEGORY, "Capture",
 			PW_KEY_MEDIA_ROLE, "Screen",
 			nullptr);
+		if (stream_info.pipewire_serial > 0) {
+			pw_properties_set(props, PW_KEY_TARGET_OBJECT, std::to_string(stream_info.pipewire_serial).c_str());
+		}
 		stream = pw_stream_new(core, "OpenShot Wayland Screen Capture", props);
 		if (!stream) {
 			throw InvalidOptions("Unable to create PipeWire capture stream.");
@@ -472,10 +556,11 @@ private:
 				SPA_VIDEO_FORMAT_RGBx)));
 
 		pw_thread_loop_lock(thread_loop);
+		const uint32_t target_id = stream_info.pipewire_serial > 0 ? PW_ID_ANY : stream_info.node_id;
 		const int result = pw_stream_connect(
 			stream,
 			PW_DIRECTION_INPUT,
-			node_id,
+			target_id,
 			static_cast<pw_stream_flags>(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS),
 			params,
 			1);
@@ -495,6 +580,24 @@ private:
 		if (stream_error) {
 			throw InvalidOptions("PipeWire capture stream failed to start or timed out.");
 		}
+	}
+
+	static void OnPortalSessionClosed(
+		GDBusConnection*,
+		const gchar*,
+		const gchar*,
+		const gchar*,
+		const gchar*,
+		GVariant*,
+		gpointer user_data)
+	{
+		auto* self = static_cast<WaylandScreenCaptureReader*>(user_data);
+		self->open = false;
+		self->stream_error = true;
+		if (self->thread_loop) {
+			pw_thread_loop_signal(self->thread_loop, false);
+		}
+		self->queue_condition.notify_all();
 	}
 
 	static void OnStreamStateChanged(void* data, pw_stream_state, pw_stream_state state, const char*)
@@ -617,7 +720,9 @@ private:
 	pw_core* core;
 	pw_stream* stream;
 	spa_hook stream_listener;
-	uint32_t node_id;
+	PortalStreamInfo stream_info;
+	std::string session_handle;
+	guint session_closed_subscription;
 	int stream_width = 0;
 	int stream_height = 0;
 	spa_video_format video_format = SPA_VIDEO_FORMAT_BGRx;
