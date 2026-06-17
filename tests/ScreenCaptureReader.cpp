@@ -15,6 +15,9 @@
 #include "Exceptions.h"
 #include "ScreenCaptureReader.h"
 
+#include <cstdlib>
+#include <string>
+
 using namespace openshot;
 
 TEST_CASE("Screen capture settings validation", "[libopenshot][screencapturereader]")
@@ -74,5 +77,50 @@ TEST_CASE("Screen capture reader reports configured video info", "[libopenshot][
 	CHECK(json["options"]["window_id"].asString() == "12345");
 #else
 	CHECK_FALSE(ScreenCaptureReader::IsBackendSupported(SCREEN_CAPTURE_X11));
+#endif
+}
+
+TEST_CASE("Screen capture backend support follows platform build features", "[libopenshot][screencapturereader]")
+{
+#if defined(__linux__)
+	CHECK(ScreenCaptureReader::IsBackendSupported(SCREEN_CAPTURE_AUTO));
+	CHECK(ScreenCaptureReader::IsBackendSupported(SCREEN_CAPTURE_X11));
+
+	ScreenCaptureSettings wayland_settings;
+	wayland_settings.backend = SCREEN_CAPTURE_WAYLAND;
+	wayland_settings.width = 640;
+	wayland_settings.height = 360;
+
+	if (ScreenCaptureReader::IsBackendSupported(SCREEN_CAPTURE_WAYLAND)) {
+		CHECK_NOTHROW([&wayland_settings]() { ScreenCaptureReader reader(wayland_settings); }());
+	} else {
+		CHECK_THROWS_AS([&wayland_settings]() { ScreenCaptureReader reader(wayland_settings); }(), InvalidOptions);
+	}
+#else
+	CHECK_FALSE(ScreenCaptureReader::IsBackendSupported(SCREEN_CAPTURE_AUTO));
+	CHECK_FALSE(ScreenCaptureReader::IsBackendSupported(SCREEN_CAPTURE_X11));
+	CHECK_FALSE(ScreenCaptureReader::IsBackendSupported(SCREEN_CAPTURE_WAYLAND));
+#endif
+}
+
+TEST_CASE("Screen capture auto backend prefers Wayland only when supported", "[libopenshot][screencapturereader]")
+{
+#if defined(__linux__)
+	const char* previous_session = std::getenv("XDG_SESSION_TYPE");
+	const std::string previous_value = previous_session ? previous_session : "";
+	setenv("XDG_SESSION_TYPE", "wayland", 1);
+
+	const ScreenCaptureBackend default_backend = ScreenCaptureReader::DefaultBackend();
+	if (ScreenCaptureReader::IsBackendSupported(SCREEN_CAPTURE_WAYLAND)) {
+		CHECK(default_backend == SCREEN_CAPTURE_WAYLAND);
+	} else {
+		CHECK(default_backend == SCREEN_CAPTURE_AUTO);
+	}
+
+	if (previous_session) {
+		setenv("XDG_SESSION_TYPE", previous_value.c_str(), 1);
+	} else {
+		unsetenv("XDG_SESSION_TYPE");
+	}
 #endif
 }

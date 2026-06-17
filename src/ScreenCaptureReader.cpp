@@ -41,8 +41,15 @@ namespace
 	}
 }
 
+#if defined(HAVE_WAYLAND_CAPTURE)
+std::unique_ptr<ScreenCaptureReader::CaptureBackendReader> CreateWaylandScreenCaptureReader(
+	const ScreenCaptureSettings& settings,
+	ReaderInfo& info);
+#endif
+
 ScreenCaptureReader::ScreenCaptureReader(const ScreenCaptureSettings& new_settings)
 	: settings(new_settings)
+	, backend_reader(nullptr)
 	, is_open(false)
 	, video_stream(-1)
 	, frames_read(0)
@@ -59,6 +66,16 @@ ScreenCaptureReader::ScreenCaptureReader(const ScreenCaptureSettings& new_settin
 	}
 	ValidateSettings();
 	PopulateInfo();
+	if (UsesWaylandPortal()) {
+	#if defined(HAVE_WAYLAND_CAPTURE)
+		backend_reader = CreateWaylandScreenCaptureReader(settings, info);
+		if (!backend_reader) {
+			throw InvalidOptions("Wayland screen capture backend is unavailable in this build.");
+		}
+	#else
+		throw InvalidOptions("Wayland screen capture backend is unavailable in this build.");
+	#endif
+	}
 }
 
 ScreenCaptureReader::~ScreenCaptureReader()
@@ -66,10 +83,23 @@ ScreenCaptureReader::~ScreenCaptureReader()
 	Close();
 }
 
+bool ScreenCaptureReader::IsOpen()
+{
+	return backend_reader ? backend_reader->IsOpen() : is_open;
+}
+
 bool ScreenCaptureReader::IsBackendSupported(ScreenCaptureBackend backend)
 {
 #if defined(__linux__)
-	return backend == SCREEN_CAPTURE_X11 || backend == SCREEN_CAPTURE_AUTO;
+	if (backend == SCREEN_CAPTURE_X11 || backend == SCREEN_CAPTURE_AUTO) {
+		return true;
+	}
+#if defined(HAVE_WAYLAND_CAPTURE)
+	if (backend == SCREEN_CAPTURE_WAYLAND) {
+		return true;
+	}
+#endif
+	return false;
 #else
 	(void) backend;
 	return false;
@@ -80,6 +110,9 @@ ScreenCaptureBackend ScreenCaptureReader::DefaultBackend()
 {
 #if defined(__linux__)
 	const char* session = std::getenv("XDG_SESSION_TYPE");
+	if (session && std::string(session) == "wayland" && IsBackendSupported(SCREEN_CAPTURE_WAYLAND)) {
+		return SCREEN_CAPTURE_WAYLAND;
+	}
 	if (!session || std::string(session) == "x11") {
 		return SCREEN_CAPTURE_X11;
 	}
@@ -93,7 +126,7 @@ void ScreenCaptureReader::ValidateSettings() const
 	if (!IsBackendSupported(settings.backend)) {
 		throw InvalidOptions("Screen capture backend is not supported on this OS or session.");
 	}
-	if (settings.backend != SCREEN_CAPTURE_X11 && !using_v4l2_device) {
+	if (!UsesFFmpegDevice() && !UsesWaylandPortal() && !using_v4l2_device) {
 		throw InvalidOptions("Only the X11 screen capture backend is implemented in this build.");
 	}
 	if (settings.width <= 0 || settings.height <= 0) {
@@ -102,6 +135,17 @@ void ScreenCaptureReader::ValidateSettings() const
 	if (settings.fps.num <= 0 || settings.fps.den <= 0) {
 		throw InvalidOptions("Screen capture requires a positive frame rate.");
 	}
+}
+
+bool ScreenCaptureReader::UsesFFmpegDevice() const
+{
+	const bool using_v4l2_device = settings.options.count("input_format_name") && settings.options.at("input_format_name") == "v4l2";
+	return settings.backend == SCREEN_CAPTURE_X11 || using_v4l2_device;
+}
+
+bool ScreenCaptureReader::UsesWaylandPortal() const
+{
+	return settings.backend == SCREEN_CAPTURE_WAYLAND;
 }
 
 std::string ScreenCaptureReader::InputFormatName() const
@@ -168,6 +212,10 @@ void ScreenCaptureReader::PopulateInfo()
 
 void ScreenCaptureReader::Open()
 {
+	if (backend_reader) {
+		backend_reader->Open();
+		return;
+	}
 	if (is_open) {
 		return;
 	}
@@ -260,6 +308,13 @@ void ScreenCaptureReader::OpenDecoder()
 
 std::shared_ptr<Frame> ScreenCaptureReader::GetFrame(int64_t number)
 {
+	if (backend_reader) {
+		if (!backend_reader->IsOpen()) {
+			throw ReaderClosed("The ScreenCaptureReader is closed. Call Open() before GetFrame().");
+		}
+		const std::lock_guard<std::recursive_mutex> lock(getFrameMutex);
+		return backend_reader->GetFrame(number);
+	}
 	if (!is_open) {
 		throw ReaderClosed("The ScreenCaptureReader is closed. Call Open() before GetFrame().");
 	}
@@ -337,6 +392,9 @@ std::shared_ptr<Frame> ScreenCaptureReader::DecodeNextFrame(int64_t number)
 
 void ScreenCaptureReader::Close()
 {
+	if (backend_reader) {
+		backend_reader->Close();
+	}
 	if (packet) {
 		av_packet_free(&packet);
 	}
@@ -362,6 +420,9 @@ void ScreenCaptureReader::Close()
 
 openshot::CaptureReaderStats ScreenCaptureReader::GetStats() const
 {
+	if (backend_reader) {
+		return backend_reader->GetStats();
+	}
 	CaptureReaderStats stats;
 	stats.is_open = is_open;
 	stats.frames_read = frames_read;

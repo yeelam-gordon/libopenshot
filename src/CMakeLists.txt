@@ -95,6 +95,21 @@ set(OPENSHOT_SOURCES
   ZmqLogger.cpp
   )
 
+set(OPENSHOT_WAYLAND_CAPTURE FALSE)
+if(ENABLE_WAYLAND_CAPTURE AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  find_package(PkgConfig)
+  if(PkgConfig_FOUND)
+    pkg_check_modules(PC_PIPEWIRE QUIET IMPORTED_TARGET libpipewire-0.3)
+    pkg_check_modules(PC_LIBSPA QUIET IMPORTED_TARGET libspa-0.2)
+    pkg_check_modules(PC_GIO QUIET IMPORTED_TARGET gio-2.0)
+    pkg_check_modules(PC_GIO_UNIX QUIET IMPORTED_TARGET gio-unix-2.0)
+    if(PC_PIPEWIRE_FOUND AND PC_LIBSPA_FOUND AND PC_GIO_FOUND AND PC_GIO_UNIX_FOUND)
+      set(OPENSHOT_WAYLAND_CAPTURE TRUE)
+      list(APPEND OPENSHOT_SOURCES WaylandScreenCaptureReader.cpp)
+    endif()
+  endif()
+endif()
+
 # OpenCV related classes
 set(OPENSHOT_CV_SOURCES
   CVTracker.cpp
@@ -194,6 +209,16 @@ target_include_directories(openshot
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/libopenshot>)
+
+if(OPENSHOT_WAYLAND_CAPTURE)
+  target_compile_definitions(openshot PRIVATE HAVE_WAYLAND_CAPTURE=1)
+  target_link_libraries(openshot PRIVATE
+    PkgConfig::PC_PIPEWIRE
+    PkgConfig::PC_LIBSPA
+    PkgConfig::PC_GIO
+    PkgConfig::PC_GIO_UNIX)
+endif()
+add_feature_info("Wayland screen capture" OPENSHOT_WAYLAND_CAPTURE "Use xdg-desktop-portal ScreenCast and PipeWire")
 
 ################# LIBOPENSHOT-AUDIO ###################
 # Find JUCE-based openshot Audio libraries

@@ -57,13 +57,26 @@ namespace openshot
 	class ScreenCaptureReader : public ReaderBase
 	{
 	public:
+#ifndef SWIG
+		class CaptureBackendReader
+		{
+		public:
+			virtual ~CaptureBackendReader() = default;
+			virtual void Open() = 0;
+			virtual void Close() = 0;
+			virtual bool IsOpen() const = 0;
+			virtual std::shared_ptr<openshot::Frame> GetFrame(int64_t number) = 0;
+			virtual openshot::CaptureReaderStats GetStats() const = 0;
+		};
+#endif
+
 		explicit ScreenCaptureReader(const ScreenCaptureSettings& settings);
 		~ScreenCaptureReader() override;
 
 		void Close() override;
 		CacheBase* GetCache() override { return NULL; };
 		std::shared_ptr<openshot::Frame> GetFrame(int64_t number) override;
-		bool IsOpen() override { return is_open; };
+		bool IsOpen() override;
 		std::string Name() override { return "ScreenCaptureReader"; };
 		std::string Json() const override;
 		void SetJson(const std::string value) override;
@@ -83,9 +96,14 @@ namespace openshot
 		std::string InputFormatName() const;
 		std::string InputName() const;
 		std::shared_ptr<openshot::Frame> DecodeNextFrame(int64_t number);
+		bool UsesFFmpegDevice() const;
+		bool UsesWaylandPortal() const;
 		void PopulateInfo();
 
 		ScreenCaptureSettings settings;
+#ifndef SWIG
+		std::unique_ptr<CaptureBackendReader> backend_reader;
+#endif
 		bool is_open;
 		int video_stream;
 		int64_t frames_read;
