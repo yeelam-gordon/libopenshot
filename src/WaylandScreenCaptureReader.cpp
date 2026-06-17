@@ -28,6 +28,7 @@
 #include <pipewire/pipewire.h>
 #include <spa/buffer/buffer.h>
 #include <spa/buffer/meta.h>
+#include <spa/param/buffers.h>
 #include <spa/pod/builder.h>
 #include <spa/param/video/format-utils.h>
 #include <unistd.h>
@@ -654,6 +655,27 @@ private:
 			self->info.display_ratio = Fraction(self->stream_width, self->stream_height);
 			self->info.display_ratio.Reduce();
 		}
+
+		uint8_t params_buffer[256];
+		spa_pod_builder builder = SPA_POD_BUILDER_INIT(params_buffer, sizeof(params_buffer));
+		const spa_pod* params[2];
+		params[0] = static_cast<const spa_pod*>(spa_pod_builder_add_object(
+			&builder,
+			SPA_TYPE_OBJECT_ParamMeta,
+			SPA_PARAM_Meta,
+			SPA_PARAM_META_type,
+			SPA_POD_Id(SPA_META_Header),
+			SPA_PARAM_META_size,
+			SPA_POD_Int(sizeof(spa_meta_header))));
+		params[1] = static_cast<const spa_pod*>(spa_pod_builder_add_object(
+			&builder,
+			SPA_TYPE_OBJECT_ParamMeta,
+			SPA_PARAM_Meta,
+			SPA_PARAM_META_type,
+			SPA_POD_Id(SPA_META_VideoCrop),
+			SPA_PARAM_META_size,
+			SPA_POD_Int(sizeof(spa_meta_region))));
+		pw_stream_update_params(self->stream, params, 2);
 	}
 
 	static void OnStreamProcess(void* data)
