@@ -26,12 +26,15 @@
 #include <gio/gio.h>
 #include <gio/gunixfdlist.h>
 #include <pipewire/pipewire.h>
+#include <spa/buffer/buffer.h>
+#include <spa/buffer/meta.h>
 #include <spa/pod/builder.h>
 #include <spa/param/video/format-utils.h>
 #include <unistd.h>
 
 #include "Exceptions.h"
 #include "Frame.h"
+#include "ZmqLogger.h"
 
 using namespace openshot;
 
@@ -173,6 +176,7 @@ namespace
 	{
 		uint32_t node_id = 0;
 		uint64_t pipewire_serial = 0;
+		uint32_t source_type = 0;
 		int width = 0;
 		int height = 0;
 	};
@@ -193,10 +197,14 @@ namespace
 		g_variant_get(child, "(u@a{sv})", &stream_info.node_id, &properties);
 		if (properties) {
 			uint64_t serial = 0;
+			uint32_t source_type = 0;
 			int width = 0;
 			int height = 0;
 			if (g_variant_lookup(properties, "pipewire-serial", "t", &serial)) {
 				stream_info.pipewire_serial = serial;
+			}
+			if (g_variant_lookup(properties, "source_type", "u", &source_type)) {
+				stream_info.source_type = source_type;
 			}
 			if (g_variant_lookup(properties, "size", "(ii)", &width, &height)) {
 				stream_info.width = width;
@@ -270,6 +278,7 @@ public:
 		, open(false)
 		, streaming(false)
 		, stream_error(false)
+		, crop_logged(false)
 	{
 	}
 
@@ -295,6 +304,11 @@ public:
 		SelectPortalSources(session_handle);
 		stream_info = StartPortalSession(session_handle);
 		ApplyPortalStreamInfo();
+		ZmqLogger::Instance()->Log(
+			"Wayland portal stream selected: node_id=" + std::to_string(stream_info.node_id) +
+			" pipewire_serial=" + std::to_string(stream_info.pipewire_serial) +
+			" source_type=" + std::to_string(stream_info.source_type) +
+			" portal_size=" + std::to_string(stream_info.width) + "x" + std::to_string(stream_info.height));
 		const int pipewire_fd = open_pipewire_remote(connection, session_handle);
 		OpenPipeWireStream(pipewire_fd);
 		open = true;
@@ -631,6 +645,10 @@ private:
 		self->stream_width = static_cast<int>(info.info.raw.size.width);
 		self->stream_height = static_cast<int>(info.info.raw.size.height);
 		if (self->stream_width > 0 && self->stream_height > 0) {
+			ZmqLogger::Instance()->Log(
+				"Wayland PipeWire stream format: " +
+				std::to_string(self->stream_width) + "x" + std::to_string(self->stream_height) +
+				" format=" + std::to_string(self->video_format));
 			self->info.width = self->stream_width;
 			self->info.height = self->stream_height;
 			self->info.display_ratio = Fraction(self->stream_width, self->stream_height);
@@ -663,17 +681,55 @@ private:
 		const uint8_t* src = static_cast<const uint8_t*>(data.data) + (chunk ? chunk->offset : 0);
 		const int stride = chunk && chunk->stride > 0 ? chunk->stride : stream_width * 4;
 		const int readable_rows = chunk && chunk->size > 0 ? static_cast<int>(chunk->size) / stride : stream_height;
-		const int rows = std::min(stream_height, readable_rows);
+		int crop_x = 0;
+		int crop_y = 0;
+		int crop_width = stream_width;
+		int crop_height = stream_height;
+		auto* crop = static_cast<spa_meta_region*>(
+			spa_buffer_find_meta_data(spa_buffer, SPA_META_VideoCrop, sizeof(spa_meta_region)));
+		if (crop && spa_meta_region_is_valid(crop)) {
+			crop_x = std::max(0, crop->region.position.x);
+			crop_y = std::max(0, crop->region.position.y);
+			crop_width = std::min(static_cast<int>(crop->region.size.width), stream_width - crop_x);
+			crop_height = std::min(static_cast<int>(crop->region.size.height), stream_height - crop_y);
+			if (!crop_logged) {
+				ZmqLogger::Instance()->Log(
+					"Wayland PipeWire video crop: x=" + std::to_string(crop_x) +
+					" y=" + std::to_string(crop_y) +
+					" width=" + std::to_string(crop_width) +
+					" height=" + std::to_string(crop_height));
+				crop_logged = true;
+			}
+		}
+		if (crop_width <= 0 || crop_height <= 0) {
+			dropped_packets++;
+			return;
+		}
+		if (crop_width % 2 != 0) {
+			crop_width--;
+		}
+		if (crop_height % 2 != 0) {
+			crop_height--;
+		}
+		if (crop_width <= 0 || crop_height <= 0) {
+			dropped_packets++;
+			return;
+		}
+		const int rows = std::min(crop_height, readable_rows - crop_y);
+		if (rows <= 0) {
+			dropped_packets++;
+			return;
+		}
 
 		CapturedFrame frame;
-		frame.width = stream_width;
-		frame.height = stream_height;
+		frame.width = crop_width;
+		frame.height = crop_height;
 		frame.rgba.assign(static_cast<size_t>(frame.width) * frame.height * 4, 0);
 
 		for (int y = 0; y < rows; ++y) {
-			const uint8_t* row = src + static_cast<size_t>(y) * stride;
-			for (int x = 0; x < stream_width; ++x) {
-				const uint8_t* pixel = row + static_cast<size_t>(x) * 4;
+			const uint8_t* row = src + static_cast<size_t>(y + crop_y) * stride;
+			for (int x = 0; x < crop_width; ++x) {
+				const uint8_t* pixel = row + static_cast<size_t>(x + crop_x) * 4;
 				uint8_t r = 0;
 				uint8_t g = 0;
 				uint8_t b = 0;
@@ -693,7 +749,7 @@ private:
 					b = pixel[0]; g = pixel[1]; r = pixel[2];
 					break;
 				}
-				const size_t dst = (static_cast<size_t>(y) * stream_width + x) * 4;
+				const size_t dst = (static_cast<size_t>(y) * crop_width + x) * 4;
 				frame.rgba[dst + 0] = r;
 				frame.rgba[dst + 1] = g;
 				frame.rgba[dst + 2] = b;
@@ -708,6 +764,12 @@ private:
 				dropped_packets++;
 			}
 			frame_queue.push_back(std::move(frame));
+		}
+		if (info.width != crop_width || info.height != crop_height) {
+			info.width = crop_width;
+			info.height = crop_height;
+			info.display_ratio = Fraction(crop_width, crop_height);
+			info.display_ratio.Reduce();
 		}
 		queue_condition.notify_one();
 	}
@@ -731,6 +793,7 @@ private:
 	bool open;
 	bool streaming;
 	bool stream_error;
+	bool crop_logged;
 	std::mutex queue_mutex;
 	std::condition_variable queue_condition;
 	std::deque<CapturedFrame> frame_queue;
