@@ -23,6 +23,7 @@ extern "C" {
 
 #include "Exceptions.h"
 #include "Frame.h"
+#include "QtUtilities.h"
 
 using namespace openshot;
 
@@ -385,7 +386,8 @@ std::shared_ptr<Frame> ScreenCaptureReader::DecodeNextFrame(int64_t number)
 		}
 
 		const int bytes_per_pixel = 4;
-		unsigned char* buffer = static_cast<unsigned char*>(malloc(static_cast<size_t>(width) * height * bytes_per_pixel));
+		const size_t buffer_size = static_cast<size_t>(width) * height * bytes_per_pixel;
+		unsigned char* buffer = static_cast<unsigned char*>(aligned_malloc(buffer_size));
 		if (!buffer) {
 			throw OutOfMemory("Unable to allocate capture frame buffer.", InputName());
 		}
@@ -395,7 +397,7 @@ std::shared_ptr<Frame> ScreenCaptureReader::DecodeNextFrame(int64_t number)
 		av_frame_unref(source_frame);
 
 		if (scaled_lines <= 0) {
-			free(buffer);
+			openshot::aligned_free(buffer);
 			continue;
 		}
 
