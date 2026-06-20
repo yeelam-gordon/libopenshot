@@ -13,6 +13,7 @@
 #ifndef OPENSHOT_CAMERACAPTUREREADER_H
 #define OPENSHOT_CAMERACAPTUREREADER_H
 
+#include "AudioDevices.h"
 #include "ScreenCaptureReader.h"
 
 #include <memory>
@@ -58,6 +59,7 @@ namespace openshot
 		CameraCaptureSettings GetSettings() const { return settings; };
 		static bool IsBackendSupported(CameraCaptureBackend backend);
 		static CameraCaptureBackend DefaultBackend();
+		static AudioDeviceList GetDeviceNames(CameraCaptureBackend backend = CAMERA_CAPTURE_AUTO);
 
 	private:
 		void ValidateSettings() const;

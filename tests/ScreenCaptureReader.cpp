@@ -22,10 +22,15 @@ using namespace openshot;
 
 TEST_CASE("Screen capture settings validation", "[libopenshot][screencapturereader]")
 {
-#if defined(__linux__)
 	ScreenCaptureSettings settings;
+#if defined(__linux__)
 	settings.backend = SCREEN_CAPTURE_X11;
 	settings.display = ":0.0";
+#elif defined(_WIN32)
+	settings.backend = SCREEN_CAPTURE_WINDOWS_GDI;
+	settings.display = "desktop";
+#endif
+#if defined(__linux__) || defined(_WIN32)
 	settings.width = 640;
 	settings.height = 360;
 	settings.fps = Fraction(30, 1);
@@ -45,10 +50,15 @@ TEST_CASE("Screen capture settings validation", "[libopenshot][screencaptureread
 
 TEST_CASE("Screen capture reader reports configured video info", "[libopenshot][screencapturereader]")
 {
-#if defined(__linux__)
 	ScreenCaptureSettings settings;
+#if defined(__linux__)
 	settings.backend = SCREEN_CAPTURE_X11;
 	settings.display = ":99.0";
+#elif defined(_WIN32)
+	settings.backend = SCREEN_CAPTURE_WINDOWS_GDI;
+	settings.display = "desktop";
+#endif
+#if defined(__linux__) || defined(_WIN32)
 	settings.x = 10;
 	settings.y = 20;
 	settings.width = 800;
@@ -74,7 +84,9 @@ TEST_CASE("Screen capture reader reports configured video info", "[libopenshot][
 	CHECK(json["y"].asInt() == 20);
 	CHECK(json["include_cursor"].asBool() == false);
 	CHECK(json["show_region"].asBool() == true);
+#if defined(__linux__)
 	CHECK(json["options"]["window_id"].asString() == "12345");
+#endif
 #else
 	CHECK_FALSE(ScreenCaptureReader::IsBackendSupported(SCREEN_CAPTURE_X11));
 #endif
@@ -97,9 +109,21 @@ TEST_CASE("Screen capture backend support follows platform build features", "[li
 		CHECK_THROWS_AS([&wayland_settings]() { ScreenCaptureReader reader(wayland_settings); }(), InvalidOptions);
 	}
 #else
+#if defined(_WIN32)
+	CHECK(ScreenCaptureReader::IsBackendSupported(SCREEN_CAPTURE_AUTO));
+	CHECK(ScreenCaptureReader::IsBackendSupported(SCREEN_CAPTURE_WINDOWS_GDI));
+#else
 	CHECK_FALSE(ScreenCaptureReader::IsBackendSupported(SCREEN_CAPTURE_AUTO));
+#endif
 	CHECK_FALSE(ScreenCaptureReader::IsBackendSupported(SCREEN_CAPTURE_X11));
 	CHECK_FALSE(ScreenCaptureReader::IsBackendSupported(SCREEN_CAPTURE_WAYLAND));
+#endif
+}
+
+TEST_CASE("Screen capture default backend follows platform", "[libopenshot][screencapturereader]")
+{
+#if defined(_WIN32)
+	CHECK(ScreenCaptureReader::DefaultBackend() == SCREEN_CAPTURE_WINDOWS_GDI);
 #endif
 }
 

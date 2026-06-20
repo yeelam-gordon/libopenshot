@@ -14,6 +14,10 @@
 
 #include <cstdlib>
 
+extern "C" {
+	#include <libavdevice/avdevice.h>
+}
+
 #include "Exceptions.h"
 
 using namespace openshot;
@@ -38,6 +42,8 @@ bool CameraCaptureReader::IsBackendSupported(CameraCaptureBackend backend)
 {
 #if defined(__linux__)
 	return backend == CAMERA_CAPTURE_V4L2 || backend == CAMERA_CAPTURE_AUTO;
+#elif defined(_WIN32)
+	return backend == CAMERA_CAPTURE_WINDOWS_DSHOW || backend == CAMERA_CAPTURE_AUTO;
 #else
 	(void) backend;
 	return false;
@@ -48,9 +54,69 @@ CameraCaptureBackend CameraCaptureReader::DefaultBackend()
 {
 #if defined(__linux__)
 	return CAMERA_CAPTURE_V4L2;
+#elif defined(_WIN32)
+	return CAMERA_CAPTURE_WINDOWS_DSHOW;
 #else
 	return CAMERA_CAPTURE_AUTO;
 #endif
+}
+
+AudioDeviceList CameraCaptureReader::GetDeviceNames(CameraCaptureBackend backend)
+{
+	if (backend == CAMERA_CAPTURE_AUTO) {
+		backend = DefaultBackend();
+	}
+
+	AudioDeviceList devices;
+	const char* input_format_name = nullptr;
+#if defined(__linux__)
+	if (backend == CAMERA_CAPTURE_V4L2) {
+		input_format_name = "v4l2";
+	}
+#elif defined(_WIN32)
+	if (backend == CAMERA_CAPTURE_WINDOWS_DSHOW) {
+		input_format_name = "dshow";
+	}
+#endif
+	if (!input_format_name) {
+		return devices;
+	}
+
+	avdevice_register_all();
+	const AVInputFormat* input_format = av_find_input_format(input_format_name);
+	if (!input_format) {
+		return devices;
+	}
+
+	AVDeviceInfoList* device_list = nullptr;
+	const int result = avdevice_list_input_sources(input_format, nullptr, nullptr, &device_list);
+	if (result >= 0 && device_list) {
+		for (int index = 0; index < device_list->nb_devices; ++index) {
+			const AVDeviceInfo* device = device_list->devices[index];
+			if (!device || !device->device_name) {
+				continue;
+			}
+			if (device->nb_media_types > 0 && device->media_types) {
+				bool has_video = false;
+				for (int media_index = 0; media_index < device->nb_media_types; ++media_index) {
+					if (device->media_types[media_index] == AVMEDIA_TYPE_VIDEO) {
+						has_video = true;
+						break;
+					}
+				}
+				if (!has_video) {
+					continue;
+				}
+			}
+			const std::string name = device->device_name;
+			const std::string label = device->device_description
+				? device->device_description
+				: device->device_name;
+			devices.emplace_back(label, name);
+		}
+	}
+	avdevice_free_list_devices(&device_list);
+	return devices;
 }
 
 void CameraCaptureReader::ValidateSettings() const
@@ -58,8 +124,8 @@ void CameraCaptureReader::ValidateSettings() const
 	if (!IsBackendSupported(settings.backend)) {
 		throw InvalidOptions("Camera capture backend is not supported on this OS.");
 	}
-	if (settings.backend != CAMERA_CAPTURE_V4L2) {
-		throw InvalidOptions("Only the v4l2 camera capture backend is implemented in this build.");
+	if (settings.backend != CAMERA_CAPTURE_V4L2 && settings.backend != CAMERA_CAPTURE_WINDOWS_DSHOW) {
+		throw InvalidOptions("Camera capture backend is not implemented in this build.");
 	}
 	if (settings.device.empty()) {
 		throw InvalidOptions("Camera capture requires a device path.");
@@ -75,13 +141,19 @@ void CameraCaptureReader::ValidateSettings() const
 ScreenCaptureSettings CameraCaptureReader::ToDeviceSettings() const
 {
 	ScreenCaptureSettings converted;
-	converted.backend = SCREEN_CAPTURE_X11;
 	converted.display = settings.device;
 	converted.width = settings.width;
 	converted.height = settings.height;
 	converted.fps = settings.fps;
 	converted.options = settings.options;
-	converted.options["input_format_name"] = "v4l2";
+	if (settings.backend == CAMERA_CAPTURE_WINDOWS_DSHOW) {
+		converted.backend = SCREEN_CAPTURE_WINDOWS_GDI;
+		converted.display = "video=" + settings.device;
+		converted.options["input_format_name"] = "dshow";
+	} else {
+		converted.backend = SCREEN_CAPTURE_X11;
+		converted.options["input_format_name"] = "v4l2";
+	}
 	return converted;
 }
 

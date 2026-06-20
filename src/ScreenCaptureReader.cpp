@@ -100,6 +100,8 @@ bool ScreenCaptureReader::IsBackendSupported(ScreenCaptureBackend backend)
 	}
 #endif
 	return false;
+#elif defined(_WIN32)
+	return backend == SCREEN_CAPTURE_WINDOWS_GDI || backend == SCREEN_CAPTURE_AUTO;
 #else
 	(void) backend;
 	return false;
@@ -116,18 +118,19 @@ ScreenCaptureBackend ScreenCaptureReader::DefaultBackend()
 	if (!session || std::string(session) == "x11") {
 		return SCREEN_CAPTURE_X11;
 	}
+#elif defined(_WIN32)
+	return SCREEN_CAPTURE_WINDOWS_GDI;
 #endif
 	return SCREEN_CAPTURE_AUTO;
 }
 
 void ScreenCaptureReader::ValidateSettings() const
 {
-	const bool using_v4l2_device = settings.options.count("input_format_name") && settings.options.at("input_format_name") == "v4l2";
 	if (!IsBackendSupported(settings.backend)) {
 		throw InvalidOptions("Screen capture backend is not supported on this OS or session.");
 	}
-	if (!UsesFFmpegDevice() && !UsesWaylandPortal() && !using_v4l2_device) {
-		throw InvalidOptions("Only the X11 screen capture backend is implemented in this build.");
+	if (!UsesFFmpegDevice() && !UsesWaylandPortal()) {
+		throw InvalidOptions("Screen capture backend is not implemented in this build.");
 	}
 	if (settings.width <= 0 || settings.height <= 0) {
 		throw InvalidOptions("Screen capture requires a positive width and height.");
@@ -139,8 +142,9 @@ void ScreenCaptureReader::ValidateSettings() const
 
 bool ScreenCaptureReader::UsesFFmpegDevice() const
 {
-	const bool using_v4l2_device = settings.options.count("input_format_name") && settings.options.at("input_format_name") == "v4l2";
-	return settings.backend == SCREEN_CAPTURE_X11 || using_v4l2_device;
+	return settings.backend == SCREEN_CAPTURE_X11
+		|| settings.backend == SCREEN_CAPTURE_WINDOWS_GDI
+		|| settings.options.count("input_format_name");
 }
 
 bool ScreenCaptureReader::UsesWaylandPortal() const
@@ -157,6 +161,9 @@ std::string ScreenCaptureReader::InputFormatName() const
 	if (settings.backend == SCREEN_CAPTURE_X11) {
 		return "x11grab";
 	}
+	if (settings.backend == SCREEN_CAPTURE_WINDOWS_GDI) {
+		return "gdigrab";
+	}
 	return "";
 }
 
@@ -164,6 +171,12 @@ std::string ScreenCaptureReader::InputName() const
 {
 	if (InputFormatName() == "v4l2") {
 		return settings.display.empty() ? "/dev/video0" : settings.display;
+	}
+	if (InputFormatName() == "dshow") {
+		return settings.display;
+	}
+	if (InputFormatName() == "gdigrab") {
+		return settings.display.empty() ? "desktop" : settings.display;
 	}
 
 	std::string display = settings.display;
@@ -239,6 +252,11 @@ void ScreenCaptureReader::OpenDevice()
 	if (InputFormatName() == "x11grab") {
 		set_option(&options, "draw_mouse", settings.include_cursor ? "1" : "0");
 		set_option(&options, "show_region", settings.show_region ? "1" : "0");
+	} else if (InputFormatName() == "gdigrab") {
+		set_option(&options, "draw_mouse", settings.include_cursor ? "1" : "0");
+		set_option(&options, "show_region", settings.show_region ? "1" : "0");
+		set_option(&options, "offset_x", std::to_string(settings.x));
+		set_option(&options, "offset_y", std::to_string(settings.y));
 	}
 	for (const auto& option : settings.options) {
 		if (option.first == "input_format_name") {

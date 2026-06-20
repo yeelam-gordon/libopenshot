@@ -19,10 +19,15 @@ using namespace openshot;
 
 TEST_CASE("Camera capture settings validation", "[libopenshot][cameracapturereader]")
 {
-#if defined(__linux__)
 	CameraCaptureSettings settings;
+#if defined(__linux__)
 	settings.backend = CAMERA_CAPTURE_V4L2;
 	settings.device = "/dev/video0";
+#elif defined(_WIN32)
+	settings.backend = CAMERA_CAPTURE_WINDOWS_DSHOW;
+	settings.device = "Integrated Camera";
+#endif
+#if defined(__linux__) || defined(_WIN32)
 	settings.width = 640;
 	settings.height = 480;
 	settings.fps = Fraction(30, 1);
@@ -42,10 +47,15 @@ TEST_CASE("Camera capture settings validation", "[libopenshot][cameracaptureread
 
 TEST_CASE("Camera capture reader reports configured video info", "[libopenshot][cameracapturereader]")
 {
-#if defined(__linux__)
 	CameraCaptureSettings settings;
+#if defined(__linux__)
 	settings.backend = CAMERA_CAPTURE_V4L2;
 	settings.device = "/dev/video9";
+#elif defined(_WIN32)
+	settings.backend = CAMERA_CAPTURE_WINDOWS_DSHOW;
+	settings.device = "Integrated Camera";
+#endif
+#if defined(__linux__) || defined(_WIN32)
 	settings.width = 1280;
 	settings.height = 720;
 	settings.fps = Fraction(24, 1);
@@ -65,5 +75,13 @@ TEST_CASE("Camera capture reader reports configured video info", "[libopenshot][
 	CHECK(json["height"].asInt() == 720);
 #else
 	CHECK_FALSE(CameraCaptureReader::IsBackendSupported(CAMERA_CAPTURE_V4L2));
+#endif
+}
+
+TEST_CASE("Camera capture default backend follows platform", "[libopenshot][cameracapturereader]")
+{
+#if defined(_WIN32)
+	CHECK(CameraCaptureReader::IsBackendSupported(CAMERA_CAPTURE_WINDOWS_DSHOW));
+	CHECK(CameraCaptureReader::DefaultBackend() == CAMERA_CAPTURE_WINDOWS_DSHOW);
 #endif
 }
