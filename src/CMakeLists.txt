@@ -616,8 +616,8 @@ if(DEFINED PROFILER)
 endif()
 
 if(WIN32)
-  # Required for exception handling on Windows
-  target_link_libraries(openshot PUBLIC "imagehlp" "dbghelp" )
+  # Required for exception handling and DirectShow device enumeration on Windows
+  target_link_libraries(openshot PUBLIC "imagehlp" "dbghelp" "ole32" "oleaut32" "strmiids" )
 endif()
 
 ###

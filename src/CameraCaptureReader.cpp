@@ -14,6 +14,13 @@
 
 #include <cstdlib>
 
+#if defined(_WIN32)
+	#define WIN32_LEAN_AND_MEAN
+	#include <windows.h>
+	#include <dshow.h>
+	#include <oleauto.h>
+#endif
+
 extern "C" {
 	#include <libavdevice/avdevice.h>
 }
@@ -21,6 +28,95 @@ extern "C" {
 #include "Exceptions.h"
 
 using namespace openshot;
+
+#if defined(_WIN32)
+namespace
+{
+	std::string WideToUtf8(const wchar_t* value)
+	{
+		if (!value || !*value) {
+			return "";
+		}
+		const int length = WideCharToMultiByte(CP_UTF8, 0, value, -1, nullptr, 0, nullptr, nullptr);
+		if (length <= 1) {
+			return "";
+		}
+		std::string converted(static_cast<size_t>(length - 1), '\0');
+		WideCharToMultiByte(CP_UTF8, 0, value, -1, &converted[0], length, nullptr, nullptr);
+		return converted;
+	}
+
+	bool ContainsDeviceName(const AudioDeviceList& devices, const std::string& name)
+	{
+		for (const auto& device : devices) {
+			if (device.second == name) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	AudioDeviceList GetWindowsDirectShowVideoDevices()
+	{
+		AudioDeviceList devices;
+		const HRESULT init_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+		const bool should_uninitialize = SUCCEEDED(init_result);
+		if (FAILED(init_result) && init_result != RPC_E_CHANGED_MODE) {
+			return devices;
+		}
+
+		ICreateDevEnum* device_enumerator = nullptr;
+		HRESULT result = CoCreateInstance(
+			CLSID_SystemDeviceEnum,
+			nullptr,
+			CLSCTX_INPROC_SERVER,
+			IID_ICreateDevEnum,
+			reinterpret_cast<void**>(&device_enumerator)
+		);
+		if (SUCCEEDED(result) && device_enumerator) {
+			IEnumMoniker* moniker_enumerator = nullptr;
+			result = device_enumerator->CreateClassEnumerator(
+				CLSID_VideoInputDeviceCategory,
+				&moniker_enumerator,
+				0
+			);
+			if (result == S_OK && moniker_enumerator) {
+				IMoniker* moniker = nullptr;
+				while (moniker_enumerator->Next(1, &moniker, nullptr) == S_OK) {
+					IPropertyBag* property_bag = nullptr;
+					result = moniker->BindToStorage(
+						nullptr,
+						nullptr,
+						IID_IPropertyBag,
+						reinterpret_cast<void**>(&property_bag)
+					);
+					if (SUCCEEDED(result) && property_bag) {
+						VARIANT friendly_name;
+						VariantInit(&friendly_name);
+						result = property_bag->Read(L"FriendlyName", &friendly_name, nullptr);
+						if (SUCCEEDED(result) && friendly_name.vt == VT_BSTR) {
+							const std::string name = WideToUtf8(friendly_name.bstrVal);
+							if (!name.empty() && !ContainsDeviceName(devices, name)) {
+								devices.emplace_back(name, name);
+							}
+						}
+						VariantClear(&friendly_name);
+						property_bag->Release();
+					}
+					moniker->Release();
+					moniker = nullptr;
+				}
+				moniker_enumerator->Release();
+			}
+			device_enumerator->Release();
+		}
+		if (should_uninitialize) {
+			CoUninitialize();
+		}
+		return devices;
+	}
+}
+#endif
 
 CameraCaptureReader::CameraCaptureReader(const CameraCaptureSettings& new_settings)
 	: settings(new_settings)
@@ -75,7 +171,7 @@ AudioDeviceList CameraCaptureReader::GetDeviceNames(CameraCaptureBackend backend
 	}
 #elif defined(_WIN32)
 	if (backend == CAMERA_CAPTURE_WINDOWS_DSHOW) {
-		input_format_name = "dshow";
+		return GetWindowsDirectShowVideoDevices();
 	}
 #endif
 	if (!input_format_name) {
