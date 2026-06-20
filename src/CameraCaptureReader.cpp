@@ -96,18 +96,6 @@ AudioDeviceList CameraCaptureReader::GetDeviceNames(CameraCaptureBackend backend
 			if (!device || !device->device_name) {
 				continue;
 			}
-			if (device->nb_media_types > 0 && device->media_types) {
-				bool has_video = false;
-				for (int media_index = 0; media_index < device->nb_media_types; ++media_index) {
-					if (device->media_types[media_index] == AVMEDIA_TYPE_VIDEO) {
-						has_video = true;
-						break;
-					}
-				}
-				if (!has_video) {
-					continue;
-				}
-			}
 			const std::string name = device->device_name;
 			const std::string label = device->device_description
 				? device->device_description

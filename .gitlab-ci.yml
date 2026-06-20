@@ -41,7 +41,7 @@ linux-builder:
     - export LD_LIBRARY_PATH="$OPENCV_ROOT/lib:$LD_LIBRARY_PATH"
     - export PATH="$OPENCV_ROOT/bin:$PATH"
     - mkdir -p build; cd build;
-    - pkg-config --exists libpipewire-0.3 libspa-0.2 gio-2.0 gio-unix-2.0
+    - pkg-config --exists libpipewire-0.3 libspa-0.2 gio-2.0 gio-unix-2.0 || echo "WARNING PipeWire Wayland capture dependencies are missing; building without Wayland capture support"
     - cmake -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON -D"CMAKE_INSTALL_PREFIX:PATH=$CI_PROJECT_DIR/build/install-x64" -D"OpenCV_DIR:PATH=$OpenCV_DIR" -D"PYTHON_MODULE_PATH=python" -D"RUBY_MODULE_PATH=ruby" -DCMAKE_BUILD_TYPE:STRING=Release -DAPPIMAGE_BUILD=1 -DUSE_SYSTEM_JSONCPP=0 -DENABLE_WAYLAND_CAPTURE=ON ../
     - cmake --build . --parallel $(nproc)
     - make install
