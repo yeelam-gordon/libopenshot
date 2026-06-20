@@ -241,7 +241,7 @@ void ScreenCaptureReader::OpenDevice()
 {
 	avdevice_register_all();
 
-	const AVInputFormat* input_format = av_find_input_format(InputFormatName().c_str());
+	AVInputFormat* input_format = const_cast<AVInputFormat*>(av_find_input_format(InputFormatName().c_str()));
 	if (!input_format) {
 		throw InvalidOptions("FFmpeg input device is not available: " + InputFormatName(), InputName());
 	}
