@@ -83,7 +83,7 @@ AudioDeviceList CameraCaptureReader::GetDeviceNames(CameraCaptureBackend backend
 	}
 
 	avdevice_register_all();
-	const AVInputFormat* input_format = av_find_input_format(input_format_name);
+	AVInputFormat* input_format = const_cast<AVInputFormat*>(av_find_input_format(input_format_name));
 	if (!input_format) {
 		return devices;
 	}
