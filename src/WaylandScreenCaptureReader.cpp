@@ -280,6 +280,12 @@ public:
 		, streaming(false)
 		, stream_error(false)
 		, crop_logged(false)
+		, have_last_header_sequence(false)
+		, last_header_sequence(0)
+		, header_sequence_ordering_active(false)
+		, have_last_header_pts(false)
+		, last_header_pts(0)
+		, header_drop_log_count(0)
 	{
 	}
 
@@ -698,6 +704,13 @@ private:
 			return;
 		}
 
+		auto* header = static_cast<spa_meta_header*>(
+			spa_buffer_find_meta_data(spa_buffer, SPA_META_Header, sizeof(spa_meta_header)));
+		if (header && !AcceptHeader(*header)) {
+			dropped_packets++;
+			return;
+		}
+
 		spa_data& data = spa_buffer->datas[0];
 		const spa_chunk* chunk = data.chunk;
 		const uint8_t* src = static_cast<const uint8_t*>(data.data) + (chunk ? chunk->offset : 0);
@@ -796,6 +809,51 @@ private:
 		queue_condition.notify_one();
 	}
 
+	bool AcceptHeader(const spa_meta_header& header)
+	{
+		if (header.flags & (SPA_META_HEADER_FLAG_CORRUPTED | SPA_META_HEADER_FLAG_GAP)) {
+			LogDroppedHeader("flags", header);
+			return false;
+		}
+
+		const bool discontinuity = (header.flags & SPA_META_HEADER_FLAG_DISCONT) != 0;
+		if (!discontinuity && have_last_header_sequence && header.seq > last_header_sequence) {
+			header_sequence_ordering_active = true;
+		}
+		if (!discontinuity && header_sequence_ordering_active && header.seq <= last_header_sequence) {
+			LogDroppedHeader("sequence", header);
+			return false;
+		}
+		if (!discontinuity && header.pts >= 0 && have_last_header_pts && header.pts < last_header_pts) {
+			LogDroppedHeader("pts", header);
+			return false;
+		}
+
+		have_last_header_sequence = true;
+		last_header_sequence = header.seq;
+		if (header.pts >= 0) {
+			have_last_header_pts = true;
+			last_header_pts = header.pts;
+		}
+		return true;
+	}
+
+	void LogDroppedHeader(const std::string& reason, const spa_meta_header& header)
+	{
+		if (header_drop_log_count >= 5) {
+			return;
+		}
+		ZmqLogger::Instance()->Log(
+			"Wayland PipeWire dropped non-monotonic frame: reason=" + reason +
+			" flags=" + std::to_string(header.flags) +
+			" seq=" + std::to_string(header.seq) +
+			" last_seq=" + (have_last_header_sequence ? std::to_string(last_header_sequence) : std::string("none")) +
+			" seq_active=" + std::to_string(header_sequence_ordering_active ? 1 : 0) +
+			" pts=" + std::to_string(header.pts) +
+			" last_pts=" + (have_last_header_pts ? std::to_string(last_header_pts) : std::string("none")));
+		header_drop_log_count++;
+	}
+
 	ScreenCaptureSettings settings;
 	ReaderInfo& info;
 	GDBusConnection* connection;
@@ -816,6 +874,12 @@ private:
 	bool streaming;
 	bool stream_error;
 	bool crop_logged;
+	bool have_last_header_sequence;
+	uint64_t last_header_sequence;
+	bool header_sequence_ordering_active;
+	bool have_last_header_pts;
+	int64_t last_header_pts;
+	int header_drop_log_count;
 	std::mutex queue_mutex;
 	std::condition_variable queue_condition;
 	std::deque<CapturedFrame> frame_queue;
