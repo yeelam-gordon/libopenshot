@@ -188,7 +188,7 @@ std::string ScreenCaptureReader::InputName() const
 		return settings.display.empty() ? "desktop" : settings.display;
 	}
 	if (InputFormatName() == "avfoundation") {
-		return settings.display.empty() ? "1:none" : settings.display;
+		return settings.display.empty() ? "Capture screen 0:none" : settings.display;
 	}
 
 	std::string display = settings.display;
@@ -272,6 +272,8 @@ void ScreenCaptureReader::OpenDevice()
 		set_option(&options, "show_region", settings.show_region ? "1" : "0");
 		set_option(&options, "offset_x", std::to_string(settings.x));
 		set_option(&options, "offset_y", std::to_string(settings.y));
+	} else if (InputFormatName() == "avfoundation") {
+		set_option(&options, "capture_cursor", settings.include_cursor ? "1" : "0");
 	}
 	for (const auto& option : settings.options) {
 		if (option.first == "input_format_name" || option.first == "use_device_defaults") {

@@ -31,7 +31,7 @@ TEST_CASE("Screen capture settings validation", "[libopenshot][screencaptureread
 	settings.display = "desktop";
 #elif defined(__APPLE__)
 	settings.backend = SCREEN_CAPTURE_MAC_AVFOUNDATION;
-	settings.display = "1:none";
+	settings.display = "Capture screen 0:none";
 #endif
 #if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
 	settings.width = 640;
@@ -62,7 +62,7 @@ TEST_CASE("Screen capture reader reports configured video info", "[libopenshot][
 	settings.display = "desktop";
 #elif defined(__APPLE__)
 	settings.backend = SCREEN_CAPTURE_MAC_AVFOUNDATION;
-	settings.display = "1:none";
+	settings.display = "Capture screen 0:none";
 #endif
 #if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
 	settings.x = 10;
@@ -86,7 +86,7 @@ TEST_CASE("Screen capture reader reports configured video info", "[libopenshot][
 	const Json::Value json = reader.JsonValue();
 	CHECK(json["type"].asString() == "ScreenCaptureReader");
 #if defined(__APPLE__)
-	CHECK(json["display"].asString() == "1:none");
+	CHECK(json["display"].asString() == "Capture screen 0:none");
 #elif defined(_WIN32)
 	CHECK(json["display"].asString() == "desktop");
 #else
