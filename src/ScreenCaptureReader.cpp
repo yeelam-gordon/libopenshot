@@ -103,6 +103,8 @@ bool ScreenCaptureReader::IsBackendSupported(ScreenCaptureBackend backend)
 	return false;
 #elif defined(_WIN32)
 	return backend == SCREEN_CAPTURE_WINDOWS_GDI || backend == SCREEN_CAPTURE_AUTO;
+#elif defined(__APPLE__)
+	return backend == SCREEN_CAPTURE_MAC_AVFOUNDATION || backend == SCREEN_CAPTURE_AUTO;
 #else
 	(void) backend;
 	return false;
@@ -121,6 +123,8 @@ ScreenCaptureBackend ScreenCaptureReader::DefaultBackend()
 	}
 #elif defined(_WIN32)
 	return SCREEN_CAPTURE_WINDOWS_GDI;
+#elif defined(__APPLE__)
+	return SCREEN_CAPTURE_MAC_AVFOUNDATION;
 #endif
 	return SCREEN_CAPTURE_AUTO;
 }
@@ -145,6 +149,7 @@ bool ScreenCaptureReader::UsesFFmpegDevice() const
 {
 	return settings.backend == SCREEN_CAPTURE_X11
 		|| settings.backend == SCREEN_CAPTURE_WINDOWS_GDI
+		|| settings.backend == SCREEN_CAPTURE_MAC_AVFOUNDATION
 		|| settings.options.count("input_format_name");
 }
 
@@ -165,6 +170,9 @@ std::string ScreenCaptureReader::InputFormatName() const
 	if (settings.backend == SCREEN_CAPTURE_WINDOWS_GDI) {
 		return "gdigrab";
 	}
+	if (settings.backend == SCREEN_CAPTURE_MAC_AVFOUNDATION) {
+		return "avfoundation";
+	}
 	return "";
 }
 
@@ -178,6 +186,9 @@ std::string ScreenCaptureReader::InputName() const
 	}
 	if (InputFormatName() == "gdigrab") {
 		return settings.display.empty() ? "desktop" : settings.display;
+	}
+	if (InputFormatName() == "avfoundation") {
+		return settings.display.empty() ? "1:none" : settings.display;
 	}
 
 	std::string display = settings.display;

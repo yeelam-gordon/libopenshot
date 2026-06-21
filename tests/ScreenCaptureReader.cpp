@@ -29,8 +29,11 @@ TEST_CASE("Screen capture settings validation", "[libopenshot][screencaptureread
 #elif defined(_WIN32)
 	settings.backend = SCREEN_CAPTURE_WINDOWS_GDI;
 	settings.display = "desktop";
+#elif defined(__APPLE__)
+	settings.backend = SCREEN_CAPTURE_MAC_AVFOUNDATION;
+	settings.display = "1:none";
 #endif
-#if defined(__linux__) || defined(_WIN32)
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
 	settings.width = 640;
 	settings.height = 360;
 	settings.fps = Fraction(30, 1);
@@ -57,8 +60,11 @@ TEST_CASE("Screen capture reader reports configured video info", "[libopenshot][
 #elif defined(_WIN32)
 	settings.backend = SCREEN_CAPTURE_WINDOWS_GDI;
 	settings.display = "desktop";
+#elif defined(__APPLE__)
+	settings.backend = SCREEN_CAPTURE_MAC_AVFOUNDATION;
+	settings.display = "1:none";
 #endif
-#if defined(__linux__) || defined(_WIN32)
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
 	settings.x = 10;
 	settings.y = 20;
 	settings.width = 800;
@@ -79,7 +85,13 @@ TEST_CASE("Screen capture reader reports configured video info", "[libopenshot][
 
 	const Json::Value json = reader.JsonValue();
 	CHECK(json["type"].asString() == "ScreenCaptureReader");
+#if defined(__APPLE__)
+	CHECK(json["display"].asString() == "1:none");
+#elif defined(_WIN32)
+	CHECK(json["display"].asString() == "desktop");
+#else
 	CHECK(json["display"].asString() == ":99.0");
+#endif
 	CHECK(json["x"].asInt() == 10);
 	CHECK(json["y"].asInt() == 20);
 	CHECK(json["include_cursor"].asBool() == false);
@@ -112,6 +124,9 @@ TEST_CASE("Screen capture backend support follows platform build features", "[li
 #if defined(_WIN32)
 	CHECK(ScreenCaptureReader::IsBackendSupported(SCREEN_CAPTURE_AUTO));
 	CHECK(ScreenCaptureReader::IsBackendSupported(SCREEN_CAPTURE_WINDOWS_GDI));
+#elif defined(__APPLE__)
+	CHECK(ScreenCaptureReader::IsBackendSupported(SCREEN_CAPTURE_AUTO));
+	CHECK(ScreenCaptureReader::IsBackendSupported(SCREEN_CAPTURE_MAC_AVFOUNDATION));
 #else
 	CHECK_FALSE(ScreenCaptureReader::IsBackendSupported(SCREEN_CAPTURE_AUTO));
 #endif
@@ -124,6 +139,8 @@ TEST_CASE("Screen capture default backend follows platform", "[libopenshot][scre
 {
 #if defined(_WIN32)
 	CHECK(ScreenCaptureReader::DefaultBackend() == SCREEN_CAPTURE_WINDOWS_GDI);
+#elif defined(__APPLE__)
+	CHECK(ScreenCaptureReader::DefaultBackend() == SCREEN_CAPTURE_MAC_AVFOUNDATION);
 #endif
 }
 

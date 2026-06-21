@@ -13,6 +13,7 @@
 #include "CameraCaptureReader.h"
 
 #include <cstdlib>
+#include <string>
 
 #if defined(_WIN32)
 	#define WIN32_LEAN_AND_MEAN
@@ -140,6 +141,8 @@ bool CameraCaptureReader::IsBackendSupported(CameraCaptureBackend backend)
 	return backend == CAMERA_CAPTURE_V4L2 || backend == CAMERA_CAPTURE_AUTO;
 #elif defined(_WIN32)
 	return backend == CAMERA_CAPTURE_WINDOWS_DSHOW || backend == CAMERA_CAPTURE_AUTO;
+#elif defined(__APPLE__)
+	return backend == CAMERA_CAPTURE_MAC_AVFOUNDATION || backend == CAMERA_CAPTURE_AUTO;
 #else
 	(void) backend;
 	return false;
@@ -152,6 +155,8 @@ CameraCaptureBackend CameraCaptureReader::DefaultBackend()
 	return CAMERA_CAPTURE_V4L2;
 #elif defined(_WIN32)
 	return CAMERA_CAPTURE_WINDOWS_DSHOW;
+#elif defined(__APPLE__)
+	return CAMERA_CAPTURE_MAC_AVFOUNDATION;
 #else
 	return CAMERA_CAPTURE_AUTO;
 #endif
@@ -172,6 +177,10 @@ AudioDeviceList CameraCaptureReader::GetDeviceNames(CameraCaptureBackend backend
 #elif defined(_WIN32)
 	if (backend == CAMERA_CAPTURE_WINDOWS_DSHOW) {
 		return GetWindowsDirectShowVideoDevices();
+	}
+#elif defined(__APPLE__)
+	if (backend == CAMERA_CAPTURE_MAC_AVFOUNDATION) {
+		input_format_name = "avfoundation";
 	}
 #endif
 	if (!input_format_name) {
@@ -196,6 +205,11 @@ AudioDeviceList CameraCaptureReader::GetDeviceNames(CameraCaptureBackend backend
 			const std::string label = device->device_description
 				? device->device_description
 				: device->device_name;
+		#if defined(__APPLE__)
+			if (backend == CAMERA_CAPTURE_MAC_AVFOUNDATION && label.find("Capture screen") != std::string::npos) {
+				continue;
+			}
+		#endif
 			devices.emplace_back(label, name);
 		}
 	}
@@ -208,7 +222,9 @@ void CameraCaptureReader::ValidateSettings() const
 	if (!IsBackendSupported(settings.backend)) {
 		throw InvalidOptions("Camera capture backend is not supported on this OS.");
 	}
-	if (settings.backend != CAMERA_CAPTURE_V4L2 && settings.backend != CAMERA_CAPTURE_WINDOWS_DSHOW) {
+	if (settings.backend != CAMERA_CAPTURE_V4L2
+		&& settings.backend != CAMERA_CAPTURE_WINDOWS_DSHOW
+		&& settings.backend != CAMERA_CAPTURE_MAC_AVFOUNDATION) {
 		throw InvalidOptions("Camera capture backend is not implemented in this build.");
 	}
 	if (settings.device.empty()) {
@@ -234,6 +250,12 @@ ScreenCaptureSettings CameraCaptureReader::ToDeviceSettings() const
 		converted.backend = SCREEN_CAPTURE_WINDOWS_GDI;
 		converted.display = "video=" + settings.device;
 		converted.options["input_format_name"] = "dshow";
+	} else if (settings.backend == CAMERA_CAPTURE_MAC_AVFOUNDATION) {
+		converted.backend = SCREEN_CAPTURE_MAC_AVFOUNDATION;
+		converted.display = settings.device.find(':') == std::string::npos
+			? settings.device + ":none"
+			: settings.device;
+		converted.options["input_format_name"] = "avfoundation";
 	} else {
 		converted.backend = SCREEN_CAPTURE_X11;
 		converted.options["input_format_name"] = "v4l2";

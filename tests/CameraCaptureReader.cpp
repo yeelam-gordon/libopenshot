@@ -26,8 +26,11 @@ TEST_CASE("Camera capture settings validation", "[libopenshot][cameracaptureread
 #elif defined(_WIN32)
 	settings.backend = CAMERA_CAPTURE_WINDOWS_DSHOW;
 	settings.device = "Integrated Camera";
+#elif defined(__APPLE__)
+	settings.backend = CAMERA_CAPTURE_MAC_AVFOUNDATION;
+	settings.device = "0:none";
 #endif
-#if defined(__linux__) || defined(_WIN32)
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
 	settings.width = 640;
 	settings.height = 480;
 	settings.fps = Fraction(30, 1);
@@ -54,8 +57,11 @@ TEST_CASE("Camera capture reader reports configured video info", "[libopenshot][
 #elif defined(_WIN32)
 	settings.backend = CAMERA_CAPTURE_WINDOWS_DSHOW;
 	settings.device = "Integrated Camera";
+#elif defined(__APPLE__)
+	settings.backend = CAMERA_CAPTURE_MAC_AVFOUNDATION;
+	settings.device = "0:none";
 #endif
-#if defined(__linux__) || defined(_WIN32)
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
 	settings.width = 1280;
 	settings.height = 720;
 	settings.fps = Fraction(24, 1);
@@ -70,7 +76,13 @@ TEST_CASE("Camera capture reader reports configured video info", "[libopenshot][
 
 	const Json::Value json = reader.JsonValue();
 	CHECK(json["type"].asString() == "CameraCaptureReader");
+#if defined(__linux__)
 	CHECK(json["device"].asString() == "/dev/video9");
+#elif defined(_WIN32)
+	CHECK(json["device"].asString() == "Integrated Camera");
+#elif defined(__APPLE__)
+	CHECK(json["device"].asString() == "0:none");
+#endif
 	CHECK(json["width"].asInt() == 1280);
 	CHECK(json["height"].asInt() == 720);
 #else
@@ -83,5 +95,8 @@ TEST_CASE("Camera capture default backend follows platform", "[libopenshot][came
 #if defined(_WIN32)
 	CHECK(CameraCaptureReader::IsBackendSupported(CAMERA_CAPTURE_WINDOWS_DSHOW));
 	CHECK(CameraCaptureReader::DefaultBackend() == CAMERA_CAPTURE_WINDOWS_DSHOW);
+#elif defined(__APPLE__)
+	CHECK(CameraCaptureReader::IsBackendSupported(CAMERA_CAPTURE_MAC_AVFOUNDATION));
+	CHECK(CameraCaptureReader::DefaultBackend() == CAMERA_CAPTURE_MAC_AVFOUNDATION);
 #endif
 }
