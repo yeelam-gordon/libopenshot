@@ -248,8 +248,11 @@ void ScreenCaptureReader::OpenDevice()
 	}
 
 	AVDictionary* options = nullptr;
-	set_option(&options, "framerate", fraction_to_string(settings.fps));
-	set_option(&options, "video_size", std::to_string(settings.width) + "x" + std::to_string(settings.height));
+	const bool use_device_defaults = settings.options.count("use_device_defaults") > 0;
+	if (!use_device_defaults) {
+		set_option(&options, "framerate", fraction_to_string(settings.fps));
+		set_option(&options, "video_size", std::to_string(settings.width) + "x" + std::to_string(settings.height));
+	}
 	if (InputFormatName() == "x11grab") {
 		set_option(&options, "draw_mouse", settings.include_cursor ? "1" : "0");
 		set_option(&options, "show_region", settings.show_region ? "1" : "0");
@@ -260,7 +263,7 @@ void ScreenCaptureReader::OpenDevice()
 		set_option(&options, "offset_y", std::to_string(settings.y));
 	}
 	for (const auto& option : settings.options) {
-		if (option.first == "input_format_name") {
+		if (option.first == "input_format_name" || option.first == "use_device_defaults") {
 			continue;
 		}
 		set_option(&options, option.first, option.second);
