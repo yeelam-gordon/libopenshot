@@ -686,6 +686,38 @@ void FFmpegWriter::WriteFrame(std::shared_ptr<openshot::Frame> frame) {
 	last_frame = frame;
 }
 
+void FFmpegWriter::WriteFrameAt(std::shared_ptr<openshot::Frame> frame, int64_t frame_number) {
+	// Check for open reader (or throw exception)
+	if (!is_open)
+		throw WriterClosed("The FFmpegWriter is closed.  Call Open() before calling this method.", path);
+
+	if (frame_number < 1) {
+		frame_number = 1;
+	}
+
+	ZmqLogger::Instance()->AppendDebugMethod(
+		"FFmpegWriter::WriteFrameAt",
+		"frame->number", frame->number,
+		"output_frame_number", frame_number,
+		"is_writing", is_writing);
+
+	const int64_t previous_video_timestamp = video_timestamp;
+	if (info.has_video && video_st && video_codec_ctx) {
+		video_timestamp = av_rescale_q(
+			frame_number - 1,
+			av_make_q(info.fps.den, info.fps.num),
+			video_codec_ctx->time_base);
+	}
+
+	write_frame(frame);
+
+	if (!(info.has_video && video_st && video_codec_ctx)) {
+		video_timestamp = previous_video_timestamp;
+	}
+
+	last_frame = frame;
+}
+
 // Write all frames in the queue to the video file.
 void FFmpegWriter::write_frame(std::shared_ptr<Frame> frame) {
 	// Flip writing flag

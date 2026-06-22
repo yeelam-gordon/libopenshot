@@ -559,6 +559,10 @@ private:
 
 		uint8_t format_buffer[1024];
 		spa_pod_builder builder = SPA_POD_BUILDER_INIT(format_buffer, sizeof(format_buffer));
+		const spa_fraction requested_framerate = SPA_FRACTION(
+			static_cast<uint32_t>(std::max(1, settings.fps.num)),
+			static_cast<uint32_t>(std::max(1, settings.fps.den)));
+		const spa_fraction variable_framerate = SPA_FRACTION(0, 1);
 		const spa_pod* params[1];
 		params[0] = static_cast<const spa_pod*>(spa_pod_builder_add_object(
 			&builder,
@@ -574,7 +578,11 @@ private:
 				SPA_VIDEO_FORMAT_BGRx,
 				SPA_VIDEO_FORMAT_RGBA,
 				SPA_VIDEO_FORMAT_BGRA,
-				SPA_VIDEO_FORMAT_RGBx)));
+				SPA_VIDEO_FORMAT_RGBx),
+			SPA_FORMAT_VIDEO_framerate,
+			SPA_POD_Fraction(&variable_framerate),
+			SPA_FORMAT_VIDEO_maxFramerate,
+			SPA_POD_Fraction(&requested_framerate)));
 
 		pw_thread_loop_lock(thread_loop);
 		const uint32_t target_id = stream_info.pipewire_serial > 0 ? PW_ID_ANY : stream_info.node_id;
@@ -651,11 +659,21 @@ private:
 		self->video_format = info.info.raw.format;
 		self->stream_width = static_cast<int>(info.info.raw.size.width);
 		self->stream_height = static_cast<int>(info.info.raw.size.height);
+		if (info.info.raw.framerate.num > 0 && info.info.raw.framerate.denom > 0) {
+			self->info.fps = Fraction(
+				static_cast<int>(info.info.raw.framerate.num),
+				static_cast<int>(info.info.raw.framerate.denom));
+			self->info.video_timebase = self->info.fps.Reciprocal();
+		}
 		if (self->stream_width > 0 && self->stream_height > 0) {
 			ZmqLogger::Instance()->Log(
 				"Wayland PipeWire stream format: " +
 				std::to_string(self->stream_width) + "x" + std::to_string(self->stream_height) +
-				" format=" + std::to_string(self->video_format));
+				" format=" + std::to_string(self->video_format) +
+					" framerate=" + std::to_string(info.info.raw.framerate.num) +
+					"/" + std::to_string(info.info.raw.framerate.denom) +
+					" max_framerate=" + std::to_string(info.info.raw.max_framerate.num) +
+					"/" + std::to_string(info.info.raw.max_framerate.denom));
 			self->info.width = self->stream_width;
 			self->info.height = self->stream_height;
 			self->info.display_ratio = Fraction(self->stream_width, self->stream_height);

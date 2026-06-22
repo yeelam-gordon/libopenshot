@@ -280,6 +280,32 @@ TEST_CASE( "MP4_30fps_duration_exact_with_b_frames", "[libopenshot][ffmpegwriter
 	avformat_close_input(&format_context);
 }
 
+TEST_CASE( "WriteFrameAt_preserves_sparse_video_timestamps", "[libopenshot][ffmpegwriter][fps]" )
+{
+	const std::string out_name = "WriteFrameAt_sparse_timestamps.mp4";
+	DummyReader reader(Fraction(30, 1), 1280, 720, 0, 0, 1.0f);
+	reader.Open();
+
+	FFmpegWriter writer(out_name);
+	writer.SetVideoOptions(true, "libx264", Fraction(30, 1), 1280, 720, Fraction(1, 1), false, false, 15000000);
+	writer.Open();
+	writer.WriteFrameAt(reader.GetFrame(1), 1);
+	writer.WriteFrameAt(reader.GetFrame(2), 2);
+	writer.WriteFrameAt(reader.GetFrame(3), 10);
+	writer.Close();
+	reader.Close();
+
+	AVFormatContext* format_context = nullptr;
+	REQUIRE(avformat_open_input(&format_context, out_name.c_str(), nullptr, nullptr) == 0);
+	REQUIRE(avformat_find_stream_info(format_context, nullptr) >= 0);
+	AVStream* stream = first_video_stream(format_context);
+	REQUIRE(stream != nullptr);
+
+	CHECK(stream->duration == av_rescale_q(10, av_make_q(1, 30), stream->time_base));
+
+	avformat_close_input(&format_context);
+}
+
 TEST_CASE( "SizeOrdering_x264_CRF", "[libopenshot][ffmpegwriter][filesize]" )
 {
 	std::stringstream path;

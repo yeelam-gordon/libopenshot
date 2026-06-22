@@ -497,6 +497,7 @@ bool AudioRecorder::PopBlock(AudioRecorderBlock& block)
 
 void AudioRecorder::WriterLoop()
 {
+	int64_t expected_next_sample = -1;
 	while (true) {
 		AudioRecorderBlock block;
 		if (!PopBlock(block)) {
@@ -523,10 +524,29 @@ void AudioRecorder::WriterLoop()
 		}
 
 		if (writer) {
+			while (expected_next_sample >= 0 && block.first_sample > expected_next_sample) {
+				const int64_t missing_samples = block.first_sample - expected_next_sample;
+				const int silence_samples = static_cast<int>(std::min<int64_t>(
+					missing_samples,
+					std::max(1, settings.buffer_size)));
+				AudioRecorderBlock silence_block;
+				silence_block.sample_rate = block.sample_rate;
+				silence_block.first_sample = expected_next_sample;
+				silence_block.channels.assign(
+					settings.channels,
+					std::vector<float>(silence_samples, 0.0f));
+				writer->WriteFrame(AudioRecordingFrameFactory::CreateFrame(
+					silence_block,
+					settings.channel_layout,
+					next_frame_number++));
+				expected_next_sample += silence_samples;
+			}
+
 			writer->WriteFrame(AudioRecordingFrameFactory::CreateFrame(
 				block,
 				settings.channel_layout,
 				next_frame_number++));
 		}
+		expected_next_sample = block.first_sample + block.Samples();
 	}
 }
