@@ -15,6 +15,7 @@
 
 #include "ReaderBase.h"
 
+#include <atomic>
 #include <map>
 #include <memory>
 #include <string>
@@ -114,6 +115,7 @@ namespace openshot
 		AVFrame* rgba_frame;
 		AVPacket* packet;
 		SwsContext* sws_context;
+		std::atomic<bool> close_requested;
 	};
 }
 

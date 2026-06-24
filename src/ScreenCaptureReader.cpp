@@ -62,6 +62,12 @@ namespace
 			return fallback;
 		}
 	}
+
+	int capture_interrupt_callback(void* opaque)
+	{
+		const auto* reader = static_cast<std::atomic<bool>*>(opaque);
+		return reader && reader->load() ? 1 : 0;
+	}
 }
 
 #if defined(HAVE_WAYLAND_CAPTURE)
@@ -83,6 +89,7 @@ ScreenCaptureReader::ScreenCaptureReader(const ScreenCaptureSettings& new_settin
 	, rgba_frame(nullptr)
 	, packet(nullptr)
 	, sws_context(nullptr)
+	, close_requested(false)
 {
 	if (settings.backend == SCREEN_CAPTURE_AUTO) {
 		settings.backend = DefaultBackend();
@@ -266,6 +273,7 @@ void ScreenCaptureReader::Open()
 	if (is_open) {
 		return;
 	}
+	close_requested = false;
 	OpenDevice();
 	OpenDecoder();
 	is_open = true;
@@ -279,6 +287,13 @@ void ScreenCaptureReader::OpenDevice()
 	if (!input_format) {
 		throw InvalidOptions("FFmpeg input device is not available: " + InputFormatName(), InputName());
 	}
+
+	format_context = avformat_alloc_context();
+	if (!format_context) {
+		throw OutOfMemory("Unable to allocate capture format context.", InputName());
+	}
+	format_context->interrupt_callback.callback = capture_interrupt_callback;
+	format_context->interrupt_callback.opaque = &close_requested;
 
 	AVDictionary* options = nullptr;
 	const bool use_device_defaults = settings.options.count("use_device_defaults") > 0;
@@ -487,6 +502,7 @@ std::shared_ptr<Frame> ScreenCaptureReader::DecodeNextFrame(int64_t number)
 
 void ScreenCaptureReader::Close()
 {
+	close_requested = true;
 	if (backend_reader) {
 		backend_reader->Close();
 	}
