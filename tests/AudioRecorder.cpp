@@ -12,6 +12,9 @@
 
 #include <cmath>
 #include <cstdio>
+#include <algorithm>
+#include <chrono>
+#include <future>
 #include <memory>
 #include <string>
 
@@ -147,4 +150,63 @@ TEST_CASE("Audio recorder frames write through FFmpegWriter", "[libopenshot][aud
 	CHECK(frame->GetAudioChannelsCount() == 1);
 	CHECK(frame->GetAudioSamplesCount() > 0);
 	reader.Close();
+}
+
+TEST_CASE("Audio recorder silent frames produce readable zero waveform", "[libopenshot][audiorecorder][ffmpegwriter][audiowaveformer]")
+{
+	const std::string path = "AudioRecorder-silent-output.wav";
+	std::remove(path.c_str());
+
+	const int sample_rate = 8000;
+	const int samples = sample_rate / 10;
+	std::vector<float> silence(samples, 0.0f);
+
+	FFmpegWriter writer(path);
+	writer.SetAudioOptions(true, "pcm_s16le", sample_rate, 1, LAYOUT_MONO, 128000);
+	writer.Open();
+	writer.WriteFrame(AudioRecordingFrameFactory::CreateFrame(MakeBlock(sample_rate, 0, silence), LAYOUT_MONO, 1));
+	writer.Close();
+
+	FFmpegReader reader(path);
+	reader.Open();
+	REQUIRE(reader.info.has_audio);
+	CHECK(reader.info.duration > 0.05f);
+
+	AudioWaveformer waveformer(&reader);
+	AudioWaveformData waveform = waveformer.ExtractSamples(-1, 20, true);
+
+	REQUIRE_FALSE(waveform.max_samples.empty());
+	CHECK(waveform.max_samples.size() == waveform.rms_samples.size());
+	CHECK(*std::max_element(waveform.max_samples.begin(), waveform.max_samples.end()) == Approx(0.0f));
+	CHECK(*std::max_element(waveform.rms_samples.begin(), waveform.rms_samples.end()) == Approx(0.0f));
+
+	reader.Close();
+	std::remove(path.c_str());
+}
+
+TEST_CASE("Audio recorder empty writer output has no waveform samples", "[libopenshot][audiorecorder][ffmpegwriter][audiowaveformer]")
+{
+	const std::string path = "AudioRecorder-empty-output.wav";
+	std::remove(path.c_str());
+
+	FFmpegWriter writer(path);
+	writer.SetAudioOptions(true, "pcm_s16le", 8000, 1, LAYOUT_MONO, 128000);
+	writer.Open();
+	writer.Close();
+
+	FFmpegReader reader(path);
+	reader.Open();
+
+	AudioWaveformer waveformer(&reader);
+	auto future_waveform = std::async(std::launch::async, [&]() {
+		return waveformer.ExtractSamples(-1, 20, true);
+	});
+
+	REQUIRE(future_waveform.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+	AudioWaveformData waveform = future_waveform.get();
+	CHECK(waveform.max_samples.empty());
+	CHECK(waveform.rms_samples.empty());
+
+	reader.Close();
+	std::remove(path.c_str());
 }

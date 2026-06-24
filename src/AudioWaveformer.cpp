@@ -329,6 +329,9 @@ AudioWaveformData AudioWaveformer::ExtractSamplesFromReader(ReaderBase* source_r
 			 (known_duration ? f <= reader_video_length && extracted_index < total_samples : f <= max_unknown_frames);
 			 f++) {
 			std::shared_ptr<openshot::Frame> frame = get_frame_with_retry(f);
+			if (!known_duration && frame && frame->number < f) {
+				break;
+			}
 			int sample_count = frame->GetAudioSamplesCount();
 			if (sample_count <= 0) {
 				if (!known_duration && extracted_index > 0 && ++empty_audio_frames >= 3) {

@@ -40,6 +40,15 @@ namespace
 	{
 		av_dict_set(options, key.c_str(), value.c_str(), 0);
 	}
+
+	bool option_enabled(const std::map<std::string, std::string>& options, const std::string& key)
+	{
+		const auto option = options.find(key);
+		if (option == options.end()) {
+			return false;
+		}
+		return option->second == "1" || option->second == "true" || option->second == "yes";
+	}
 }
 
 #if defined(HAVE_WAYLAND_CAPTURE)
@@ -260,9 +269,12 @@ void ScreenCaptureReader::OpenDevice()
 
 	AVDictionary* options = nullptr;
 	const bool use_device_defaults = settings.options.count("use_device_defaults") > 0;
-	if (!use_device_defaults) {
+	const bool post_capture_crop = option_enabled(settings.options, "crop_after_capture");
+	if (!use_device_defaults && !post_capture_crop) {
 		set_option(&options, "framerate", fraction_to_string(settings.fps));
 		set_option(&options, "video_size", std::to_string(settings.width) + "x" + std::to_string(settings.height));
+	} else if (post_capture_crop) {
+		set_option(&options, "framerate", fraction_to_string(settings.fps));
 	}
 	if (InputFormatName() == "x11grab") {
 		set_option(&options, "draw_mouse", settings.include_cursor ? "1" : "0");
@@ -276,7 +288,7 @@ void ScreenCaptureReader::OpenDevice()
 		set_option(&options, "capture_cursor", settings.include_cursor ? "1" : "0");
 	}
 	for (const auto& option : settings.options) {
-		if (option.first == "input_format_name" || option.first == "use_device_defaults") {
+		if (option.first == "input_format_name" || option.first == "use_device_defaults" || option.first == "crop_after_capture") {
 			continue;
 		}
 		set_option(&options, option.first, option.second);
@@ -318,6 +330,10 @@ void ScreenCaptureReader::OpenDecoder()
 
 	info.width = codec_context->width > 0 ? codec_context->width : settings.width;
 	info.height = codec_context->height > 0 ? codec_context->height : settings.height;
+	if (option_enabled(settings.options, "crop_after_capture")) {
+		info.width = settings.width;
+		info.height = settings.height;
+	}
 	info.video_stream_index = video_stream;
 	info.pixel_format = codec_context->pix_fmt;
 	info.display_ratio = Fraction(info.width, info.height);
@@ -417,8 +433,31 @@ std::shared_ptr<Frame> ScreenCaptureReader::DecodeNextFrame(int64_t number)
 			continue;
 		}
 
-		auto frame = std::make_shared<Frame>(number, width, height, "#000000");
-		frame->AddImage(width, height, bytes_per_pixel, QImage::Format_RGBA8888, buffer);
+		int output_width = width;
+		int output_height = height;
+		unsigned char* output_buffer = buffer;
+		if (option_enabled(settings.options, "crop_after_capture")) {
+			const int crop_x = std::max(0, std::min(settings.x, width - 1));
+			const int crop_y = std::max(0, std::min(settings.y, height - 1));
+			output_width = std::max(1, std::min(settings.width, width - crop_x));
+			output_height = std::max(1, std::min(settings.height, height - crop_y));
+			const size_t output_buffer_size = static_cast<size_t>(output_width) * output_height * bytes_per_pixel;
+			output_buffer = static_cast<unsigned char*>(aligned_malloc(output_buffer_size));
+			if (!output_buffer) {
+				openshot::aligned_free(buffer);
+				throw OutOfMemory("Unable to allocate cropped capture frame buffer.", InputName());
+			}
+			for (int row = 0; row < output_height; ++row) {
+				const unsigned char* source_row = buffer
+					+ (static_cast<size_t>(crop_y + row) * width + crop_x) * bytes_per_pixel;
+				unsigned char* dest_row = output_buffer + static_cast<size_t>(row) * output_width * bytes_per_pixel;
+				std::copy(source_row, source_row + static_cast<size_t>(output_width) * bytes_per_pixel, dest_row);
+			}
+			openshot::aligned_free(buffer);
+		}
+
+		auto frame = std::make_shared<Frame>(number, output_width, output_height, "#000000");
+		frame->AddImage(output_width, output_height, bytes_per_pixel, QImage::Format_RGBA8888, output_buffer);
 		frames_read++;
 		return frame;
 	}
