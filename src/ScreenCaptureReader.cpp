@@ -49,6 +49,19 @@ namespace
 		}
 		return option->second == "1" || option->second == "true" || option->second == "yes";
 	}
+
+	int option_int(const std::map<std::string, std::string>& options, const std::string& key, int fallback)
+	{
+		const auto option = options.find(key);
+		if (option == options.end()) {
+			return fallback;
+		}
+		try {
+			return std::stoi(option->second);
+		} catch (...) {
+			return fallback;
+		}
+	}
 }
 
 #if defined(HAVE_WAYLAND_CAPTURE)
@@ -274,7 +287,10 @@ void ScreenCaptureReader::OpenDevice()
 		set_option(&options, "framerate", fraction_to_string(settings.fps));
 		set_option(&options, "video_size", std::to_string(settings.width) + "x" + std::to_string(settings.height));
 	} else if (post_capture_crop) {
+		const int source_width = option_int(settings.options, "crop_source_width", settings.width);
+		const int source_height = option_int(settings.options, "crop_source_height", settings.height);
 		set_option(&options, "framerate", fraction_to_string(settings.fps));
+		set_option(&options, "video_size", std::to_string(source_width) + "x" + std::to_string(source_height));
 	}
 	if (InputFormatName() == "x11grab") {
 		set_option(&options, "draw_mouse", settings.include_cursor ? "1" : "0");
@@ -288,7 +304,11 @@ void ScreenCaptureReader::OpenDevice()
 		set_option(&options, "capture_cursor", settings.include_cursor ? "1" : "0");
 	}
 	for (const auto& option : settings.options) {
-		if (option.first == "input_format_name" || option.first == "use_device_defaults" || option.first == "crop_after_capture") {
+		if (option.first == "input_format_name"
+			|| option.first == "use_device_defaults"
+			|| option.first == "crop_after_capture"
+			|| option.first == "crop_source_width"
+			|| option.first == "crop_source_height") {
 			continue;
 		}
 		set_option(&options, option.first, option.second);
