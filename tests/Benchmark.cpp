@@ -116,6 +116,10 @@ extern "C" {
 #  include "effects/Caption.h"
 #  define OPENSHOT_HAS_CAPTION
 #endif
+#if __has_include("effects/Timer.h")
+#  include "effects/Timer.h"
+#  define OPENSHOT_HAS_TIMER
+#endif
 #if __has_include("effects/Displace.h")
 #  include "effects/Displace.h"
 #  define OPENSHOT_HAS_DISPLACE
@@ -696,6 +700,29 @@ int main(int argc, char* argv[]) {
                   "00:00:10.000 --> 00:00:15.000\nThis is a test caption.\n\n"
                   "00:00:15.000 --> 00:00:20.000\nSecond caption line.");
         clip.AddEffect(&c);
+        TrialResult result = timed_read(clip);
+        clip.Close();
+        r.Close();
+        return result;
+    });
+    }  // headless guard
+#endif
+
+#ifdef OPENSHOT_HAS_TIMER
+    {
+        const char* qt_platform = std::getenv("QT_QPA_PLATFORM");
+        const bool headless = qt_platform && std::string(qt_platform) == "offscreen";
+        if (!headless)
+    trials.emplace_back("Effect_Timer", [&]() -> TrialResult {
+        FFmpegReader r(video);
+        r.Open();
+        Clip clip(&r);
+        clip.Open();
+        Timer timer;
+        timer.mode = TIMER_MODE_COUNT_UP;
+        timer.format = TIMER_FORMAT_HH_MM_SS_MILLISECONDS;
+        timer.prefix = "T ";
+        clip.AddEffect(&timer);
         TrialResult result = timed_read(clip);
         clip.Close();
         r.Close();

@@ -76,6 +76,7 @@ set(OPENSHOT_TESTS
   Sharpen
   Shadow
   SphericalEffect
+  Timer
   DenoiseImage
   WaveEffect
 )
@@ -150,7 +151,7 @@ foreach(tname ${OPENSHOT_TESTS})
   set(test_properties
     LABELS ${tname}
   )
-  if(tname STREQUAL "Caption")
+  if(tname STREQUAL "Caption" OR tname STREQUAL "Timer")
     list(APPEND test_properties
       ENVIRONMENT "QT_QPA_PLATFORM=minimal"
     )

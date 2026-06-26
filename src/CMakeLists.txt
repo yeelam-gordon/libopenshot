@@ -156,6 +156,7 @@ set(EFFECTS_SOURCES
   effects/Shadow.cpp
   effects/Shift.cpp
   effects/SphericalProjection.cpp
+  effects/Timer.cpp
   effects/DenoiseImage.cpp
   effects/Wave.cpp
   audio_effects/STFT.cpp
