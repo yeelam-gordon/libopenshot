@@ -13,8 +13,11 @@
 #include "ScreenCaptureReader.h"
 
 #include <algorithm>
+#include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <sstream>
+#include <thread>
 
 extern "C" {
 	#include <libavdevice/avdevice.h>
@@ -67,6 +70,62 @@ namespace
 	{
 		const auto* reader = static_cast<std::atomic<bool>*>(opaque);
 		return reader && reader->load() ? 1 : 0;
+	}
+
+	std::string avfoundation_video_name(const std::string& input_name)
+	{
+		const size_t separator = input_name.find(':');
+		return separator == std::string::npos ? input_name : input_name.substr(0, separator);
+	}
+
+	std::string avfoundation_audio_name(const std::string& input_name)
+	{
+		const size_t separator = input_name.find(':');
+		return separator == std::string::npos ? "none" : input_name.substr(separator + 1);
+	}
+
+	bool resolve_avfoundation_video_index(
+		AVInputFormat* input_format,
+		const std::string& video_name,
+		std::string& video_index)
+	{
+		const auto is_digit = [](unsigned char value) {
+			return std::isdigit(value) != 0;
+		};
+		if (video_name.empty()
+			|| video_name == "default"
+			|| video_name == "none"
+			|| std::all_of(video_name.begin(), video_name.end(), is_digit)) {
+			return false;
+		}
+
+		AVDeviceInfoList* device_list = nullptr;
+		const int result = avdevice_list_input_sources(input_format, nullptr, nullptr, &device_list);
+		if (result < 0 || !device_list) {
+			avdevice_free_list_devices(&device_list);
+			return false;
+		}
+
+		bool found = false;
+		for (int index = 0; index < device_list->nb_devices; ++index) {
+			const AVDeviceInfo* device = device_list->devices[index];
+			if (!device || !device->device_name) {
+				continue;
+			}
+			const std::string name = device->device_name;
+			const std::string description = device->device_description
+				? device->device_description
+				: device->device_name;
+			if (video_name == name || video_name == description) {
+				video_index = std::all_of(name.begin(), name.end(), is_digit)
+					? name
+					: std::to_string(index);
+				found = true;
+				break;
+			}
+		}
+		avdevice_free_list_devices(&device_list);
+		return found;
 	}
 }
 
@@ -284,13 +343,14 @@ void ScreenCaptureReader::OpenDevice()
 	avdevice_register_all();
 
 	AVInputFormat* input_format = const_cast<AVInputFormat*>(av_find_input_format(InputFormatName().c_str()));
+	std::string input_name = InputName();
 	if (!input_format) {
-		throw InvalidOptions("FFmpeg input device is not available: " + InputFormatName(), InputName());
+		throw InvalidOptions("FFmpeg input device is not available: " + InputFormatName(), input_name);
 	}
 
 	format_context = avformat_alloc_context();
 	if (!format_context) {
-		throw OutOfMemory("Unable to allocate capture format context.", InputName());
+		throw OutOfMemory("Unable to allocate capture format context.", input_name);
 	}
 	format_context->interrupt_callback.callback = capture_interrupt_callback;
 	format_context->interrupt_callback.opaque = &close_requested;
@@ -317,6 +377,11 @@ void ScreenCaptureReader::OpenDevice()
 		set_option(&options, "offset_y", std::to_string(settings.y));
 	} else if (InputFormatName() == "avfoundation") {
 		set_option(&options, "capture_cursor", settings.include_cursor ? "1" : "0");
+		std::string video_index;
+		if (resolve_avfoundation_video_index(input_format, avfoundation_video_name(input_name), video_index)) {
+			set_option(&options, "video_device_index", video_index);
+			input_name = ":" + avfoundation_audio_name(input_name);
+		}
 	}
 	for (const auto& option : settings.options) {
 		if (option.first == "input_format_name"
@@ -329,10 +394,10 @@ void ScreenCaptureReader::OpenDevice()
 		set_option(&options, option.first, option.second);
 	}
 
-	const int result = avformat_open_input(&format_context, InputName().c_str(), input_format, &options);
+	const int result = avformat_open_input(&format_context, input_name.c_str(), input_format, &options);
 	av_dict_free(&options);
 	if (result < 0) {
-		throw InvalidFile("Unable to open screen capture input: " + std::string(av_err2str(result)), InputName());
+		throw InvalidFile("Unable to open screen capture input: " + std::string(av_err2str(result)), input_name);
 	}
 }
 
@@ -411,7 +476,19 @@ std::shared_ptr<Frame> ScreenCaptureReader::GetFrame(int64_t number)
 
 std::shared_ptr<Frame> ScreenCaptureReader::DecodeNextFrame(int64_t number)
 {
-	while (av_read_frame(format_context, packet) >= 0) {
+	while (!close_requested) {
+		const int read_result = av_read_frame(format_context, packet);
+		if (read_result == AVERROR(EAGAIN)) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+			continue;
+		}
+		if (read_result < 0) {
+			const std::string message = frames_read > 0
+				? "Capture input ended after " + std::to_string(frames_read) + " frame(s): "
+				: "Capture input ended before a frame could be read: ";
+			throw InvalidFile(message + std::string(av_err2str(read_result)), InputName());
+		}
+
 		if (packet->stream_index != video_stream) {
 			av_packet_unref(packet);
 			dropped_packets++;
@@ -497,7 +574,7 @@ std::shared_ptr<Frame> ScreenCaptureReader::DecodeNextFrame(int64_t number)
 		return frame;
 	}
 
-	throw InvalidFile("Capture input ended before a frame could be read.", InputName());
+	throw ReaderClosed("The ScreenCaptureReader was closed.");
 }
 
 void ScreenCaptureReader::Close()
