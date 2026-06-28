@@ -16,6 +16,7 @@
 #include <cctype>
 #include <chrono>
 #include <cstdlib>
+#include <limits>
 #include <sstream>
 #include <thread>
 
@@ -495,6 +496,7 @@ std::shared_ptr<Frame> ScreenCaptureReader::DecodeNextFrame(int64_t number)
 			continue;
 		}
 
+		const int64_t packet_timestamp = packet->pts != AV_NOPTS_VALUE ? packet->pts : packet->dts;
 		const int send_result = avcodec_send_packet(codec_context, packet);
 		av_packet_unref(packet);
 		if (send_result < 0) {
@@ -507,6 +509,19 @@ std::shared_ptr<Frame> ScreenCaptureReader::DecodeNextFrame(int64_t number)
 		}
 		if (receive_result < 0) {
 			throw InvalidFile("Unable to decode capture frame: " + std::string(av_err2str(receive_result)), InputName());
+		}
+
+		const AVStream* stream = format_context->streams[video_stream];
+		int64_t frame_timestamp = source_frame->best_effort_timestamp;
+		if (frame_timestamp == AV_NOPTS_VALUE) {
+			frame_timestamp = source_frame->pts;
+		}
+		if (frame_timestamp == AV_NOPTS_VALUE) {
+			frame_timestamp = packet_timestamp;
+		}
+		double capture_timestamp = std::numeric_limits<double>::quiet_NaN();
+		if (frame_timestamp != AV_NOPTS_VALUE && stream) {
+			capture_timestamp = static_cast<double>(frame_timestamp) * av_q2d(stream->time_base);
 		}
 
 		const int width = source_frame->width > 0 ? source_frame->width : info.width;
@@ -569,6 +584,7 @@ std::shared_ptr<Frame> ScreenCaptureReader::DecodeNextFrame(int64_t number)
 		}
 
 		auto frame = std::make_shared<Frame>(number, output_width, output_height, "#000000");
+		frame->capture_timestamp = capture_timestamp;
 		frame->AddImage(output_width, output_height, bytes_per_pixel, QImage::Format_RGBA8888, output_buffer);
 		frames_read++;
 		return frame;
