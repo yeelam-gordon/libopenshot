@@ -193,6 +193,8 @@ TEST_CASE( "default constructor", "[libopenshot][clip]" )
 	CHECK(c1.Position() == Approx(0.0f).margin(0.00001));
 	CHECK(c1.Start() == Approx(0.0f).margin(0.00001));
 	CHECK(c1.End() == Approx(0.0f).margin(0.00001));
+	CHECK(c1.margin.GetValue(1) == Approx(0.0f).margin(0.00001));
+	CHECK(c1.corner_radius.GetValue(1) == Approx(0.0f).margin(0.00001));
 }
 
 TEST_CASE( "path string constructor", "[libopenshot][clip]" )
@@ -295,6 +297,8 @@ TEST_CASE( "properties", "[libopenshot][clip]" )
 	// Check for specific things
 	CHECK(root["alpha"]["value"].asDouble() == Approx(1.0f).margin(0.01));
 	CHECK(root["alpha"]["keyframe"].asBool() == true);
+	CHECK(root["margin"]["value"].asDouble() == Approx(0.0f).margin(0.00001));
+	CHECK(root["corner_radius"]["value"].asDouble() == Approx(0.0f).margin(0.00001));
 
 	// Get properties JSON string at frame 250
 	properties = c1.PropertiesJSON(250);
@@ -419,6 +423,8 @@ TEST_CASE( "SetJsonValue restores defaults for empty core transform keyframes", 
 	clip.origin_x = Keyframe(0.2);
 	clip.origin_y = Keyframe(0.8);
 	clip.rotation = Keyframe(45.0);
+	clip.margin = Keyframe(0.2);
+	clip.corner_radius = Keyframe(0.3);
 
 	Json::Value root = clip.JsonValue();
 	root["scale_x"]["Points"] = Json::Value(Json::arrayValue);
@@ -428,6 +434,8 @@ TEST_CASE( "SetJsonValue restores defaults for empty core transform keyframes", 
 	root["origin_x"]["Points"] = Json::Value(Json::arrayValue);
 	root["origin_y"]["Points"] = Json::Value(Json::arrayValue);
 	root["rotation"]["Points"] = Json::Value(Json::arrayValue);
+	root["margin"]["Points"] = Json::Value(Json::arrayValue);
+	root["corner_radius"]["Points"] = Json::Value(Json::arrayValue);
 
 	clip.SetJsonValue(root);
 
@@ -438,6 +446,8 @@ TEST_CASE( "SetJsonValue restores defaults for empty core transform keyframes", 
 	REQUIRE(clip.origin_x.GetCount() == 1);
 	REQUIRE(clip.origin_y.GetCount() == 1);
 	REQUIRE(clip.rotation.GetCount() == 1);
+	REQUIRE(clip.margin.GetCount() == 1);
+	REQUIRE(clip.corner_radius.GetCount() == 1);
 
 	CHECK(clip.scale_x.GetValue(1) == Approx(1.0).margin(0.00001));
 	CHECK(clip.scale_y.GetValue(1) == Approx(1.0).margin(0.00001));
@@ -446,6 +456,24 @@ TEST_CASE( "SetJsonValue restores defaults for empty core transform keyframes", 
 	CHECK(clip.origin_x.GetValue(1) == Approx(0.5).margin(0.00001));
 	CHECK(clip.origin_y.GetValue(1) == Approx(0.5).margin(0.00001));
 	CHECK(clip.rotation.GetValue(1) == Approx(0.0).margin(0.00001));
+	CHECK(clip.margin.GetValue(1) == Approx(0.0).margin(0.00001));
+	CHECK(clip.corner_radius.GetValue(1) == Approx(0.0).margin(0.00001));
+}
+
+TEST_CASE("Clip JSON stores margin and corner radius", "[libopenshot][clip][json]")
+{
+	Clip clip;
+	clip.margin = Keyframe(0.04);
+	clip.corner_radius = Keyframe(0.25);
+
+	Json::Value json = clip.JsonValue();
+	REQUIRE_FALSE(json["margin"].isNull());
+	REQUIRE_FALSE(json["corner_radius"].isNull());
+
+	Clip loaded;
+	loaded.SetJsonValue(json);
+	CHECK(loaded.margin.GetValue(1) == Approx(0.04).margin(0.00001));
+	CHECK(loaded.corner_radius.GetValue(1) == Approx(0.25).margin(0.00001));
 }
 
 TEST_CASE( "waveform mode serializes and exposes visualization choices", "[libopenshot][clip][json]" )
@@ -1475,6 +1503,101 @@ TEST_CASE("clip_location_uses_distance_from_gravity_anchor_to_offscreen_edge", "
 	CHECK(negative.top() == 0);
 	CHECK(negative.width() == Approx((anchor_x + expected_w) * 0.5).margin(2.0));
 	CHECK(negative.height() == Approx((anchor_y + expected_h) * 0.5).margin(2.0));
+}
+
+TEST_CASE("clip_margin_insets_edge_gravity", "[libopenshot][clip][transform]")
+{
+	const int source_w = 40;
+	const int source_h = 30;
+	const int canvas_w = 160;
+	const int canvas_h = 90;
+
+	openshot::CacheMemory cache;
+	auto src = std::make_shared<openshot::Frame>(1, source_w, source_h, "#00000000", 0, 2);
+	src->AddColor(QColor(Qt::red));
+	cache.Add(src);
+
+	openshot::DummyReader dummy(openshot::Fraction(30, 1), source_w, source_h, 44100, 2, 1.0, &cache);
+	dummy.Open();
+
+	openshot::Clip clip;
+	clip.Reader(&dummy);
+	clip.Open();
+	clip.display = openshot::FRAME_DISPLAY_NONE;
+	clip.scale = openshot::SCALE_NONE;
+	clip.gravity = openshot::GRAVITY_BOTTOM_RIGHT;
+	clip.margin = openshot::Keyframe(0.1);
+
+	QRect bounds = render_clip_bounds(clip, canvas_w, canvas_h);
+	REQUIRE_FALSE(bounds.isNull());
+	const int expected_margin = 9;
+	CHECK(bounds.left() == Approx(canvas_w - source_w - expected_margin).margin(1.0));
+	CHECK(bounds.top() == Approx(canvas_h - source_h - expected_margin).margin(1.0));
+	CHECK(bounds.width() == Approx(source_w).margin(1.0));
+	CHECK(bounds.height() == Approx(source_h).margin(1.0));
+}
+
+TEST_CASE("clip_margin_reduces_scale_layout_area", "[libopenshot][clip][transform]")
+{
+	const int source_w = 160;
+	const int source_h = 90;
+	const int canvas_w = 160;
+	const int canvas_h = 90;
+
+	openshot::CacheMemory cache;
+	auto src = std::make_shared<openshot::Frame>(1, source_w, source_h, "#00000000", 0, 2);
+	src->AddColor(QColor(Qt::red));
+	cache.Add(src);
+
+	openshot::DummyReader dummy(openshot::Fraction(30, 1), source_w, source_h, 44100, 2, 1.0, &cache);
+	dummy.Open();
+
+	openshot::Clip clip;
+	clip.Reader(&dummy);
+	clip.Open();
+	clip.display = openshot::FRAME_DISPLAY_NONE;
+	clip.scale = openshot::SCALE_FIT;
+	clip.gravity = openshot::GRAVITY_CENTER;
+	clip.margin = openshot::Keyframe(0.1);
+
+	QRect bounds = render_clip_bounds(clip, canvas_w, canvas_h);
+	REQUIRE_FALSE(bounds.isNull());
+	CHECK(bounds.left() == Approx(16).margin(1.0));
+	CHECK(bounds.top() == Approx(9).margin(1.0));
+	CHECK(bounds.width() == Approx(128).margin(3.0));
+	CHECK(bounds.height() == Approx(72).margin(3.0));
+}
+
+TEST_CASE("clip_corner_radius_clips_source_alpha", "[libopenshot][clip][transform]")
+{
+	const int source_w = 40;
+	const int source_h = 40;
+
+	openshot::CacheMemory cache;
+	auto src = std::make_shared<openshot::Frame>(1, source_w, source_h, "#00000000", 0, 2);
+	src->AddColor(QColor(Qt::red));
+	cache.Add(src);
+
+	openshot::DummyReader dummy(openshot::Fraction(30, 1), source_w, source_h, 44100, 2, 1.0, &cache);
+	dummy.Open();
+
+	openshot::Clip clip;
+	clip.Reader(&dummy);
+	clip.Open();
+	clip.display = openshot::FRAME_DISPLAY_NONE;
+	clip.scale = openshot::SCALE_NONE;
+	clip.gravity = openshot::GRAVITY_TOP_LEFT;
+	clip.corner_radius = openshot::Keyframe(0.5);
+
+	auto frame = clip.GetFrame(1);
+	auto image = frame->GetImage();
+	REQUIRE(image);
+
+	CHECK(image->pixelColor(0, 0).alpha() == 0);
+	CHECK(image->pixelColor(source_w - 1, 0).alpha() == 0);
+	CHECK(image->pixelColor(0, source_h - 1).alpha() == 0);
+	CHECK(image->pixelColor(source_w / 2, source_h / 2).red() > 200);
+	CHECK(image->pixelColor(source_w / 2, source_h / 2).alpha() > 200);
 }
 
 TEST_CASE( "transform_path_identity_vs_scaled", "[libopenshot][clip][pr]" )

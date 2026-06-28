@@ -413,6 +413,8 @@ int main(int argc, char* argv[]) {
         overlay2.End(video_clip.Reader()->info.duration);
         overlay2.Open();
         overlay2.rotation.AddPoint(1, 90.0);
+        overlay2.margin = Keyframe(0.03);
+        overlay2.corner_radius = Keyframe(0.2);
         t.AddClip(&video_clip);
         t.AddClip(&overlay1);
         t.AddClip(&overlay2);
