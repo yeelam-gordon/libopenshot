@@ -108,11 +108,11 @@ TEST_CASE( "Capture_Timestamp_Copies", "[libopenshot][frame]" )
 	f1.capture_timestamp = 12.345;
 
 	openshot::Frame f2(f1);
-	CHECK(f2.capture_timestamp == Catch::Approx(12.345));
+	CHECK(f2.capture_timestamp == Approx(12.345));
 
 	openshot::Frame f3;
 	f3.DeepCopy(f1);
-	CHECK(f3.capture_timestamp == Catch::Approx(12.345));
+	CHECK(f3.capture_timestamp == Approx(12.345));
 }
 
 
