@@ -104,6 +104,66 @@ TEST_CASE("Screen capture reader reports configured video info", "[libopenshot][
 #endif
 }
 
+TEST_CASE("Screen capture system audio settings follow backend capability", "[libopenshot][screencapturereader][audio]")
+{
+	ScreenCaptureSettings settings;
+#if defined(__linux__)
+	settings.backend = SCREEN_CAPTURE_X11;
+	settings.display = ":99.0";
+#elif defined(_WIN32)
+	settings.backend = SCREEN_CAPTURE_WINDOWS_GDI;
+	settings.display = "desktop";
+#elif defined(__APPLE__)
+	settings.backend = SCREEN_CAPTURE_MAC_AVFOUNDATION;
+	settings.display = "Capture screen 0:none";
+#else
+	return;
+#endif
+	settings.width = 640;
+	settings.height = 360;
+	settings.capture_audio = true;
+	settings.audio_device = "test-output";
+	settings.audio_sample_rate = 48000;
+	settings.audio_channels = 2;
+
+	if (ScreenCaptureReader::IsSystemAudioSupported(settings.backend)) {
+		ScreenCaptureReader reader(settings);
+		CHECK(reader.info.has_audio);
+		CHECK(reader.info.sample_rate == 48000);
+		CHECK(reader.info.channels == 2);
+		CHECK(reader.info.channel_layout == LAYOUT_STEREO);
+		const Json::Value json = reader.JsonValue();
+		CHECK(json["capture_audio"].asBool());
+		CHECK(json["audio_device"].asString() == "test-output");
+		CHECK(json["audio_sample_rate"].asInt() == 48000);
+		CHECK(json["audio_channels"].asInt() == 2);
+	} else {
+		CHECK_THROWS_AS([&settings]() { ScreenCaptureReader reader(settings); }(), InvalidOptions);
+	}
+}
+
+TEST_CASE("Screen capture rejects invalid system audio formats", "[libopenshot][screencapturereader][audio]")
+{
+	ScreenCaptureSettings settings;
+#if defined(__linux__)
+	settings.backend = SCREEN_CAPTURE_X11;
+	settings.display = ":99.0";
+#elif defined(_WIN32)
+	settings.backend = SCREEN_CAPTURE_WINDOWS_GDI;
+	settings.display = "desktop";
+#elif defined(__APPLE__)
+	settings.backend = SCREEN_CAPTURE_MAC_AVFOUNDATION;
+	settings.display = "Capture screen 0:none";
+#else
+	return;
+#endif
+	settings.audio_sample_rate = 7999;
+	CHECK_THROWS_AS([&settings]() { ScreenCaptureReader reader(settings); }(), InvalidSampleRate);
+	settings.audio_sample_rate = 48000;
+	settings.audio_channels = 3;
+	CHECK_THROWS_AS([&settings]() { ScreenCaptureReader reader(settings); }(), InvalidChannels);
+}
+
 TEST_CASE("Screen capture backend support follows platform build features", "[libopenshot][screencapturereader]")
 {
 #if defined(__linux__)

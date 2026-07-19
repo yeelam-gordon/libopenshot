@@ -15,21 +15,424 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
+#include <deque>
 #include <limits>
+#include <mutex>
 #include <sstream>
 #include <thread>
+#include <vector>
 
 extern "C" {
 	#include <libavdevice/avdevice.h>
 	#include <libavutil/imgutils.h>
 }
 
+#if defined(_WIN32)
+	#include <audioclient.h>
+	#include <mmdeviceapi.h>
+#endif
+
 #include "Exceptions.h"
 #include "Frame.h"
 #include "QtUtilities.h"
 
 using namespace openshot;
+
+#if defined(__linux__)
+class ScreenCaptureReader::SystemAudioCapture
+{
+public:
+	explicit SystemAudioCapture(const ScreenCaptureSettings& new_settings)
+		: settings(new_settings) {}
+
+	~SystemAudioCapture() { Close(); }
+
+	void Open()
+	{
+		if (format_context) return;
+		avdevice_register_all();
+		AVInputFormat* input_format = const_cast<AVInputFormat*>(av_find_input_format("pulse"));
+		if (!input_format) {
+			throw InvalidOptions("FFmpeg PulseAudio input is unavailable for system audio capture.");
+		}
+
+		format_context = avformat_alloc_context();
+		if (!format_context) {
+			throw OutOfMemory("Unable to allocate system audio capture context.");
+		}
+		format_context->interrupt_callback.callback = InterruptCallback;
+		format_context->interrupt_callback.opaque = &close_requested;
+
+		AVDictionary* options = nullptr;
+		av_dict_set(&options, "sample_rate", std::to_string(settings.audio_sample_rate).c_str(), 0);
+		av_dict_set(&options, "channels", std::to_string(settings.audio_channels).c_str(), 0);
+		const std::string device = settings.audio_device.empty() ? "@DEFAULT_MONITOR@" : settings.audio_device;
+		const int open_result = avformat_open_input(&format_context, device.c_str(), input_format, &options);
+		av_dict_free(&options);
+		if (open_result < 0) {
+			throw InvalidFile("Unable to open system audio capture input: " + std::string(av_err2str(open_result)), device);
+		}
+		if (avformat_find_stream_info(format_context, nullptr) < 0) {
+			throw InvalidFile("Unable to read system audio capture stream information.", device);
+		}
+		for (unsigned int index = 0; index < format_context->nb_streams; ++index) {
+			if (format_context->streams[index]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+				audio_stream = static_cast<int>(index);
+				break;
+			}
+		}
+		if (audio_stream < 0) {
+			throw InvalidFile("No audio stream found in system audio capture input.", device);
+		}
+		AVStream* stream = format_context->streams[audio_stream];
+		const AVCodec* codec = avcodec_find_decoder(stream->codecpar->codec_id);
+		codec_context = codec ? ffmpeg_get_codec_context(stream, codec) : nullptr;
+		if (!codec_context || avcodec_open2(codec_context, codec, nullptr) < 0) {
+			throw InvalidCodec("Unable to open system audio capture decoder.", device);
+		}
+		packet = av_packet_alloc();
+		decoded_frame = av_frame_alloc();
+		if (!packet || !decoded_frame) {
+			throw OutOfMemory("Unable to allocate system audio capture buffers.");
+		}
+		settings.audio_sample_rate = codec_context->sample_rate > 0
+			? codec_context->sample_rate : settings.audio_sample_rate;
+		channels.assign(settings.audio_channels, {});
+		close_requested = false;
+		worker = std::thread(&SystemAudioCapture::CaptureLoop, this);
+	}
+
+	void Close()
+	{
+		close_requested = true;
+		ready.notify_all();
+		if (worker.joinable()) {
+			worker.join();
+		}
+		if (decoded_frame) av_frame_free(&decoded_frame);
+		if (packet) av_packet_free(&packet);
+		if (codec_context) avcodec_free_context(&codec_context);
+		if (format_context) avformat_close_input(&format_context);
+	}
+
+	void AddFrameAudio(const std::shared_ptr<Frame>& frame, int64_t number, const Fraction& fps)
+	{
+		int sample_count = 0;
+		for (int64_t frame_number = last_output_frame + 1; frame_number <= number; ++frame_number) {
+			sample_count += Frame::GetSamplesPerFrame(
+				frame_number, fps, settings.audio_sample_rate, settings.audio_channels);
+		}
+		last_output_frame = std::max(last_output_frame, number);
+		if (!frame || sample_count <= 0) return;
+
+		std::unique_lock<std::mutex> lock(queue_mutex);
+		ready.wait_for(lock, std::chrono::milliseconds(100), [this, sample_count]() {
+			return close_requested || (!channels.empty() && static_cast<int>(channels[0].size()) >= sample_count);
+		});
+		frame->SampleRate(settings.audio_sample_rate);
+		frame->ChannelsLayout(settings.audio_channels == 1 ? LAYOUT_MONO : LAYOUT_STEREO);
+		for (int channel = 0; channel < settings.audio_channels; ++channel) {
+			std::vector<float> samples(sample_count, 0.0f);
+			if (channel < static_cast<int>(channels.size())) {
+				const int available = std::min(sample_count, static_cast<int>(channels[channel].size()));
+				for (int index = 0; index < available; ++index) {
+					samples[index] = channels[channel].front();
+					channels[channel].pop_front();
+				}
+			}
+			frame->AddAudio(true, channel, 0, samples.data(), sample_count, 1.0f);
+		}
+	}
+
+	void Reset()
+	{
+		std::lock_guard<std::mutex> lock(queue_mutex);
+		for (auto& channel : channels) channel.clear();
+		last_output_frame = 0;
+	}
+
+	int SampleRate() const { return settings.audio_sample_rate; }
+	int Channels() const { return settings.audio_channels; }
+
+private:
+	static int InterruptCallback(void* opaque)
+	{
+		const auto* requested = static_cast<std::atomic<bool>*>(opaque);
+		return requested && requested->load() ? 1 : 0;
+	}
+
+	float SampleAt(const AVFrame* frame, int channel, int sample) const
+	{
+		const AVSampleFormat format = static_cast<AVSampleFormat>(frame->format);
+		const bool planar = av_sample_fmt_is_planar(format) != 0;
+		const int source_channels = std::max(1,
+#if HAVE_CH_LAYOUT
+			codec_context->ch_layout.nb_channels
+#else
+			codec_context->channels
+#endif
+		);
+		const int source_channel = std::min(channel, source_channels - 1);
+		const uint8_t* data = planar ? frame->extended_data[source_channel] : frame->extended_data[0];
+		const int offset = planar ? sample : sample * source_channels + source_channel;
+		switch (format) {
+		case AV_SAMPLE_FMT_U8: case AV_SAMPLE_FMT_U8P:
+			return (static_cast<const uint8_t*>(static_cast<const void*>(data))[offset] - 128) / 128.0f;
+		case AV_SAMPLE_FMT_S16: case AV_SAMPLE_FMT_S16P:
+			return static_cast<const int16_t*>(static_cast<const void*>(data))[offset] / 32768.0f;
+		case AV_SAMPLE_FMT_S32: case AV_SAMPLE_FMT_S32P:
+			return static_cast<float>(static_cast<const int32_t*>(static_cast<const void*>(data))[offset] / 2147483648.0);
+		case AV_SAMPLE_FMT_FLT: case AV_SAMPLE_FMT_FLTP:
+			return static_cast<const float*>(static_cast<const void*>(data))[offset];
+		case AV_SAMPLE_FMT_DBL: case AV_SAMPLE_FMT_DBLP:
+			return static_cast<float>(static_cast<const double*>(static_cast<const void*>(data))[offset]);
+		default:
+			return 0.0f;
+		}
+	}
+
+	void CaptureLoop()
+	{
+		while (!close_requested) {
+			const int read_result = av_read_frame(format_context, packet);
+			if (read_result == AVERROR(EAGAIN)) continue;
+			if (read_result < 0) break;
+			if (packet->stream_index != audio_stream) {
+				av_packet_unref(packet);
+				continue;
+			}
+			const int send_result = avcodec_send_packet(codec_context, packet);
+			av_packet_unref(packet);
+			if (send_result < 0) continue;
+			while (avcodec_receive_frame(codec_context, decoded_frame) == 0) {
+				std::lock_guard<std::mutex> lock(queue_mutex);
+				for (int channel = 0; channel < settings.audio_channels; ++channel) {
+					const size_t max_samples = static_cast<size_t>(settings.audio_sample_rate) * 10;
+					for (int sample = 0; sample < decoded_frame->nb_samples; ++sample) {
+						if (channels[channel].size() >= max_samples) channels[channel].pop_front();
+						channels[channel].push_back(SampleAt(decoded_frame, channel, sample));
+					}
+				}
+				av_frame_unref(decoded_frame);
+				ready.notify_all();
+			}
+		}
+	}
+
+	ScreenCaptureSettings settings;
+	AVFormatContext* format_context = nullptr;
+	AVCodecContext* codec_context = nullptr;
+	AVPacket* packet = nullptr;
+	AVFrame* decoded_frame = nullptr;
+	int audio_stream = -1;
+	std::atomic<bool> close_requested { false };
+	std::thread worker;
+	std::mutex queue_mutex;
+	std::condition_variable ready;
+	std::vector<std::deque<float>> channels;
+	int64_t last_output_frame = 0;
+};
+#elif defined(_WIN32)
+class ScreenCaptureReader::SystemAudioCapture
+{
+public:
+	explicit SystemAudioCapture(const ScreenCaptureSettings& new_settings)
+		: settings(new_settings) {}
+
+	~SystemAudioCapture() { Close(); }
+
+	void Open()
+	{
+		if (worker.joinable()) return;
+		close_requested = false;
+		worker = std::thread(&SystemAudioCapture::CaptureLoop, this);
+		std::unique_lock<std::mutex> lock(state_mutex);
+		state_ready.wait_for(lock, std::chrono::seconds(5), [this]() { return opened || failed; });
+		if (!opened) {
+			close_requested = true;
+			lock.unlock();
+			if (worker.joinable()) worker.join();
+			throw InvalidOptions(error.empty() ? "Unable to open WASAPI system audio loopback capture." : error);
+		}
+	}
+
+	void Close()
+	{
+		close_requested = true;
+		ready.notify_all();
+		if (worker.joinable()) worker.join();
+		opened = false;
+	}
+
+	void AddFrameAudio(const std::shared_ptr<Frame>& frame, int64_t number, const Fraction& fps)
+	{
+		int sample_count = 0;
+		for (int64_t frame_number = last_output_frame + 1; frame_number <= number; ++frame_number) {
+			sample_count += Frame::GetSamplesPerFrame(frame_number, fps, sample_rate, channel_count);
+		}
+		last_output_frame = std::max(last_output_frame, number);
+		if (!frame || sample_count <= 0) return;
+		std::unique_lock<std::mutex> lock(queue_mutex);
+		ready.wait_for(lock, std::chrono::milliseconds(100), [this, sample_count]() {
+			return close_requested || (!channels.empty() && static_cast<int>(channels[0].size()) >= sample_count);
+		});
+		frame->SampleRate(sample_rate);
+		frame->ChannelsLayout(channel_count == 1 ? LAYOUT_MONO : LAYOUT_STEREO);
+		for (int channel = 0; channel < channel_count; ++channel) {
+			std::vector<float> samples(sample_count, 0.0f);
+			const int available = std::min(sample_count, static_cast<int>(channels[channel].size()));
+			for (int index = 0; index < available; ++index) {
+				samples[index] = channels[channel].front();
+				channels[channel].pop_front();
+			}
+			frame->AddAudio(true, channel, 0, samples.data(), sample_count, 1.0f);
+		}
+	}
+
+	void Reset()
+	{
+		std::lock_guard<std::mutex> lock(queue_mutex);
+		for (auto& channel : channels) channel.clear();
+		last_output_frame = 0;
+	}
+
+	int SampleRate() const { return sample_rate; }
+	int Channels() const { return channel_count; }
+
+private:
+	template <typename T> static void Release(T*& value)
+	{
+		if (value) { value->Release(); value = nullptr; }
+	}
+
+	void Fail(const std::string& message)
+	{
+		std::lock_guard<std::mutex> lock(state_mutex);
+		error = message;
+		failed = true;
+		state_ready.notify_all();
+	}
+
+	void CaptureLoop()
+	{
+		IMMDeviceEnumerator* enumerator = nullptr;
+		IMMDevice* device = nullptr;
+		IAudioClient* client = nullptr;
+		IAudioCaptureClient* capture = nullptr;
+		WAVEFORMATEX* format = nullptr;
+		const HRESULT com_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+		const bool uninitialize_com = SUCCEEDED(com_result);
+		HRESULT result = CoCreateInstance(CLSID_MMDeviceEnumerator, nullptr, CLSCTX_ALL,
+			IID_IMMDeviceEnumerator, reinterpret_cast<void**>(&enumerator));
+		if (SUCCEEDED(result)) {
+			result = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device);
+		}
+		if (SUCCEEDED(result)) {
+			result = device->Activate(IID_IAudioClient, CLSCTX_ALL, nullptr, reinterpret_cast<void**>(&client));
+		}
+		if (SUCCEEDED(result)) result = client->GetMixFormat(&format);
+		if (SUCCEEDED(result)) {
+			result = client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
+				0, 0, format, nullptr);
+		}
+		if (SUCCEEDED(result)) {
+			result = client->GetService(IID_IAudioCaptureClient, reinterpret_cast<void**>(&capture));
+		}
+		if (SUCCEEDED(result)) result = client->Start();
+		if (FAILED(result) || !format || !capture) {
+			Fail("Unable to initialize WASAPI system audio loopback capture (HRESULT " + std::to_string(result) + ").");
+			if (format) CoTaskMemFree(format);
+			Release(capture); Release(client); Release(device); Release(enumerator);
+			if (uninitialize_com) CoUninitialize();
+			return;
+		}
+
+		sample_rate = static_cast<int>(format->nSamplesPerSec);
+		channel_count = std::max(1, std::min(2, static_cast<int>(format->nChannels)));
+		channels.assign(channel_count, {});
+		bool floating_point = format->wFormatTag == WAVE_FORMAT_IEEE_FLOAT;
+		if (format->wFormatTag == WAVE_FORMAT_EXTENSIBLE && format->cbSize >= 22) {
+			const auto* extensible = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(format);
+			floating_point = extensible->SubFormat.Data1 == WAVE_FORMAT_IEEE_FLOAT;
+		}
+		{
+			std::lock_guard<std::mutex> lock(state_mutex);
+			opened = true;
+			state_ready.notify_all();
+		}
+
+		while (!close_requested) {
+			UINT32 packet_frames = 0;
+			if (FAILED(capture->GetNextPacketSize(&packet_frames))) break;
+			if (packet_frames == 0) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(2));
+				continue;
+			}
+			BYTE* data = nullptr;
+			UINT32 frames = 0;
+			DWORD flags = 0;
+			if (FAILED(capture->GetBuffer(&data, &frames, &flags, nullptr, nullptr))) break;
+			{
+				std::lock_guard<std::mutex> lock(queue_mutex);
+				for (UINT32 frame_index = 0; frame_index < frames; ++frame_index) {
+					for (int channel = 0; channel < channel_count; ++channel) {
+						float sample = 0.0f;
+						if (!(flags & AUDCLNT_BUFFERFLAGS_SILENT) && data) {
+							const int offset = static_cast<int>(frame_index) * format->nChannels + channel;
+							if (floating_point && format->wBitsPerSample == 32) {
+								sample = reinterpret_cast<const float*>(data)[offset];
+							} else if (format->wBitsPerSample == 16) {
+								sample = reinterpret_cast<const int16_t*>(data)[offset] / 32768.0f;
+							} else if (format->wBitsPerSample == 32) {
+								sample = static_cast<float>(reinterpret_cast<const int32_t*>(data)[offset] / 2147483648.0);
+							}
+						}
+						const size_t max_samples = static_cast<size_t>(sample_rate) * 10;
+						if (channels[channel].size() >= max_samples) channels[channel].pop_front();
+						channels[channel].push_back(sample);
+					}
+				}
+			}
+			capture->ReleaseBuffer(frames);
+			ready.notify_all();
+		}
+
+		client->Stop();
+		CoTaskMemFree(format);
+		Release(capture); Release(client); Release(device); Release(enumerator);
+		if (uninitialize_com) CoUninitialize();
+	}
+
+	ScreenCaptureSettings settings;
+	std::atomic<bool> close_requested { false };
+	std::thread worker;
+	std::mutex queue_mutex;
+	std::condition_variable ready;
+	std::vector<std::deque<float>> channels;
+	int64_t last_output_frame = 0;
+	int sample_rate = 48000;
+	int channel_count = 2;
+	std::mutex state_mutex;
+	std::condition_variable state_ready;
+	bool opened = false;
+	bool failed = false;
+	std::string error;
+};
+#else
+class ScreenCaptureReader::SystemAudioCapture
+{
+public:
+	explicit SystemAudioCapture(const ScreenCaptureSettings&) {}
+	void Open() {}
+	void Close() {}
+	void AddFrameAudio(const std::shared_ptr<Frame>&, int64_t, const Fraction&) {}
+	void Reset() {}
+	int SampleRate() const { return 0; }
+	int Channels() const { return 0; }
+};
+#endif
 
 namespace
 {
@@ -150,12 +553,18 @@ ScreenCaptureReader::ScreenCaptureReader(const ScreenCaptureSettings& new_settin
 	, packet(nullptr)
 	, sws_context(nullptr)
 	, close_requested(false)
+	, system_audio(nullptr)
 {
 	if (settings.backend == SCREEN_CAPTURE_AUTO) {
 		settings.backend = DefaultBackend();
 	}
 	ValidateSettings();
 	PopulateInfo();
+#if defined(__linux__) || defined(_WIN32)
+	if (settings.capture_audio) {
+		system_audio = std::make_unique<SystemAudioCapture>(settings);
+	}
+#endif
 	if (UsesWaylandPortal()) {
 	#if defined(HAVE_WAYLAND_CAPTURE)
 		backend_reader = CreateWaylandScreenCaptureReader(settings, info);
@@ -200,6 +609,23 @@ bool ScreenCaptureReader::IsBackendSupported(ScreenCaptureBackend backend)
 #endif
 }
 
+bool ScreenCaptureReader::IsSystemAudioSupported(ScreenCaptureBackend backend)
+{
+#if defined(__linux__)
+	if (backend == SCREEN_CAPTURE_AUTO) {
+		backend = DefaultBackend();
+	}
+	avdevice_register_all();
+	return (backend == SCREEN_CAPTURE_X11 || backend == SCREEN_CAPTURE_WAYLAND)
+		&& av_find_input_format("pulse") != nullptr;
+#elif defined(_WIN32)
+	return backend == SCREEN_CAPTURE_AUTO || backend == SCREEN_CAPTURE_WINDOWS_GDI;
+#else
+	(void) backend;
+	return false;
+#endif
+}
+
 ScreenCaptureBackend ScreenCaptureReader::DefaultBackend()
 {
 #if defined(__linux__)
@@ -231,6 +657,15 @@ void ScreenCaptureReader::ValidateSettings() const
 	}
 	if (settings.fps.num <= 0 || settings.fps.den <= 0) {
 		throw InvalidOptions("Screen capture requires a positive frame rate.");
+	}
+	if (settings.capture_audio && !IsSystemAudioSupported(settings.backend)) {
+		throw InvalidOptions("System audio capture is not supported by this screen capture backend.");
+	}
+	if (settings.audio_sample_rate < 8000) {
+		throw InvalidSampleRate("System audio capture requires a sample rate of at least 8000 Hz.");
+	}
+	if (settings.audio_channels < 1 || settings.audio_channels > 2) {
+		throw InvalidChannels("System audio capture requires one or two channels.");
 	}
 }
 
@@ -297,7 +732,7 @@ std::string ScreenCaptureReader::InputName() const
 void ScreenCaptureReader::PopulateInfo()
 {
 	info.has_video = true;
-	info.has_audio = false;
+	info.has_audio = settings.capture_audio;
 	info.has_single_image = false;
 	info.duration = 60.0f * 60.0f;
 	info.file_size = 0;
@@ -315,11 +750,11 @@ void ScreenCaptureReader::PopulateInfo()
 	info.video_timebase = settings.fps.Reciprocal();
 	info.interlaced_frame = false;
 	info.top_field_first = false;
-	info.acodec = "";
+	info.acodec = settings.capture_audio ? "pcm_f32le" : "";
 	info.audio_bit_rate = 0;
-	info.sample_rate = 0;
-	info.channels = 0;
-	info.channel_layout = LAYOUT_MONO;
+	info.sample_rate = settings.capture_audio ? settings.audio_sample_rate : 0;
+	info.channels = settings.capture_audio ? settings.audio_channels : 0;
+	info.channel_layout = settings.audio_channels == 2 ? LAYOUT_STEREO : LAYOUT_MONO;
 	info.audio_stream_index = -1;
 	info.audio_timebase = Fraction(1, 1);
 }
@@ -327,15 +762,40 @@ void ScreenCaptureReader::PopulateInfo()
 void ScreenCaptureReader::Open()
 {
 	if (backend_reader) {
-		backend_reader->Open();
+		if (backend_reader->IsOpen()) return;
+		manual_system_audio = false;
+		if (system_audio) {
+			system_audio->Open();
+			info.sample_rate = system_audio->SampleRate();
+			info.channels = system_audio->Channels();
+			info.channel_layout = info.channels == 1 ? LAYOUT_MONO : LAYOUT_STEREO;
+		}
+		try {
+			backend_reader->Open();
+		} catch (...) {
+			if (system_audio) system_audio->Close();
+			throw;
+		}
 		return;
 	}
 	if (is_open) {
 		return;
 	}
+	manual_system_audio = false;
+	if (system_audio) {
+		system_audio->Open();
+		info.sample_rate = system_audio->SampleRate();
+		info.channels = system_audio->Channels();
+		info.channel_layout = info.channels == 1 ? LAYOUT_MONO : LAYOUT_STEREO;
+	}
 	close_requested = false;
-	OpenDevice();
-	OpenDecoder();
+	try {
+		OpenDevice();
+		OpenDecoder();
+	} catch (...) {
+		if (system_audio) system_audio->Close();
+		throw;
+	}
 	is_open = true;
 }
 
@@ -465,14 +925,33 @@ std::shared_ptr<Frame> ScreenCaptureReader::GetFrame(int64_t number)
 			throw ReaderClosed("The ScreenCaptureReader is closed. Call Open() before GetFrame().");
 		}
 		const std::lock_guard<std::recursive_mutex> lock(getFrameMutex);
-		return backend_reader->GetFrame(number);
+		auto frame = backend_reader->GetFrame(number);
+		if (system_audio && !manual_system_audio) system_audio->AddFrameAudio(frame, number, info.fps);
+		return frame;
 	}
 	if (!is_open) {
 		throw ReaderClosed("The ScreenCaptureReader is closed. Call Open() before GetFrame().");
 	}
 
 	const std::lock_guard<std::recursive_mutex> lock(getFrameMutex);
-	return DecodeNextFrame(number);
+	auto frame = DecodeNextFrame(number);
+	if (system_audio && !manual_system_audio) system_audio->AddFrameAudio(frame, number, info.fps);
+	return frame;
+}
+
+void ScreenCaptureReader::AddSystemAudio(std::shared_ptr<Frame> frame, int64_t output_frame_number)
+{
+	if (system_audio) {
+		system_audio->AddFrameAudio(frame, output_frame_number, info.fps);
+	}
+}
+
+void ScreenCaptureReader::ResetSystemAudio()
+{
+	manual_system_audio = true;
+	if (system_audio) {
+		system_audio->Reset();
+	}
 }
 
 std::shared_ptr<Frame> ScreenCaptureReader::DecodeNextFrame(int64_t number)
@@ -596,6 +1075,9 @@ std::shared_ptr<Frame> ScreenCaptureReader::DecodeNextFrame(int64_t number)
 void ScreenCaptureReader::Close()
 {
 	close_requested = true;
+	if (system_audio) {
+		system_audio->Close();
+	}
 	if (backend_reader) {
 		backend_reader->Close();
 	}
@@ -655,6 +1137,10 @@ Json::Value ScreenCaptureReader::JsonValue() const
 	root["fps"]["den"] = settings.fps.den;
 	root["include_cursor"] = settings.include_cursor;
 	root["show_region"] = settings.show_region;
+	root["capture_audio"] = settings.capture_audio;
+	root["audio_device"] = settings.audio_device;
+	root["audio_sample_rate"] = settings.audio_sample_rate;
+	root["audio_channels"] = settings.audio_channels;
 	root["options"] = Json::Value(Json::objectValue);
 	for (const auto& option : settings.options) {
 		root["options"][option.first] = option.second;
@@ -695,6 +1181,14 @@ void ScreenCaptureReader::SetJsonValue(const Json::Value root)
 		settings.include_cursor = root["include_cursor"].asBool();
 	if (!root["show_region"].isNull())
 		settings.show_region = root["show_region"].asBool();
+	if (!root["capture_audio"].isNull())
+		settings.capture_audio = root["capture_audio"].asBool();
+	if (!root["audio_device"].isNull())
+		settings.audio_device = root["audio_device"].asString();
+	if (!root["audio_sample_rate"].isNull())
+		settings.audio_sample_rate = root["audio_sample_rate"].asInt();
+	if (!root["audio_channels"].isNull())
+		settings.audio_channels = root["audio_channels"].asInt();
 	if (!root["options"].isNull() && root["options"].isObject()) {
 		settings.options.clear();
 		for (const auto& key : root["options"].getMemberNames()) {
@@ -706,4 +1200,10 @@ void ScreenCaptureReader::SetJsonValue(const Json::Value root)
 	}
 	ValidateSettings();
 	PopulateInfo();
+#if defined(__linux__) || defined(_WIN32)
+	system_audio.reset();
+	if (settings.capture_audio) {
+		system_audio = std::make_unique<SystemAudioCapture>(settings);
+	}
+#endif
 }

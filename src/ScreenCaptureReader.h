@@ -44,6 +44,10 @@ namespace openshot
 		openshot::Fraction fps = openshot::Fraction(30, 1);
 		bool include_cursor = true;
 		bool show_region = false;
+		bool capture_audio = false;
+		std::string audio_device;
+		int audio_sample_rate = 48000;
+		int audio_channels = 2;
 		std::map<std::string, std::string> options;
 	};
 
@@ -86,8 +90,11 @@ namespace openshot
 		void Open() override;
 
 		openshot::CaptureReaderStats GetStats() const;
+		void AddSystemAudio(std::shared_ptr<openshot::Frame> frame, int64_t output_frame_number);
+		void ResetSystemAudio();
 		ScreenCaptureSettings GetSettings() const { return settings; };
 		static bool IsBackendSupported(ScreenCaptureBackend backend);
+		static bool IsSystemAudioSupported(ScreenCaptureBackend backend);
 		static ScreenCaptureBackend DefaultBackend();
 
 	private:
@@ -116,6 +123,11 @@ namespace openshot
 		AVPacket* packet;
 		SwsContext* sws_context;
 		std::atomic<bool> close_requested;
+		bool manual_system_audio = false;
+#ifndef SWIG
+		class SystemAudioCapture;
+		std::unique_ptr<SystemAudioCapture> system_audio;
+#endif
 	};
 }
 
