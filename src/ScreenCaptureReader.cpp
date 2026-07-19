@@ -131,9 +131,20 @@ public:
 		if (!frame || sample_count <= 0) return;
 
 		std::unique_lock<std::mutex> lock(queue_mutex);
-		ready.wait_for(lock, std::chrono::milliseconds(100), [this, sample_count]() {
+		// The capture backend commonly delivers its first buffer later than the
+		// first video frame.  Writing silence after the old 100 ms timeout moved
+		// every subsequently-delivered sample later on the recording timeline.
+		// Allow the first frame to establish the audio epoch before falling back
+		// to the short steady-state wait used for later frames.
+		const auto wait_time = timeline_started
+			? std::chrono::milliseconds(100)
+			: std::chrono::milliseconds(3000);
+		ready.wait_for(lock, wait_time, [this, sample_count]() {
 			return close_requested || (!channels.empty() && static_cast<int>(channels[0].size()) >= sample_count);
 		});
+		if (!channels.empty() && static_cast<int>(channels[0].size()) >= sample_count) {
+			timeline_started = true;
+		}
 		frame->SampleRate(settings.audio_sample_rate);
 		frame->ChannelsLayout(settings.audio_channels == 1 ? LAYOUT_MONO : LAYOUT_STEREO);
 		for (int channel = 0; channel < settings.audio_channels; ++channel) {
@@ -154,6 +165,7 @@ public:
 		std::lock_guard<std::mutex> lock(queue_mutex);
 		for (auto& channel : channels) channel.clear();
 		last_output_frame = 0;
+		timeline_started = false;
 	}
 
 	int SampleRate() const { return settings.audio_sample_rate; }
@@ -236,6 +248,7 @@ private:
 	std::condition_variable ready;
 	std::vector<std::deque<float>> channels;
 	int64_t last_output_frame = 0;
+	bool timeline_started = false;
 };
 #elif defined(_WIN32)
 class ScreenCaptureReader::SystemAudioCapture
@@ -278,9 +291,18 @@ public:
 		last_output_frame = std::max(last_output_frame, number);
 		if (!frame || sample_count <= 0) return;
 		std::unique_lock<std::mutex> lock(queue_mutex);
-		ready.wait_for(lock, std::chrono::milliseconds(100), [this, sample_count]() {
+		// WASAPI can take longer than one video-frame interval to make its first
+		// loopback packet available. Keep that startup latency out of the encoded
+		// media timeline by waiting for the first complete frame of audio.
+		const auto wait_time = timeline_started
+			? std::chrono::milliseconds(100)
+			: std::chrono::milliseconds(3000);
+		ready.wait_for(lock, wait_time, [this, sample_count]() {
 			return close_requested || (!channels.empty() && static_cast<int>(channels[0].size()) >= sample_count);
 		});
+		if (!channels.empty() && static_cast<int>(channels[0].size()) >= sample_count) {
+			timeline_started = true;
+		}
 		frame->SampleRate(sample_rate);
 		frame->ChannelsLayout(channel_count == 1 ? LAYOUT_MONO : LAYOUT_STEREO);
 		for (int channel = 0; channel < channel_count; ++channel) {
@@ -299,6 +321,7 @@ public:
 		std::lock_guard<std::mutex> lock(queue_mutex);
 		for (auto& channel : channels) channel.clear();
 		last_output_frame = 0;
+		timeline_started = false;
 	}
 
 	int SampleRate() const { return sample_rate; }
@@ -415,6 +438,7 @@ private:
 	std::condition_variable ready;
 	std::vector<std::deque<float>> channels;
 	int64_t last_output_frame = 0;
+	bool timeline_started = false;
 	int sample_rate = 48000;
 	int channel_count = 2;
 	std::mutex state_mutex;
