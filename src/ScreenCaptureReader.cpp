@@ -30,6 +30,9 @@ extern "C" {
 }
 
 #if defined(_WIN32)
+	// Instantiate the Core Audio COM GUIDs in this translation unit. Older
+	// MinGW-w64 uuid import libraries do not provide all WASAPI identifiers.
+	#include <initguid.h>
 	#include <audioclient.h>
 	#include <mmdeviceapi.h>
 #endif
