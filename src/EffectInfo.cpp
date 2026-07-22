@@ -104,6 +104,9 @@ EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 	else if (effect_type == "SphericalProjection")
 		return new SphericalProjection();
 
+	else if (effect_type == "Timer")
+		return new Timer();
+
 	else if (effect_type == "DenoiseImage")
 		return new DenoiseImage();
 
@@ -190,6 +193,7 @@ Json::Value EffectInfo::JsonValue() {
 	root.append(Shadow().JsonInfo());
 	root.append(Shift().JsonInfo());
 	root.append(SphericalProjection().JsonInfo());
+	root.append(Timer().JsonInfo());
 	root.append(DenoiseImage().JsonInfo());
 	root.append(Wave().JsonInfo());
 	/* Audio */

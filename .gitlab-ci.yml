@@ -41,7 +41,8 @@ linux-builder:
     - export LD_LIBRARY_PATH="$OPENCV_ROOT/lib:$LD_LIBRARY_PATH"
     - export PATH="$OPENCV_ROOT/bin:$PATH"
     - mkdir -p build; cd build;
-    - cmake -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON -D"CMAKE_INSTALL_PREFIX:PATH=$CI_PROJECT_DIR/build/install-x64" -D"OpenCV_DIR:PATH=$OpenCV_DIR" -D"PYTHON_MODULE_PATH=python" -D"RUBY_MODULE_PATH=ruby" -DCMAKE_BUILD_TYPE:STRING=Release -DAPPIMAGE_BUILD=1 -DUSE_SYSTEM_JSONCPP=0 ../
+    - pkg-config --exists libpipewire-0.3 libspa-0.2 gio-2.0 gio-unix-2.0 || echo "WARNING PipeWire Wayland capture dependencies are missing; building without Wayland capture support"
+    - cmake -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON -D"CMAKE_INSTALL_PREFIX:PATH=$CI_PROJECT_DIR/build/install-x64" -D"OpenCV_DIR:PATH=$OpenCV_DIR" -D"PYTHON_MODULE_PATH=python" -D"RUBY_MODULE_PATH=ruby" -DCMAKE_BUILD_TYPE:STRING=Release -DAPPIMAGE_BUILD=1 -DUSE_SYSTEM_JSONCPP=0 -DENABLE_WAYLAND_CAPTURE=ON ../
     - cmake --build . --parallel $(nproc)
     - make install
     - ctest --output-on-failure -VV
@@ -104,6 +105,8 @@ windows-builder-x64:
     - $env:OpenCV_DIR = "$env:OPENCV_ROOT\lib\cmake\opencv4"
     - $env:Path = "$env:OPENCV_ROOT\bin;C:\msys64\mingw64\bin;C:\msys64\usr\bin;C:\msys64\usr\local\bin;" + $env:Path;
     - $env:MSYSTEM = "MINGW64"
+    - ffmpeg -hide_banner -devices | findstr /I "gdigrab"
+    - ffmpeg -hide_banner -devices | findstr /I "dshow"
     - cmake -B build -S . -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON -D"babl_DIR=C:/msys64/mingw64" -D"CMAKE_INSTALL_PREFIX:PATH=$CI_PROJECT_DIR\build\install-x64" -D"OpenShotAudio_ROOT=$CI_PROJECT_DIR\build\install-x64" -D"OpenCV_DIR:PATH=$env:OpenCV_DIR" -D"PYTHON_MODULE_PATH=python" -D"RUBY_MODULE_PATH=ruby" -G "MinGW Makefiles" -D"CMAKE_BUILD_TYPE:STRING=Release"
     - cmake --build build --parallel $([Environment]::ProcessorCount)
     - ctest --test-dir build --output-on-failure -VV
@@ -133,6 +136,8 @@ windows-builder-x86:
     - $env:OpenCV_DIR = "$env:OPENCV_ROOT\lib\cmake\opencv4"
     - $env:Path = "$env:OPENCV_ROOT\bin;C:\msys64\mingw32\bin;C:\msys64\usr\bin;C:\msys64\usr\local\bin;" + $env:Path;
     - $env:MSYSTEM = "MINGW32"
+    - ffmpeg -hide_banner -devices | findstr /I "gdigrab"
+    - ffmpeg -hide_banner -devices | findstr /I "dshow"
     - cmake -B build -S . -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON -D"babl_DIR=C:/msys64/mingw32" -D"CMAKE_INSTALL_PREFIX:PATH=$CI_PROJECT_DIR\build\install-x86" -D"OpenShotAudio_ROOT=$CI_PROJECT_DIR\build\install-x86" -D"OpenCV_DIR:PATH=$env:OpenCV_DIR" -D"PYTHON_MODULE_PATH=python" -D"RUBY_MODULE_PATH=ruby" -G "MinGW Makefiles" -D"CMAKE_BUILD_TYPE:STRING=Release" -D"CMAKE_CXX_FLAGS=-m32" -D"CMAKE_EXE_LINKER_FLAGS=-Wl,--large-address-aware" -D"CMAKE_C_FLAGS=-m32"
     - cmake --build build --parallel $([Environment]::ProcessorCount)
     - cmake --install build

@@ -47,11 +47,13 @@ add_feature_info("IWYU (include-what-you-use)" ENABLE_IWYU "Scan all source file
 # Main library sources
 set(OPENSHOT_SOURCES
   AudioBufferSource.cpp
+  AudioRecorder.cpp
   AnimatedCurve.cpp
   AudioDevices.cpp
   AudioReaderSource.cpp
   AudioResampler.cpp
   AudioWaveformer.cpp
+  CameraCaptureReader.cpp
   CacheBase.cpp
   CacheDisk.cpp
   CacheMemory.cpp
@@ -65,6 +67,7 @@ set(OPENSHOT_SOURCES
   DummyReader.cpp
   ReaderBase.cpp
   RendererBase.cpp
+  ScreenCaptureReader.cpp
   WriterBase.cpp
   EffectBase.cpp
   EffectInfo.cpp
@@ -91,6 +94,21 @@ set(OPENSHOT_SOURCES
   TrackedObjectBase.cpp
   ZmqLogger.cpp
   )
+
+set(OPENSHOT_WAYLAND_CAPTURE FALSE)
+if(ENABLE_WAYLAND_CAPTURE AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  find_package(PkgConfig)
+  if(PkgConfig_FOUND)
+    pkg_check_modules(PC_PIPEWIRE QUIET IMPORTED_TARGET libpipewire-0.3)
+    pkg_check_modules(PC_LIBSPA QUIET IMPORTED_TARGET libspa-0.2)
+    pkg_check_modules(PC_GIO QUIET IMPORTED_TARGET gio-2.0)
+    pkg_check_modules(PC_GIO_UNIX QUIET IMPORTED_TARGET gio-unix-2.0)
+    if(PC_PIPEWIRE_FOUND AND PC_LIBSPA_FOUND AND PC_GIO_FOUND AND PC_GIO_UNIX_FOUND)
+      set(OPENSHOT_WAYLAND_CAPTURE TRUE)
+      list(APPEND OPENSHOT_SOURCES WaylandScreenCaptureReader.cpp)
+    endif()
+  endif()
+endif()
 
 # OpenCV related classes
 set(OPENSHOT_CV_SOURCES
@@ -138,6 +156,7 @@ set(EFFECTS_SOURCES
   effects/Shadow.cpp
   effects/Shift.cpp
   effects/SphericalProjection.cpp
+  effects/Timer.cpp
   effects/DenoiseImage.cpp
   effects/Wave.cpp
   audio_effects/STFT.cpp
@@ -191,6 +210,16 @@ target_include_directories(openshot
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/libopenshot>)
+
+if(OPENSHOT_WAYLAND_CAPTURE)
+  target_compile_definitions(openshot PRIVATE HAVE_WAYLAND_CAPTURE=1)
+  target_link_libraries(openshot PRIVATE
+    PkgConfig::PC_PIPEWIRE
+    PkgConfig::PC_LIBSPA
+    PkgConfig::PC_GIO
+    PkgConfig::PC_GIO_UNIX)
+endif()
+add_feature_info("Wayland screen capture" OPENSHOT_WAYLAND_CAPTURE "Use xdg-desktop-portal ScreenCast and PipeWire")
 
 ################# LIBOPENSHOT-AUDIO ###################
 # Find JUCE-based openshot Audio libraries
@@ -392,11 +421,11 @@ mark_as_advanced(QT_VERSION_STR)
 ################### FFMPEG #####################
 # Find FFmpeg libraries (used for video encoding / decoding)
 find_package(FFmpeg REQUIRED
-  COMPONENTS avcodec avformat avutil swscale
+  COMPONENTS avcodec avdevice avformat avutil swscale
   OPTIONAL_COMPONENTS swresample
 )
 
-set(all_comps avcodec avformat avutil swscale)
+set(all_comps avcodec avdevice avformat avutil swscale)
 set(version_comps avcodec avformat avutil)
 
 # Pick a resampler.  Prefer swresample if possible
@@ -588,8 +617,8 @@ if(DEFINED PROFILER)
 endif()
 
 if(WIN32)
-  # Required for exception handling on Windows
-  target_link_libraries(openshot PUBLIC "imagehlp" "dbghelp" )
+  # Required for exception handling and DirectShow device enumeration on Windows
+  target_link_libraries(openshot PUBLIC "imagehlp" "dbghelp" "ole32" "oleaut32" "strmiids" "uuid" )
 endif()
 
 ###

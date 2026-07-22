@@ -297,5 +297,6 @@ typedef struct OpenShotByteBuffer {
 %include "effects/Pixelate.h"
 %include "effects/Saturation.h"
 %include "effects/Shift.h"
+%include "effects/Timer.h"
 %include "effects/DenoiseImage.h"
 %include "effects/Wave.h"

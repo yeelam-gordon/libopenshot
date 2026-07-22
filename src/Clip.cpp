@@ -27,6 +27,7 @@
 #include <cmath>
 #include <sstream>
 #include <QPainter>
+#include <QPainterPath>
 
 #ifdef USE_IMAGEMAGICK
 	#include "MagickUtilities.h"
@@ -96,6 +97,8 @@ void Clip::init_settings()
 
 	// Init alpha
 	alpha = Keyframe(1.0);
+	margin = Keyframe(0.0);
+	corner_radius = Keyframe(0.0);
 
 	// Init time & volume
 	time = Keyframe(1.0);
@@ -928,6 +931,8 @@ std::string Clip::PropertiesJSON(int64_t requested_frame) const {
 
 	// Keyframes
 	root["alpha"] = add_property_json("Alpha", alpha.GetValue(requested_frame), "float", "", &alpha, 0.0, 1.0, false, requested_frame);
+	root["corner_radius"] = add_property_json("Corner Radius", corner_radius.GetValue(requested_frame), "float", "", &corner_radius, 0.0, 0.5, false, requested_frame);
+	root["margin"] = add_property_json("Margin", margin.GetValue(requested_frame), "float", "", &margin, 0.0, 0.5, false, requested_frame);
 	root["origin_x"] = add_property_json("Origin X", origin_x.GetValue(requested_frame), "float", "", &origin_x, 0.0, 1.0, false, requested_frame);
 	root["origin_y"] = add_property_json("Origin Y", origin_y.GetValue(requested_frame), "float", "", &origin_y, 0.0, 1.0, false, requested_frame);
 	root["volume"] = add_property_json("Volume", volume.GetValue(requested_frame), "float", "", &volume, 0.0, 1.0, false, requested_frame);
@@ -983,6 +988,8 @@ Json::Value Clip::JsonValue() const {
 	root["location_x"] = location_x.JsonValue();
 	root["location_y"] = location_y.JsonValue();
 	root["alpha"] = alpha.JsonValue();
+	root["corner_radius"] = corner_radius.JsonValue();
+	root["margin"] = margin.JsonValue();
 	root["rotation"] = rotation.JsonValue();
 	root["time"] = time.JsonValue();
 	root["volume"] = volume.JsonValue();
@@ -1099,6 +1106,10 @@ void Clip::SetJsonValue(const Json::Value root) {
 		location_y.SetJsonValue(root["location_y"]);
 	if (!root["alpha"].isNull())
 		alpha.SetJsonValue(root["alpha"]);
+	if (!root["corner_radius"].isNull())
+		corner_radius.SetJsonValue(root["corner_radius"]);
+	if (!root["margin"].isNull())
+		margin.SetJsonValue(root["margin"]);
 	if (!root["rotation"].isNull())
 		rotation.SetJsonValue(root["rotation"]);
 	if (!root["time"].isNull())
@@ -1149,6 +1160,8 @@ void Clip::SetJsonValue(const Json::Value root) {
 	ensure_default_keyframe(origin_x, 0.5);
 	ensure_default_keyframe(origin_y, 0.5);
 	ensure_default_keyframe(rotation, 0.0);
+	ensure_default_keyframe(corner_radius, 0.0);
+	ensure_default_keyframe(margin, 0.0);
 	if (!root["effects"].isNull()) {
 
 		// Clear existing effects
@@ -1399,6 +1412,18 @@ void Clip::apply_keyframes(std::shared_ptr<Frame> frame, QSize timeline_size) {
 
 	// Apply opacity via painter instead of per-pixel alpha manipulation
 	const float alpha_value = alpha.GetValue(frame->number);
+	const double corner_radius_value = std::max(0.0, std::min(0.5, corner_radius.GetValue(frame->number)));
+	if (corner_radius_value > 0.0f) {
+		painter.setRenderHint(QPainter::Antialiasing, true);
+		const double radius_pixels = corner_radius_value
+			* std::min(source_image->width(), source_image->height());
+		QPainterPath clip_path;
+		clip_path.addRoundedRect(
+			QRectF(0, 0, source_image->width(), source_image->height()),
+			radius_pixels,
+			radius_pixels);
+		painter.setClipPath(clip_path);
+	}
 	if (alpha_value != 1.0f) {
 		painter.setOpacity(alpha_value);
 		painter.drawImage(0, 0, *source_image);
@@ -1521,8 +1546,15 @@ QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int heig
 	// Get image from clip
 	std::shared_ptr<QImage> source_image = frame->GetImage();
 
+	const double margin_value = std::max(0.0, std::min(0.5, margin.GetValue(frame->number)));
+	const double margin_pixels = margin_value * std::min(width, height);
+	const double layout_x = margin_pixels;
+	const double layout_y = margin_pixels;
+	const double layout_width = std::max(1.0, width - (margin_pixels * 2.0));
+	const double layout_height = std::max(1.0, height - (margin_pixels * 2.0));
+
 	/* RESIZE SOURCE IMAGE - based on scale type */
-	QSize source_size = scale_size(source_image->size(), scale, width, height);
+	QSize source_size = scale_size(source_image->size(), scale, layout_width, layout_height);
 
 	// Initialize parent object's properties (Clip or Tracked Object)
 	float parentObject_location_x = 0.0;
@@ -1602,35 +1634,41 @@ QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int heig
 	switch (gravity)
 	{
 		case (GRAVITY_TOP_LEFT):
+			x = layout_x;
+			y = layout_y;
 			// This is only here to prevent unused-enum warnings
 			break;
 		case (GRAVITY_TOP):
-			x = (width - scaled_source_width) / 2.0; // center
+			x = layout_x + ((layout_width - scaled_source_width) / 2.0); // center
+			y = layout_y;
 			break;
 		case (GRAVITY_TOP_RIGHT):
-			x = width - scaled_source_width; // right
+			x = layout_x + layout_width - scaled_source_width; // right
+			y = layout_y;
 			break;
 		case (GRAVITY_LEFT):
-			y = (height - scaled_source_height) / 2.0; // center
+			x = layout_x;
+			y = layout_y + ((layout_height - scaled_source_height) / 2.0); // center
 			break;
 		case (GRAVITY_CENTER):
-			x = (width - scaled_source_width) / 2.0; // center
-			y = (height - scaled_source_height) / 2.0; // center
+			x = layout_x + ((layout_width - scaled_source_width) / 2.0); // center
+			y = layout_y + ((layout_height - scaled_source_height) / 2.0); // center
 			break;
 		case (GRAVITY_RIGHT):
-			x = width - scaled_source_width; // right
-			y = (height - scaled_source_height) / 2.0; // center
+			x = layout_x + layout_width - scaled_source_width; // right
+			y = layout_y + ((layout_height - scaled_source_height) / 2.0); // center
 			break;
 		case (GRAVITY_BOTTOM_LEFT):
-			y = (height - scaled_source_height); // bottom
+			x = layout_x;
+			y = layout_y + (layout_height - scaled_source_height); // bottom
 			break;
 		case (GRAVITY_BOTTOM):
-			x = (width - scaled_source_width) / 2.0; // center
-			y = (height - scaled_source_height); // bottom
+			x = layout_x + ((layout_width - scaled_source_width) / 2.0); // center
+			y = layout_y + (layout_height - scaled_source_height); // bottom
 			break;
 		case (GRAVITY_BOTTOM_RIGHT):
-			x = width - scaled_source_width; // right
-			y = (height - scaled_source_height); // bottom
+			x = layout_x + layout_width - scaled_source_width; // right
+			y = layout_y + (layout_height - scaled_source_height); // bottom
 			break;
 	}
 
@@ -1654,8 +1692,8 @@ QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int heig
 		}
 		return location * (canvas_size - anchored_position);
 	};
-	x += location_offset(location_x_value, x, width, scaled_source_width);
-	y += location_offset(location_y_value, y, height, scaled_source_height);
+	x += location_offset(location_x_value, x - layout_x, layout_width, scaled_source_width);
+	y += location_offset(location_y_value, y - layout_y, layout_height, scaled_source_height);
 	float shear_x_value = shear_x.GetValue(frame->number) + parentObject_shear_x;
 	float shear_y_value = shear_y.GetValue(frame->number) + parentObject_shear_y;
 	float origin_x_value = origin_x.GetValue(frame->number);

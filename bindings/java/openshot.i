@@ -263,6 +263,7 @@ typedef struct OpenShotByteBuffer {
 %include "effects/Sharpen.h"
 %include "effects/Shift.h"
 %include "effects/SphericalProjection.cpp"
+%include "effects/Timer.h"
 %include "effects/DenoiseImage.h"
 %include "effects/Wave.h"
 #ifdef USE_OPENCV

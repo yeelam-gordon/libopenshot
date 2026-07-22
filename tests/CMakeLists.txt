@@ -26,8 +26,10 @@ target_link_libraries(openshot-benchmark openshot)
 ###
 set(OPENSHOT_TESTS
   AudioDeviceManager
+  AudioRecorder
   AnimatedCurve
   AudioWaveformer
+  CameraCaptureReader
   CacheDisk
   CacheMemory
   Caption
@@ -48,6 +50,7 @@ set(OPENSHOT_TESTS
   QtImageReader
   ReaderBase
   Settings
+  ScreenCaptureReader
   SphericalMetadata
   Timeline
   VideoCacheThread
@@ -73,6 +76,7 @@ set(OPENSHOT_TESTS
   Sharpen
   Shadow
   SphericalEffect
+  Timer
   DenoiseImage
   WaveEffect
 )
@@ -147,7 +151,7 @@ foreach(tname ${OPENSHOT_TESTS})
   set(test_properties
     LABELS ${tname}
   )
-  if(tname STREQUAL "Caption")
+  if(tname STREQUAL "Caption" OR tname STREQUAL "Timer")
     list(APPEND test_properties
       ENVIRONMENT "QT_QPA_PLATFORM=minimal"
     )
