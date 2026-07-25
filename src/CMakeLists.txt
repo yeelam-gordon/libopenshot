@@ -225,7 +225,7 @@ add_feature_info("Wayland screen capture" OPENSHOT_WAYLAND_CAPTURE "Use xdg-desk
 # Find JUCE-based openshot Audio libraries
 if(NOT TARGET OpenShot::Audio)
   # Only load if necessary (not for integrated builds)
-  find_package(OpenShotAudio 0.6.0 REQUIRED)
+  find_package(OpenShotAudio 1.0.0 REQUIRED)
 endif()
 target_link_libraries(openshot PUBLIC OpenShot::Audio)
 
