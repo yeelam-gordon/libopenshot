@@ -611,6 +611,7 @@ ScreenCaptureReader::~ScreenCaptureReader()
 
 bool ScreenCaptureReader::IsOpen()
 {
+	const std::lock_guard<std::recursive_mutex> lock(getFrameMutex);
 	return backend_reader ? backend_reader->IsOpen() : is_open;
 }
 
@@ -947,11 +948,11 @@ void ScreenCaptureReader::OpenDecoder()
 
 std::shared_ptr<Frame> ScreenCaptureReader::GetFrame(int64_t number)
 {
+	const std::lock_guard<std::recursive_mutex> lock(getFrameMutex);
 	if (backend_reader) {
 		if (!backend_reader->IsOpen()) {
 			throw ReaderClosed("The ScreenCaptureReader is closed. Call Open() before GetFrame().");
 		}
-		const std::lock_guard<std::recursive_mutex> lock(getFrameMutex);
 		auto frame = backend_reader->GetFrame(number);
 		if (system_audio && !manual_system_audio) system_audio->AddFrameAudio(frame, number, info.fps);
 		return frame;
@@ -960,7 +961,6 @@ std::shared_ptr<Frame> ScreenCaptureReader::GetFrame(int64_t number)
 		throw ReaderClosed("The ScreenCaptureReader is closed. Call Open() before GetFrame().");
 	}
 
-	const std::lock_guard<std::recursive_mutex> lock(getFrameMutex);
 	auto frame = DecodeNextFrame(number);
 	if (system_audio && !manual_system_audio) system_audio->AddFrameAudio(frame, number, info.fps);
 	return frame;
@@ -1101,12 +1101,19 @@ std::shared_ptr<Frame> ScreenCaptureReader::DecodeNextFrame(int64_t number)
 
 void ScreenCaptureReader::Close()
 {
+	// Signal blocking native reads before waiting for GetFrame(). The FFmpeg
+	// interrupt callback observes close_requested, while backend readers use
+	// Close() to wake their own blocking waits.
 	close_requested = true;
-	if (system_audio) {
-		system_audio->Close();
-	}
 	if (backend_reader) {
 		backend_reader->Close();
+	}
+
+	// GetFrame() owns all decoder and system-audio use under this mutex. Do not
+	// release those resources until an interrupted read has completely exited.
+	const std::lock_guard<std::recursive_mutex> lock(getFrameMutex);
+	if (system_audio) {
+		system_audio->Close();
 	}
 	if (packet) {
 		av_packet_free(&packet);

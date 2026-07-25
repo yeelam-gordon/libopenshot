@@ -104,6 +104,33 @@ TEST_CASE("Screen capture reader reports configured video info", "[libopenshot][
 #endif
 }
 
+TEST_CASE("Closed screen capture reader consistently rejects frames", "[libopenshot][screencapturereader][lifecycle]")
+{
+	ScreenCaptureSettings settings;
+#if defined(__linux__)
+	settings.backend = SCREEN_CAPTURE_X11;
+	settings.display = ":99.0";
+#elif defined(_WIN32)
+	settings.backend = SCREEN_CAPTURE_WINDOWS_GDI;
+	settings.display = "desktop";
+#elif defined(__APPLE__)
+	settings.backend = SCREEN_CAPTURE_MAC_AVFOUNDATION;
+	settings.display = "Capture screen 0:none";
+#else
+	return;
+#endif
+	settings.width = 640;
+	settings.height = 360;
+	settings.fps = Fraction(30, 1);
+
+	ScreenCaptureReader reader(settings);
+	CHECK_FALSE(reader.IsOpen());
+	CHECK_NOTHROW(reader.Close());
+	CHECK_NOTHROW(reader.Close());
+	CHECK_FALSE(reader.IsOpen());
+	CHECK_THROWS_AS(reader.GetFrame(1), ReaderClosed);
+}
+
 TEST_CASE("Screen capture system audio settings follow backend capability", "[libopenshot][screencapturereader][audio]")
 {
 	ScreenCaptureSettings settings;
