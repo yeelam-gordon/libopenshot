@@ -14,11 +14,94 @@
 
 #include "Exceptions.h"
 #include "ScreenCaptureReader.h"
+#include "WaylandBufferUtilities.h"
 
 #include <cstdlib>
+#include <cstdint>
 #include <string>
+#include <vector>
 
 using namespace openshot;
+
+TEST_CASE("Wayland packed video layout clamps unsafe PipeWire metadata",
+	"[libopenshot][screencapturereader][wayland]")
+{
+	SECTION("chunk offsets follow PipeWire modulo semantics")
+	{
+		const auto layout = wayland::ResolvePackedVideoLayout(
+			32, 37, 32, 16, 4, 2, 0, 0, 4, 2);
+		REQUIRE(layout.valid);
+		CHECK(layout.offset == 5);
+		CHECK(layout.valid_size == 32);
+		CHECK(layout.width == 4);
+		CHECK(layout.height == 2);
+	}
+
+	SECTION("chunk size limits readable rows")
+	{
+		const auto layout = wayland::ResolvePackedVideoLayout(
+			64, 0, 32, 16, 4, 4, 0, 0, 4, 4);
+		REQUIRE(layout.valid);
+		CHECK(layout.width == 4);
+		CHECK(layout.height == 2);
+	}
+
+	SECTION("empty chunks are rejected instead of reading stale allocation data")
+	{
+		const auto layout = wayland::ResolvePackedVideoLayout(
+			64, 0, 0, 16, 4, 4, 0, 0, 4, 4);
+		CHECK_FALSE(layout.valid);
+	}
+
+	SECTION("crop width cannot exceed row stride")
+	{
+		const auto layout = wayland::ResolvePackedVideoLayout(
+			64, 0, 64, 16, 8, 4, 2, 0, 6, 4);
+		REQUIRE(layout.valid);
+		CHECK(layout.crop_x == 2);
+		CHECK(layout.width == 2);
+		CHECK(layout.height == 4);
+	}
+
+	SECTION("crop outside readable memory is rejected")
+	{
+		const auto layout = wayland::ResolvePackedVideoLayout(
+			64, 0, 64, 16, 8, 4, 4, 0, 4, 4);
+		CHECK_FALSE(layout.valid);
+	}
+
+	SECTION("negative producer stride is rejected safely")
+	{
+		const auto layout = wayland::ResolvePackedVideoLayout(
+			64, 0, 64, -16, 4, 4, 0, 0, 4, 4);
+		CHECK_FALSE(layout.valid);
+	}
+}
+
+TEST_CASE("Wayland packed video rows copy safely across ring-buffer wrap",
+	"[libopenshot][screencapturereader][wayland]")
+{
+	const std::vector<uint8_t> source {0, 1, 2, 3, 4, 5, 6, 7};
+	std::vector<uint8_t> destination(6, 0);
+
+	REQUIRE(wayland::CopyWrappedBytes(
+		source.data(), source.size(), 6, 0,
+		destination.data(), destination.size()));
+	CHECK(destination == std::vector<uint8_t> {6, 7, 0, 1, 2, 3});
+
+	CHECK_FALSE(wayland::CopyWrappedBytes(
+		source.data(), source.size(), 0, 0,
+		destination.data(), source.size() + 1));
+}
+
+TEST_CASE("Wayland damage-driven streams repeat at the requested cadence",
+	"[libopenshot][screencapturereader][wayland]")
+{
+	CHECK(wayland::DamageFrameWaitMilliseconds(30, 1, false) == 5000);
+	CHECK(wayland::DamageFrameWaitMilliseconds(30, 1, true) == 33);
+	CHECK(wayland::DamageFrameWaitMilliseconds(60, 1, true) == 16);
+	CHECK(wayland::DamageFrameWaitMilliseconds(0, 0, true) == 33);
+}
 
 TEST_CASE("Screen capture settings validation", "[libopenshot][screencapturereader]")
 {

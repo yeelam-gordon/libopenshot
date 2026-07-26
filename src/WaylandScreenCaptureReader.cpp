@@ -35,6 +35,7 @@
 
 #include "Exceptions.h"
 #include "Frame.h"
+#include "WaylandBufferUtilities.h"
 #include "ZmqLogger.h"
 
 using namespace openshot;
@@ -397,7 +398,12 @@ public:
 		CapturedFrame captured;
 		{
 			std::unique_lock<std::mutex> lock(queue_mutex);
-			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+			const auto wait_duration = std::chrono::milliseconds(
+				wayland::DamageFrameWaitMilliseconds(
+					settings.fps.num,
+					settings.fps.den,
+					have_last_frame));
+			const auto deadline = std::chrono::steady_clock::now() + wait_duration;
 			while (frame_queue.empty() && !stream_error && open && std::chrono::steady_clock::now() < deadline) {
 				lock.unlock();
 				while (g_main_context_iteration(nullptr, FALSE)) {
@@ -406,16 +412,28 @@ public:
 				queue_condition.wait_for(lock, std::chrono::milliseconds(100));
 			}
 			if (frame_queue.empty() && !stream_error && open) {
-				throw InvalidFile("Timed out waiting for a Wayland capture frame.", "wayland");
+				if (have_last_frame) {
+					captured = last_frame;
+				} else {
+					throw InvalidFile("Timed out waiting for the first Wayland capture frame.", "wayland");
+				}
 			}
 			if (stream_error) {
 				throw InvalidFile("Wayland capture stream failed.", "wayland");
 			}
 			if (frame_queue.empty()) {
-				throw ReaderClosed("The Wayland screen capture stream is closed.");
+				if (!open) {
+					throw ReaderClosed("The Wayland screen capture stream is closed.");
+				}
+				if (!have_last_frame) {
+					throw InvalidFile("Timed out waiting for the first Wayland capture frame.", "wayland");
+				}
+			} else {
+				captured = std::move(frame_queue.front());
+				frame_queue.pop_front();
+				last_frame = captured;
+				have_last_frame = true;
 			}
-			captured = std::move(frame_queue.front());
-			frame_queue.pop_front();
 		}
 
 		const int bytes_per_pixel = 4;
@@ -680,10 +698,27 @@ private:
 			self->info.display_ratio.Reduce();
 		}
 
-		uint8_t params_buffer[256];
+		uint8_t params_buffer[1024];
 		spa_pod_builder builder = SPA_POD_BUILDER_INIT(params_buffer, sizeof(params_buffer));
-		const spa_pod* params[2];
+		const int stride = self->stream_width * 4;
+		const int buffer_size = stride * self->stream_height;
+		const spa_pod* params[3];
 		params[0] = static_cast<const spa_pod*>(spa_pod_builder_add_object(
+			&builder,
+			SPA_TYPE_OBJECT_ParamBuffers,
+			SPA_PARAM_Buffers,
+			SPA_PARAM_BUFFERS_buffers,
+			SPA_POD_CHOICE_RANGE_Int(8, 2, 32),
+			SPA_PARAM_BUFFERS_blocks,
+			SPA_POD_Int(1),
+			SPA_PARAM_BUFFERS_size,
+			SPA_POD_Int(buffer_size),
+			SPA_PARAM_BUFFERS_stride,
+			SPA_POD_Int(stride),
+			SPA_PARAM_BUFFERS_dataType,
+			SPA_POD_CHOICE_FLAGS_Int(
+				(1 << SPA_DATA_MemPtr) | (1 << SPA_DATA_MemFd))));
+		params[1] = static_cast<const spa_pod*>(spa_pod_builder_add_object(
 			&builder,
 			SPA_TYPE_OBJECT_ParamMeta,
 			SPA_PARAM_Meta,
@@ -691,7 +726,7 @@ private:
 			SPA_POD_Id(SPA_META_Header),
 			SPA_PARAM_META_size,
 			SPA_POD_Int(sizeof(spa_meta_header))));
-		params[1] = static_cast<const spa_pod*>(spa_pod_builder_add_object(
+		params[2] = static_cast<const spa_pod*>(spa_pod_builder_add_object(
 			&builder,
 			SPA_TYPE_OBJECT_ParamMeta,
 			SPA_PARAM_Meta,
@@ -699,13 +734,25 @@ private:
 			SPA_POD_Id(SPA_META_VideoCrop),
 			SPA_PARAM_META_size,
 			SPA_POD_Int(sizeof(spa_meta_region))));
-		pw_stream_update_params(self->stream, params, 2);
+		pw_stream_update_params(self->stream, params, 3);
 	}
 
 	static void OnStreamProcess(void* data)
 	{
 		auto* self = static_cast<WaylandScreenCaptureReader*>(data);
-		pw_buffer* buffer = pw_stream_dequeue_buffer(self->stream);
+		// Drain the stream and process only the newest buffer. Returning stale
+		// buffers immediately prevents a damage-driven window stream from
+		// accumulating latency after it becomes visible again.
+		pw_buffer* buffer = nullptr;
+		pw_buffer* next_buffer = pw_stream_dequeue_buffer(self->stream);
+		while (next_buffer) {
+			if (buffer) {
+				pw_stream_queue_buffer(self->stream, buffer);
+				self->dropped_packets++;
+			}
+			buffer = next_buffer;
+			next_buffer = pw_stream_dequeue_buffer(self->stream);
+		}
 		if (!buffer) {
 			return;
 		}
@@ -731,9 +778,6 @@ private:
 
 		spa_data& data = spa_buffer->datas[0];
 		const spa_chunk* chunk = data.chunk;
-		const uint8_t* src = static_cast<const uint8_t*>(data.data) + (chunk ? chunk->offset : 0);
-		const int stride = chunk && chunk->stride > 0 ? chunk->stride : stream_width * 4;
-		const int readable_rows = chunk && chunk->size > 0 ? static_cast<int>(chunk->size) / stride : stream_height;
 		int crop_x = 0;
 		int crop_y = 0;
 		int crop_width = stream_width;
@@ -754,35 +798,45 @@ private:
 				crop_logged = true;
 			}
 		}
-		if (crop_width <= 0 || crop_height <= 0) {
-			dropped_packets++;
-			return;
-		}
-		if (crop_width % 2 != 0) {
-			crop_width--;
-		}
-		if (crop_height % 2 != 0) {
-			crop_height--;
-		}
-		if (crop_width <= 0 || crop_height <= 0) {
-			dropped_packets++;
-			return;
-		}
-		const int rows = std::min(crop_height, readable_rows - crop_y);
-		if (rows <= 0) {
+
+		const auto layout = wayland::ResolvePackedVideoLayout(
+			static_cast<size_t>(data.maxsize),
+			chunk ? static_cast<size_t>(chunk->offset) : 0,
+			chunk ? static_cast<size_t>(chunk->size) : static_cast<size_t>(data.maxsize),
+			chunk ? chunk->stride : 0,
+			stream_width,
+			stream_height,
+			crop_x,
+			crop_y,
+			crop_width,
+			crop_height);
+		if (!layout.valid) {
 			dropped_packets++;
 			return;
 		}
 
 		CapturedFrame frame;
-		frame.width = crop_width;
-		frame.height = crop_height;
+		frame.width = layout.width;
+		frame.height = layout.height;
 		frame.rgba.assign(static_cast<size_t>(frame.width) * frame.height * 4, 0);
 
-		for (int y = 0; y < rows; ++y) {
-			const uint8_t* row = src + static_cast<size_t>(y + crop_y) * stride;
-			for (int x = 0; x < crop_width; ++x) {
-				const uint8_t* pixel = row + static_cast<size_t>(x + crop_x) * 4;
+		std::vector<uint8_t> source_row(static_cast<size_t>(frame.width) * 4);
+		for (int y = 0; y < frame.height; ++y) {
+			const size_t logical_offset =
+				static_cast<size_t>(y + layout.crop_y) * layout.stride
+				+ static_cast<size_t>(layout.crop_x) * 4;
+			if (!wayland::CopyWrappedBytes(
+					static_cast<const uint8_t*>(data.data),
+					static_cast<size_t>(data.maxsize),
+					layout.offset,
+					logical_offset,
+					source_row.data(),
+					source_row.size())) {
+				dropped_packets++;
+				return;
+			}
+			for (int x = 0; x < frame.width; ++x) {
+				const uint8_t* pixel = source_row.data() + static_cast<size_t>(x) * 4;
 				uint8_t r = 0;
 				uint8_t g = 0;
 				uint8_t b = 0;
@@ -818,10 +872,10 @@ private:
 			}
 			frame_queue.push_back(std::move(frame));
 		}
-		if (info.width != crop_width || info.height != crop_height) {
-			info.width = crop_width;
-			info.height = crop_height;
-			info.display_ratio = Fraction(crop_width, crop_height);
+		if (info.width != frame.width || info.height != frame.height) {
+			info.width = frame.width;
+			info.height = frame.height;
+			info.display_ratio = Fraction(frame.width, frame.height);
 			info.display_ratio.Reduce();
 		}
 		queue_condition.notify_one();
@@ -901,6 +955,8 @@ private:
 	std::mutex queue_mutex;
 	std::condition_variable queue_condition;
 	std::deque<CapturedFrame> frame_queue;
+	CapturedFrame last_frame;
+	bool have_last_frame = false;
 
 	static const pw_stream_events stream_events;
 };
