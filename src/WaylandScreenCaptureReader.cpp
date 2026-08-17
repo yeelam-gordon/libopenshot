@@ -976,7 +976,7 @@ const pw_stream_events WaylandScreenCaptureReader::stream_events = {
 	nullptr
 };
 
-std::unique_ptr<ScreenCaptureReader::CaptureBackendReader> CreateWaylandScreenCaptureReader(
+extern "C" std::unique_ptr<ScreenCaptureReader::CaptureBackendReader> OpenShotCreateWaylandScreenCaptureReader(
 	const ScreenCaptureSettings& settings,
 	ReaderInfo& info)
 {

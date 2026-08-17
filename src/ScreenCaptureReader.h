@@ -111,6 +111,9 @@ namespace openshot
 		ScreenCaptureSettings settings;
 #ifndef SWIG
 		std::unique_ptr<CaptureBackendReader> backend_reader;
+		// The Wayland backend is a runtime-loaded module. Keep it loaded until its
+		// reader is destroyed, since the reader's vtable lives in that module.
+		void* backend_module = nullptr;
 #endif
 		bool is_open;
 		int video_stream;

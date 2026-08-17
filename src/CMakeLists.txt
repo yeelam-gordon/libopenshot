@@ -105,7 +105,6 @@ if(ENABLE_WAYLAND_CAPTURE AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     pkg_check_modules(PC_GIO_UNIX QUIET IMPORTED_TARGET gio-unix-2.0)
     if(PC_PIPEWIRE_FOUND AND PC_LIBSPA_FOUND AND PC_GIO_FOUND AND PC_GIO_UNIX_FOUND)
       set(OPENSHOT_WAYLAND_CAPTURE TRUE)
-      list(APPEND OPENSHOT_SOURCES WaylandScreenCaptureReader.cpp)
     endif()
   endif()
 endif()
@@ -212,14 +211,27 @@ target_include_directories(openshot
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/libopenshot>)
 
 if(OPENSHOT_WAYLAND_CAPTURE)
-  target_compile_definitions(openshot PRIVATE HAVE_WAYLAND_CAPTURE=1)
-  target_link_libraries(openshot PRIVATE
+  target_compile_definitions(openshot PRIVATE HAVE_WAYLAND_CAPTURE_PLUGIN=1)
+  target_link_libraries(openshot PRIVATE ${CMAKE_DL_LIBS})
+
+  # PipeWire is optional at runtime. Keeping it in a module prevents the
+  # dynamic loader from rejecting libopenshot on X11 or older Linux systems
+  # that do not provide the PipeWire 0.3 client ABI.
+  add_library(openshot-wayland-capture MODULE WaylandScreenCaptureReader.cpp)
+  target_include_directories(openshot-wayland-capture PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR})
+  target_link_libraries(openshot-wayland-capture PRIVATE
+    openshot
     PkgConfig::PC_PIPEWIRE
     PkgConfig::PC_LIBSPA
     PkgConfig::PC_GIO
     PkgConfig::PC_GIO_UNIX)
+  set_target_properties(openshot-wayland-capture PROPERTIES
+    BUILD_RPATH "$ORIGIN"
+    INSTALL_RPATH "$ORIGIN")
 endif()
-add_feature_info("Wayland screen capture" OPENSHOT_WAYLAND_CAPTURE "Use xdg-desktop-portal ScreenCast and PipeWire")
+add_feature_info("Wayland screen capture" OPENSHOT_WAYLAND_CAPTURE "Use the optional xdg-desktop-portal and PipeWire capture module")
 
 ################# LIBOPENSHOT-AUDIO ###################
 # Find JUCE-based openshot Audio libraries
@@ -632,6 +644,12 @@ install(TARGETS openshot
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/libopenshot)
+
+if(OPENSHOT_WAYLAND_CAPTURE)
+  install(TARGETS openshot-wayland-capture
+    COMPONENT runtime
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+endif()
 
 install(DIRECTORY .
   COMPONENT devel
