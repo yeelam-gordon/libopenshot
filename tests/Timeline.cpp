@@ -1761,6 +1761,99 @@ TEST_CASE( "Timeline retries opening intersecting clip after transient open fail
 	t.RemoveClip(&clip);
 }
 
+TEST_CASE( "Timeline repairs stale open clip state while clip still intersects playhead", "[libopenshot][timeline][cache]" )
+{
+	Timeline t(640, 480, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	t.Open();
+
+	// Model a long clip whose visible extent is much wider than the editor
+	// viewport, with the playhead well inside the clip rather than at an edge.
+	TimelineFailFirstOpenReader red_reader(
+		/*width=*/640, /*height=*/480, /*fps_num=*/30, /*fps_den=*/1,
+		/*length_frames=*/18000, QColor(220, 20, 30, 255)
+	);
+	Clip clip(&red_reader);
+	clip.Id("STALE_OPEN_CLIP_STATE");
+	clip.Layer(5);
+	clip.Position(0.0);
+	clip.Start(0.0);
+	clip.End(600.0);
+	t.AddClip(&clip);
+
+	const int64_t playhead_frame = 4501; // 150 seconds, deep inside the clip
+	std::shared_ptr<Frame> initial = t.GetFrame(playhead_frame);
+	REQUIRE(initial != nullptr);
+	CHECK(initial->GetImage()->pixelColor(320, 240).red() == Approx(220).margin(2));
+
+	// Reproduce the suspected invariant violation: Timeline::open_clips still
+	// contains this Clip pointer and Clip::IsOpen() is still true, but the
+	// FrameMapper's nested source Reader has become closed.
+	// A timing nudge which continues to intersect the playhead should not leave
+	// the preview permanently black.
+	REQUIRE(clip.IsOpen());
+	auto* mapper = dynamic_cast<FrameMapper*>(clip.Reader());
+	REQUIRE(mapper != nullptr);
+	mapper->Reader()->Close();
+	CHECK(clip.IsOpen());
+	CHECK_FALSE(mapper->IsOpen());
+	t.GetCache()->Remove(playhead_frame);
+
+	std::stringstream nudge_right;
+	nudge_right << "[{\"type\":\"update\",\"key\":[\"clips\",{\"id\":\""
+	            << clip.Id()
+	            << "\"}],\"value\":{\"id\":\"" << clip.Id()
+	            << "\",\"position\":0.1,\"start\":0.0,\"end\":600.0},\"partial\":true}]";
+	t.ApplyJsonDiff(nudge_right.str());
+
+	std::shared_ptr<Frame> after_nudge = t.GetFrame(playhead_frame);
+	REQUIRE(after_nudge != nullptr);
+	const QColor after_nudge_pixel = after_nudge->GetImage()->pixelColor(320, 240);
+	CHECK(after_nudge_pixel.red() == Approx(220).margin(2));
+	CHECK(after_nudge_pixel.green() == Approx(20).margin(2));
+	CHECK(after_nudge_pixel.blue() == Approx(30).margin(2));
+
+	// A second nudge which still covers the playhead must remain healthy after
+	// the stale open state was repaired by the first frame request.
+	std::stringstream nudge_again;
+	nudge_again << "[{\"type\":\"update\",\"key\":[\"clips\",{\"id\":\""
+	            << clip.Id()
+	            << "\"}],\"value\":{\"id\":\"" << clip.Id()
+	            << "\",\"position\":0.2,\"start\":0.0,\"end\":600.0},\"partial\":true}]";
+	t.ApplyJsonDiff(nudge_again.str());
+	std::shared_ptr<Frame> after_second_nudge = t.GetFrame(playhead_frame);
+	REQUIRE(after_second_nudge != nullptr);
+	CHECK(after_second_nudge->GetImage()->pixelColor(320, 240).red() == Approx(220).margin(2));
+
+	// Match the UI recovery gesture: move the clip completely past the playhead
+	// and render once so update_open_clips() removes its stale registry entry.
+	std::stringstream move_past_playhead;
+	move_past_playhead << "[{\"type\":\"update\",\"key\":[\"clips\",{\"id\":\""
+	                   << clip.Id()
+	                   << "\"}],\"value\":{\"id\":\"" << clip.Id()
+	                   << "\",\"position\":200.0,\"start\":0.0,\"end\":600.0},\"partial\":true}]";
+	t.ApplyJsonDiff(move_past_playhead.str());
+	std::shared_ptr<Frame> outside_clip = t.GetFrame(playhead_frame);
+	REQUIRE(outside_clip != nullptr);
+	CHECK(outside_clip->GetImage()->pixelColor(320, 240) == QColor(0, 0, 0, 255));
+
+	// Moving it back over the same playhead now forces a fresh Clip::Open(), and
+	// the source image returns.
+	std::stringstream move_back;
+	move_back << "[{\"type\":\"update\",\"key\":[\"clips\",{\"id\":\""
+	          << clip.Id()
+	          << "\"}],\"value\":{\"id\":\"" << clip.Id()
+	          << "\",\"position\":0.2,\"start\":0.0,\"end\":600.0},\"partial\":true}]";
+	t.ApplyJsonDiff(move_back.str());
+	std::shared_ptr<Frame> after_move_back = t.GetFrame(playhead_frame);
+	REQUIRE(after_move_back != nullptr);
+	const QColor recovered_pixel = after_move_back->GetImage()->pixelColor(320, 240);
+	CHECK(recovered_pixel.red() == Approx(220).margin(2));
+	CHECK(recovered_pixel.green() == Approx(20).margin(2));
+	CHECK(recovered_pixel.blue() == Approx(30).margin(2));
+
+	t.RemoveClip(&clip);
+}
+
 TEST_CASE( "ApplyJSONDiff alpha updates refresh fixed-frame preview content", "[libopenshot][timeline]" )
 {
 	// Deterministic solid-color readers avoid any fixture/image ambiguity.

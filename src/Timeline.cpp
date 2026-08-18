@@ -763,6 +763,28 @@ void Timeline::update_open_clips(Clip *clip, bool does_clip_intersect)
 	// is clip already in list?
 	bool clip_found = open_clips.count(clip);
 
+	// The registry, Clip, and nested Reader can become inconsistent after a
+	// transient reader close. Trust the actual objects over open_clips and run
+	// them through a clean Close/Open cycle while this clip still intersects.
+	// Otherwise FrameMapper converts ReaderClosed into a black frame which can
+	// be repeatedly cached on every still-intersecting timing update.
+	if (clip_found && does_clip_intersect)
+	{
+		bool clip_reader_open = false;
+		try {
+			clip_reader_open = clip->Reader() && clip->Reader()->IsOpen();
+		} catch (const ReaderClosed & e) {
+			// A missing/replaced reader is equivalent to a closed reader here.
+			clip_reader_open = false;
+		}
+		if (!clip->IsOpen() || !clip_reader_open)
+		{
+			open_clips.erase(clip);
+			clip->Close();
+			clip_found = false;
+		}
+	}
+
 	if (clip_found && !does_clip_intersect)
 	{
 		// Remove clip from 'opened' list, because it's closed now
