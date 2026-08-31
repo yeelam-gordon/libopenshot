@@ -42,6 +42,15 @@ namespace {
 			return GRAVITY_BOTTOM;
 		return gravity;
 	}
+
+	double TextAdvance(const QFontMetricsF& metrics, const QString& text)
+	{
+#if QT_VERSION >= QT_VERSION_CHECK(5, 11, 0)
+		return metrics.horizontalAdvance(text);
+#else
+		return metrics.width(text);
+#endif
+	}
 }
 
 Timer::Timer() :
@@ -288,7 +297,7 @@ std::shared_ptr<openshot::Frame> Timer::GetFrame(std::shared_ptr<openshot::Frame
 	const double text_height = std::max(1.0, text_bounds.height());
 	double digit_slot_width = 0.0;
 	for (int digit = 0; digit <= 9; ++digit)
-		digit_slot_width = std::max(digit_slot_width, metrics.horizontalAdvance(QString::number(digit)));
+		digit_slot_width = std::max(digit_slot_width, TextAdvance(metrics, QString::number(digit)));
 
 	const bool use_slot_layout = timer_text.size() == layout_text.size() &&
 		!(mode == TIMER_MODE_FRAME_NUMBER || format == TIMER_FORMAT_FRAMES);
@@ -298,7 +307,7 @@ std::shared_ptr<openshot::Frame> Timer::GetFrame(std::shared_ptr<openshot::Frame
 		slot_widths.reserve(layout_text.size());
 		for (int index = 0; index < layout_text.size(); ++index) {
 			const QString layout_char(layout_text[index]);
-			const double slot_width = layout_text[index].isDigit() ? digit_slot_width : metrics.horizontalAdvance(layout_char);
+			const double slot_width = layout_text[index].isDigit() ? digit_slot_width : TextAdvance(metrics, layout_char);
 			slot_widths.push_back(slot_width);
 			layout_width += slot_width;
 		}
