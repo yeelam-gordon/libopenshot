@@ -47,7 +47,8 @@ linux-builder:
     - make install
     - ctest --output-on-failure -VV
     - make doc
-    - ~/auto-update-docs "$CI_PROJECT_DIR/build" "$CI_COMMIT_REF_NAME"
+    # Temporarily disabled while openshot.org SSH access is restricted.
+    # - ~/auto-update-docs "$CI_PROJECT_DIR/build" "$CI_COMMIT_REF_NAME"
     - PROJECT_VERSION=$(grep -E '^set\(PROJECT_VERSION_FULL "(.*)' ../CMakeLists.txt | awk '{print $2}' | tr -d '")')
     - PROJECT_SO=$(grep -E '^set\(PROJECT_SO_VERSION (.*)' ../CMakeLists.txt | awk '{print $2}' | tr -d ')')
     - echo -e "CI_PROJECT_NAME:$CI_PROJECT_NAME\nCI_COMMIT_REF_NAME:$CI_COMMIT_REF_NAME\nCI_COMMIT_SHA:$CI_COMMIT_SHA\nCI_JOB_ID:$CI_JOB_ID\nCI_PIPELINE_ID:$CI_PIPELINE_ID\nVERSION:$PROJECT_VERSION\nSO:$PROJECT_SO" > "install-x64/share/$CI_PROJECT_NAME.env"
