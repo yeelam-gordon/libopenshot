@@ -24,6 +24,10 @@
 #include <thread>
 #include <vector>
 
+#if defined(__linux__)
+	#include <dlfcn.h>
+#endif
+
 extern "C" {
 	#include <libavdevice/avdevice.h>
 	#include <libavutil/imgutils.h>
@@ -42,6 +46,40 @@ extern "C" {
 #include "QtUtilities.h"
 
 using namespace openshot;
+
+#if defined(HAVE_WAYLAND_CAPTURE_PLUGIN) && defined(__linux__)
+namespace
+{
+	using WaylandBackendFactory = std::unique_ptr<ScreenCaptureReader::CaptureBackendReader> (*) (
+		const ScreenCaptureSettings&, ReaderInfo&);
+
+	void* load_wayland_capture_backend(std::string& error_message)
+	{
+		Dl_info library_info {};
+		if (dladdr(reinterpret_cast<void*>(load_wayland_capture_backend), &library_info)
+			&& library_info.dli_fname) {
+			std::string library_path(library_info.dli_fname);
+			const auto separator = library_path.find_last_of('/');
+			if (separator != std::string::npos) {
+				const std::string module_path = library_path.substr(0, separator + 1)
+					+ "libopenshot-wayland-capture.so";
+				if (void* module = dlopen(module_path.c_str(), RTLD_NOW | RTLD_LOCAL)) {
+					return module;
+				}
+				const char* error = dlerror();
+				error_message = error ? error : "unable to load PipeWire support.";
+				return nullptr;
+			}
+		}
+		void* module = dlopen("libopenshot-wayland-capture.so", RTLD_NOW | RTLD_LOCAL);
+		if (!module) {
+			const char* error = dlerror();
+			error_message = error ? error : "unable to load PipeWire support.";
+		}
+		return module;
+	}
+}
+#endif
 
 #if defined(__linux__)
 class ScreenCaptureReader::SystemAudioCapture
@@ -560,15 +598,10 @@ namespace
 	}
 }
 
-#if defined(HAVE_WAYLAND_CAPTURE)
-std::unique_ptr<ScreenCaptureReader::CaptureBackendReader> CreateWaylandScreenCaptureReader(
-	const ScreenCaptureSettings& settings,
-	ReaderInfo& info);
-#endif
-
 ScreenCaptureReader::ScreenCaptureReader(const ScreenCaptureSettings& new_settings)
 	: settings(new_settings)
 	, backend_reader(nullptr)
+	, backend_module(nullptr)
 	, is_open(false)
 	, video_stream(-1)
 	, frames_read(0)
@@ -593,10 +626,33 @@ ScreenCaptureReader::ScreenCaptureReader(const ScreenCaptureSettings& new_settin
 	}
 #endif
 	if (UsesWaylandPortal()) {
-	#if defined(HAVE_WAYLAND_CAPTURE)
-		backend_reader = CreateWaylandScreenCaptureReader(settings, info);
+	#if defined(HAVE_WAYLAND_CAPTURE_PLUGIN) && defined(__linux__)
+		std::string module_error;
+		backend_module = load_wayland_capture_backend(module_error);
+		if (!backend_module) {
+			throw InvalidOptions("Wayland screen capture backend is unavailable: "
+				+ module_error);
+		}
+		auto factory = reinterpret_cast<WaylandBackendFactory>(
+			dlsym(backend_module, "OpenShotCreateWaylandScreenCaptureReader"));
+		if (!factory) {
+			const char* error = dlerror();
+			dlclose(backend_module);
+			backend_module = nullptr;
+			throw InvalidOptions("Wayland screen capture backend is invalid: "
+				+ std::string(error ? error : "factory function is missing."));
+		}
+		try {
+			backend_reader = factory(settings, info);
+		} catch (...) {
+			dlclose(backend_module);
+			backend_module = nullptr;
+			throw;
+		}
 		if (!backend_reader) {
-			throw InvalidOptions("Wayland screen capture backend is unavailable in this build.");
+			dlclose(backend_module);
+			backend_module = nullptr;
+			throw InvalidOptions("Wayland screen capture backend is unavailable.");
 		}
 	#else
 		throw InvalidOptions("Wayland screen capture backend is unavailable in this build.");
@@ -607,10 +663,18 @@ ScreenCaptureReader::ScreenCaptureReader(const ScreenCaptureSettings& new_settin
 ScreenCaptureReader::~ScreenCaptureReader()
 {
 	Close();
+#if defined(__linux__)
+	backend_reader.reset();
+	if (backend_module) {
+		dlclose(backend_module);
+		backend_module = nullptr;
+	}
+#endif
 }
 
 bool ScreenCaptureReader::IsOpen()
 {
+	const std::lock_guard<std::recursive_mutex> lock(getFrameMutex);
 	return backend_reader ? backend_reader->IsOpen() : is_open;
 }
 
@@ -620,7 +684,7 @@ bool ScreenCaptureReader::IsBackendSupported(ScreenCaptureBackend backend)
 	if (backend == SCREEN_CAPTURE_X11 || backend == SCREEN_CAPTURE_AUTO) {
 		return true;
 	}
-#if defined(HAVE_WAYLAND_CAPTURE)
+#if defined(HAVE_WAYLAND_CAPTURE_PLUGIN)
 	if (backend == SCREEN_CAPTURE_WAYLAND) {
 		return true;
 	}
@@ -947,11 +1011,11 @@ void ScreenCaptureReader::OpenDecoder()
 
 std::shared_ptr<Frame> ScreenCaptureReader::GetFrame(int64_t number)
 {
+	const std::lock_guard<std::recursive_mutex> lock(getFrameMutex);
 	if (backend_reader) {
 		if (!backend_reader->IsOpen()) {
 			throw ReaderClosed("The ScreenCaptureReader is closed. Call Open() before GetFrame().");
 		}
-		const std::lock_guard<std::recursive_mutex> lock(getFrameMutex);
 		auto frame = backend_reader->GetFrame(number);
 		if (system_audio && !manual_system_audio) system_audio->AddFrameAudio(frame, number, info.fps);
 		return frame;
@@ -960,7 +1024,6 @@ std::shared_ptr<Frame> ScreenCaptureReader::GetFrame(int64_t number)
 		throw ReaderClosed("The ScreenCaptureReader is closed. Call Open() before GetFrame().");
 	}
 
-	const std::lock_guard<std::recursive_mutex> lock(getFrameMutex);
 	auto frame = DecodeNextFrame(number);
 	if (system_audio && !manual_system_audio) system_audio->AddFrameAudio(frame, number, info.fps);
 	return frame;
@@ -1101,12 +1164,19 @@ std::shared_ptr<Frame> ScreenCaptureReader::DecodeNextFrame(int64_t number)
 
 void ScreenCaptureReader::Close()
 {
+	// Signal blocking native reads before waiting for GetFrame(). The FFmpeg
+	// interrupt callback observes close_requested, while backend readers use
+	// Close() to wake their own blocking waits.
 	close_requested = true;
-	if (system_audio) {
-		system_audio->Close();
-	}
 	if (backend_reader) {
 		backend_reader->Close();
+	}
+
+	// GetFrame() owns all decoder and system-audio use under this mutex. Do not
+	// release those resources until an interrupted read has completely exited.
+	const std::lock_guard<std::recursive_mutex> lock(getFrameMutex);
+	if (system_audio) {
+		system_audio->Close();
 	}
 	if (packet) {
 		av_packet_free(&packet);
