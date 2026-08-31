@@ -20,7 +20,6 @@
 #include "Exceptions.h"
 #include "Clip.h"
 #include "Timeline.h"
-#include "TrackedObjectBBox.h"
 #include "ReaderBase.h"
 #include "ChunkReader.h"
 #include "FFmpegReader.h"
@@ -34,6 +33,10 @@
 
 #ifdef USE_IMAGEMAGICK
 	#include "ImageReader.h"
+#endif
+
+#ifdef USE_OPENCV
+	#include "TrackedObjectBBox.h"
 #endif
 
 using namespace openshot;
@@ -548,6 +551,7 @@ std::shared_ptr<QImage> EffectBase::GetMaskImage(std::shared_ptr<QImage> target_
 }
 
 std::shared_ptr<QImage> EffectBase::TrackedObjectMask(std::shared_ptr<QImage> target_image, int64_t frame_number) const {
+#ifdef USE_OPENCV
 	if (!target_image || target_image->isNull() || trackedObjects.empty())
 		return {};
 
@@ -595,6 +599,11 @@ std::shared_ptr<QImage> EffectBase::TrackedObjectMask(std::shared_ptr<QImage> ta
 	if (!drew_any_box)
 		return {};
 	return mask_image;
+#else
+	(void) target_image;
+	(void) frame_number;
+	return {};
+#endif
 }
 
 void EffectBase::BlendWithMask(std::shared_ptr<QImage> original_image, std::shared_ptr<QImage> effected_image,
